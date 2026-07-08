@@ -1,0 +1,23 @@
+fn main() -> i64 {
+    n = 100000000
+    t0 = flint_time_ns()
+    mut pi: f64 = 0.0
+    mut k: i64 = 0
+    mut sign: f64 = 1.0
+    mut k_f: f64 = 0.0
+    while k < n {
+        denom = 2.0 * k_f + 1.0
+        pi = pi + sign / denom
+        sign = -sign
+        k = k + 1
+        k_f = k_f + 1.0
+    }
+    pi = pi * 4.0
+    elapsed = flint_time_ns() - t0
+    flint_print("pi = ")
+    flint_println(flint_f64_to_string(pi))
+    flint_print("time: ")
+    flint_print(flint_i64_to_string(elapsed))
+    flint_println(" ns")
+    0
+}

@@ -1,0 +1,31 @@
+fn main() {
+    n = 10000000
+    arr = flint_array_alloc(n)
+
+    mut i: i64 = 0
+    while i < n {
+        flint_array_set(arr, i, i * 2)
+        i = i + 1
+    }
+
+    t0 = flint_time_ns()
+    mut sum: i64 = 0
+    i = 0
+    while i < n {
+        sum = sum + flint_array_get(arr, i)
+        i = i + 1
+    }
+    elapsed = flint_time_ns() - t0
+
+    flint_print("sum: ")
+    s = flint_i64_to_string(sum)
+    flint_println(s)
+    flint_str_free(s)
+
+    flint_print("time: ")
+    s2 = flint_i64_to_string(elapsed)
+    flint_print(s2)
+    flint_println(" ns")
+
+    flint_array_free(arr)
+}

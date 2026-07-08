@@ -1,0 +1,86 @@
+extern "C" {
+    fn flt_create(ndim: i64, shape: str) -> str
+    fn flt_destroy(t: str)
+    fn flt_fill(t: str, v: f64)
+    fn flt_get(t: str, i: i64) -> f64
+    fn flt_set(t: str, i: i64, v: f64)
+    fn flt_matmul(a: str, b: str) -> str
+    fn mse_loss(pred: str, target: str) -> f64
+    fn mse_loss_grad(pred: str, target: str) -> str
+    fn flt_add_tt(a: str, b: str) -> str
+    fn flt_mul_tt(a: str, b: str) -> str
+    fn flt_randn(t: str)
+    fn flt_print_tensor(t: str, max: i64)
+}
+
+fn linreg() -> i64 {
+    flint_print("=== Linear Regression ===\n")
+    shp = flint_array_alloc(2)
+    sd = flint_array_data(shp)
+    n: i64 = 100
+    # Data: X (100x1), Y (100x1)
+    flint_array_write_i64(sd, 0, n)
+    flint_array_write_i64(sd, 1, 1)
+    x: str = flt_create(2, sd)
+    y: str = flt_create(2, sd)
+    flt_randn(x)
+    mut i: i64 = 0
+    while i < n {
+        xi: f64 = flt_get(x, i)
+        flt_set(y, i, 2.0 * xi + 0.5)
+        i = i + 1
+    }
+    # Model params (both 1x1)
+    flint_array_write_i64(sd, 0, 1)
+    flint_array_write_i64(sd, 1, 1)
+    w: str = flt_create(2, sd)
+    b: str = flt_create(2, sd)
+    flt_fill(w, 0.0); flt_fill(b, 0.0)
+    # Workspace tensors (same size as data for gradients)
+    flint_array_write_i64(sd, 0, n)
+    flint_array_write_i64(sd, 1, 1)
+    mut pred: str = flt_create(2, sd)
+    flint_print("Training 50 epochs (lr=0.1)...\n")
+    mut epoch: i64 = 0
+    while epoch < 50 {
+        # Forward: pred = w*x + b
+        pred = flt_mul_tt(w, x)
+        pred = flt_add_tt(pred, b)
+        # MSE loss
+        loss: f64 = mse_loss(pred, y)
+        # Gradient: dMSE/dpred = 2*(pred-y)/n
+        mut grad: str = mse_loss_grad(pred, y)
+        # dw = mean(grad * x)
+        mut dw: f64 = 0.0
+        mut db: f64 = 0.0
+        mut j: i64 = 0
+        while j < n {
+            dw = dw + flt_get(grad, j) * flt_get(x, j)
+            db = db + flt_get(grad, j)
+            j = j + 1
+        }
+        # SGD update
+        flt_set(w, 0, flt_get(w, 0) - 0.1 * dw)
+        flt_set(b, 0, flt_get(b, 0) - 0.1 * db)
+        if epoch % 10 == 0 {
+            flint_print("  epoch ")
+            flint_println_i64(epoch)
+            flint_print("  loss = ")
+            flint_println_f64(loss)
+        }
+        epoch = epoch + 1
+    }
+    flint_print("\nTrained: w = ")
+    flt_print_tensor(w, 5)
+    flint_print("Trained: b = ")
+    flt_print_tensor(b, 5)
+    flint_print("Expected: w≈2.0, b≈0.5\n")
+    flt_destroy(x); flt_destroy(y); flt_destroy(w); flt_destroy(b)
+    flt_destroy(pred); flint_array_free(shp)
+    return 0
+}
+
+fn main() -> i64 {
+    linreg()
+    return 0
+}

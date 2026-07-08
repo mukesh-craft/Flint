@@ -1,0 +1,4 @@
+fn main() -> i64 {
+    x = 42
+    if 1 { x } else { 0 }
+}

@@ -1,0 +1,137 @@
+fn main() {
+    // ── Math ──
+    print("--- Math ---")
+    flint_println_f64(flint_sqrt(9.0))
+    flint_println_f64(flint_pow(2.0, 3.0))
+    flint_println_f64(flint_abs_f64(-3.5))
+    print(flint_abs_i64(-7))
+    flint_println_f64(flint_min_f64(1.5, 2.5))
+    print(flint_min_i64(10, 20))
+    flint_println_f64(flint_max_f64(1.5, 2.5))
+    print(flint_max_i64(10, 20))
+    flint_println_f64(flint_floor(2.7))
+    flint_println_f64(flint_ceil(2.1))
+    flint_println_f64(flint_round(2.5))
+    flint_println_f64(flint_sin(0.0))
+    flint_println_f64(flint_cos(0.0))
+    flint_println_f64(flint_log(1.0))
+    flint_println_f64(flint_exp(1.0))
+
+    // ── PRNG ──
+    print("--- PRNG ---")
+    flint_srand(42)
+    flint_println_f64(flint_rand_f64())
+    print(flint_rand_i64_range(0, 100))
+
+    // ── Type Conversion ──
+    print("--- Conversion ---")
+    print(flint_str_to_i64("42"))
+    flint_println_f64(flint_str_to_f64("3.14"))
+    print(flint_str_to_bool("true"))
+    print(flint_str_to_bool("false"))
+    flint_println_f64(flint_i64_to_f64(42))
+    print(flint_f64_to_i64(3.99))
+
+    // ── String Operations ──
+    print("--- Strings ---")
+    print(flint_str_repeat("ab", 3))
+    print(flint_str_to_upper("hello"))
+    print(flint_str_to_lower("WORLD"))
+    print(flint_str_trim("  hi  "))
+    print(flint_str_index_of("hello world", "world"))
+    print(flint_str_starts_with("hello", "he"))
+    print(flint_str_ends_with("hello", "lo"))
+    print(flint_str_replace("a-b-c", "-", ":"))
+    print(flint_str_reverse("abc"))
+    print(flint_str_is_ascii("hello"))
+    print(flint_str_codepoint_at("ABC", 1))
+
+    // ── StrBuilder ──
+    print("--- StrBuilder ---")
+    let sb = flint_sb_new()
+    flint_sb_append_char(sb, 65) // 'A'
+    flint_sb_append(sb, " BC")
+    flint_sb_append_i64(sb, 42)
+    flint_sb_append_f64(sb, 3.14)
+    print(flint_sb_build(sb))
+    flint_sb_free(sb)
+
+    // ── Vec ──
+    print("--- Vec ---")
+    let v = flint_vec_new()
+    flint_vec_push(v, 10)
+    flint_vec_push(v, 20)
+    flint_vec_push(v, 30)
+    print(flint_vec_len(v))
+    print(flint_vec_get(v, 1))
+    flint_vec_set(v, 0, 99)
+    print(flint_vec_get(v, 0))
+    print(flint_vec_pop(v))
+    print(flint_vec_len(v))
+    flint_vec_free(v)
+
+    // ── Map ──
+    print("--- Map ---")
+    let m = flint_map_new()
+    flint_map_set(m, "a", 1)
+    flint_map_set(m, "b", 2)
+    print(flint_map_has(m, "a"))
+    print(flint_map_has(m, "z"))
+    print(flint_map_get(m, "b"))
+    print(flint_map_len(m))
+    flint_map_free(m)
+
+    // ── System ──
+    print("--- System ---")
+    print(flint_cwd())
+    print(flint_exists("."))
+    print(flint_is_dir("."))
+    print(flint_is_file("."))
+    print(flint_file_size("examples/stdlib_demo.fl"))
+    print(flint_temp_dir())
+
+    // ── File I/O ──
+    print("--- File I/O ---")
+    flint_write_file("flint_test.txt", "hello from flint")
+    let content = flint_read_file("flint_test.txt")
+    print(content)
+    flint_append_file("flint_test.txt", " appended")
+    let content2 = flint_read_file("flint_test.txt")
+    print(content2)
+    flint_remove("flint_test.txt")
+
+    // ── Process ──
+    print("--- Process ---")
+    let code = flint_command("echo hello_process")
+    print(code)
+    let out = flint_command_output("echo hello_captured")
+    let msg = "captured: {out}"
+    print(msg)
+
+    // ── String Interpolation ──
+    print("--- Interpolation ---")
+    let x = "world"
+    let s = "hello {x}"
+    print(s)
+    let n = 42
+    let ns = flint_i64_to_string(n)
+    let interpolated = "answer is {ns}"
+    print(interpolated)
+
+    // ── Time ──
+    print("--- Time ---")
+    print(flint_time_now())
+
+    // ── Crypto ──
+    print("--- Crypto ---")
+    print(flint_sha256_str("hello"))
+    print(flint_md5_str("hello"))
+    print(flint_crc32_str("hello"))
+
+    // ── Serialization ──
+    print("--- Serial ---")
+    // Note: Flint strings don't support escape sequences,
+    // so use a JSON value without internal double quotes
+    let json = flint_json_decode("[1,2,3]")
+    print(json)
+}

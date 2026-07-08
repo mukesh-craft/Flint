@@ -1,0 +1,15 @@
+fn fib(n: i64) -> i64 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() -> i64 {
+    t0 = flint_time_ns()
+    result = fib(45)
+    elapsed = flint_time_ns() - t0
+    flint_print("fib(45) = ")
+    flint_println(flint_i64_to_string(result))
+    flint_print("time: ")
+    flint_print(flint_i64_to_string(elapsed))
+    flint_println(" ns")
+    0
+}

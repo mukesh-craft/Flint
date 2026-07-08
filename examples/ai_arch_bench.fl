@@ -1,0 +1,96 @@
+extern "C" {
+    fn     fa_create(a: ptr, ndim: i64, shape: ptr) -> ptr
+    fn fa_matmul_bias_relu(arena: ptr, x: ptr, w: ptr, bias: ptr) -> ptr
+    fn fa_matmul_bias(arena: ptr, x: ptr, w: ptr, bias: ptr) -> ptr
+    fn fa_matmul(arena: ptr, x: ptr, w: ptr) -> ptr
+    fn fa_relu(arena: ptr, x: ptr) -> ptr
+    fn fa_add(arena: ptr, x: ptr, y: ptr) -> ptr
+    fn fa_fill(t: ptr, v: f64)
+    fn fa_randn(t: ptr)
+    fn fa_uniform(t: ptr, lo: f64, hi: f64)
+    fn fa_get(t: ptr, i: i64) -> f64
+    fn fa_set(t: ptr, i: i64, v: f64)
+    fn fa_destroy(t: ptr)
+    fn fa_print_tensor(t: ptr, max: i64)
+    fn fa_print_shape(t: ptr)
+    fn fa_copy(dst: ptr, src: ptr)
+    fn fa_transpose(t: ptr, dim0: i64, dim1: i64) -> ptr
+    fn fa_sigmoid(arena: ptr, x: ptr) -> ptr
+    fn fa_mul(arena: ptr, a: ptr, b: ptr) -> ptr
+    fn fa_reshape(t: ptr, ndim: i64, shape: ptr) -> ptr
+    fn fa_slice(t: ptr, dim: i64, start: i64, end: i64) -> ptr
+    fn fa_squeeze(t: ptr) -> ptr
+    fn fa_unsqueeze(t: ptr, dim: i64) -> ptr
+    fn fa_contiguous(arena: ptr, t: ptr) -> ptr
+    fn fa_linear(arena: ptr, x: ptr, w: ptr, bias: ptr, activation: ptr) -> ptr
+    fn fa_sequential(arena: ptr, x: ptr, layers: ptr, n: i64) -> ptr
+    fn fa_print_stats()
+    fn farena_init(arena: ptr, size: i64)
+    fn farena_destroy(arena: ptr)
+    fn farena_reset(arena: ptr)
+    fn flint_time_ns() -> i64
+
+    fn flt_create(ndim: i64, shape: ptr) -> ptr
+    fn flt_destroy(t: ptr)
+    fn flt_fill(t: ptr, v: f64)
+    fn flt_randn(t: ptr)
+    fn flt_matmul(a: ptr, b: ptr) -> ptr
+    fn flt_add_tt(a: ptr, b: ptr) -> ptr
+    fn flt_relu(a: ptr) -> ptr
+}
+
+fn make_shape(d0: i64, d1: i64) -> ptr {
+    s = flint_array_alloc(2)
+    sd = flint_array_data(s)
+    flint_array_write_i64(sd, 0, d0)
+    flint_array_write_i64(sd, 1, d1)
+    return sd
+}
+
+fn main() -> i64 {
+    flint_print("=== Flint AI Engine Architecture Demo ===\n\n")
+
+    # Demo 1: Fused kernel vs separate ops
+    flint_print("1. Fused Matmul+Bias+ReLU (100x100)\n")
+    arena = flint_malloc(512)
+    farena_init(arena, 268435456) # 256 MB
+
+    s = make_shape(100, 100)
+    sb = make_shape(1, 100)
+    x = fa_create(arena, 2, s)
+    w = fa_create(arena, 2, s)
+    b = fa_create(arena, 2, sb)
+    fa_randn(x); fa_randn(w); fa_fill(b, 0.1)
+
+    # v2: fused
+    t0 = flint_time_ns()
+    mut i: i64 = 0
+    while i < 50 {
+        o = fa_matmul_bias_relu(arena, x, w, b)
+        i = i + 1
+    }
+    t1 = flint_time_ns()
+    v2_ms = (t1 - t0) / 1000000.0 / 50.0
+    flint_print("  v2 fused kernel:  ")
+    flint_println_f64(v2_ms)
+
+    fa_destroy(x); fa_destroy(w); fa_destroy(b)
+
+    # Demo 2: Zero-copy transpose
+    flint_print("\n2. Zero-Copy Transpose (not benchmarked in Flint)\n")
+    s2 = make_shape(100, 100)
+    t = fa_create(arena, 2, s2)
+    fa_randn(t)
+    # Transpose is a view — no data copy
+    tv = fa_transpose(t, 0, 1)  # but this needs to be declared...
+    flint_print("  transpose done (view, zero-copy)\n")
+
+    # Demo 3: Cleanup
+    farena_destroy(arena)
+    flint_array_free(s)
+    flint_array_free(sb)
+    flint_array_free(s2)
+
+    flint_print("\nDone.\n")
+    return 0
+}

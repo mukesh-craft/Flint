@@ -1,0 +1,131 @@
+extern "C" {
+    fn flt_create(ndim: i64, shape: str) -> str
+    fn flt_destroy(t: str)
+    fn flt_clone(t: str) -> str
+    fn flt_size(t: str) -> i64
+    fn flt_get(t: str, i: i64) -> f64
+    fn flt_set(t: str, i: i64, v: f64)
+    fn flt_fill(t: str, v: f64)
+    fn flt_copy(dst: str, src: str)
+    fn flt_randn(t: str)
+    fn flt_uniform(t: str, lo: f64, hi: f64)
+    fn flt_relu(t: str) -> str
+    fn flt_sigmoid(t: str) -> str
+    fn flt_add_tt(a: str, b: str) -> str
+    fn flt_mul_tt(a: str, b: str) -> str
+    fn flt_matmul(a: str, b: str) -> str
+    fn mse_loss(p: str, t: str) -> f64
+    fn mse_loss_grad(p: str, t: str) -> str
+    fn ag_init()
+    fn ag_track_tensor(t: str) -> i64
+    fn ag_matmul(a: str, b: str) -> str
+    fn ag_add(a: str, b: str) -> str
+    fn ag_relu(a: str) -> str
+    fn ag_sigmoid(a: str) -> str
+    fn flt_print_tensor(t: str, max: i64)
+    fn flt_print_shape(t: str)
+}
+
+fn make_shape(ndim: i64, d0: i64, d1: i64) -> str {
+    s = flint_array_alloc(ndim)
+    sd = flint_array_data(s)
+    if ndim >= 1 { flint_array_write_i64(sd, 0, d0) }
+    if ndim >= 2 { flint_array_write_i64(sd, 1, d1) }
+    return sd
+}
+
+fn train_linreg() -> i64 {
+    flint_print("=== Linear Regression ===\n")
+    n: i64 = 100
+    sd = make_shape(2, n, 1)
+    x: str = flt_create(2, sd)
+    y: str = flt_create(2, sd)
+    flt_uniform(x, -1.0, 1.0)
+    mut i: i64 = 0
+    while i < n {
+        xi: f64 = flt_get(x, i)
+        flt_set(y, i, 2.0 * xi + 0.5)
+        i = i + 1
+    }
+
+    sd1 = make_shape(2, 1, 1)
+    w: str = flt_create(2, sd1)
+    b: str = flt_create(2, sd1)
+    flt_fill(w, 0.0); flt_fill(b, 0.0)
+
+    pred: str = flt_create(2, sd)
+    flint_print("Training 100 epochs (lr=0.1)...\n")
+    mut epoch: i64 = 0
+    while epoch < 100 {
+        # pred = w*x + b (manual loop for clarity)
+        mut j: i64 = 0
+        while j < n {
+            pj: f64 = flt_get(w, 0) * flt_get(x, j) + flt_get(b, 0)
+            flt_set(pred, j, pj)
+            j = j + 1
+        }
+        loss: f64 = mse_loss(pred, y)
+        grad = mse_loss_grad(pred, y)
+        mut dw: f64 = 0.0; mut db: f64 = 0.0
+        j = 0
+        while j < n {
+            dw = dw + flt_get(grad, j) * flt_get(x, j)
+            db = db + flt_get(grad, j)
+            j = j + 1
+        }
+        flt_set(w, 0, flt_get(w, 0) - 0.1 * dw)
+        flt_set(b, 0, flt_get(b, 0) - 0.1 * db)
+        if epoch % 20 == 0 {
+            flint_print("epoch "); flint_println_i64(epoch)
+            flint_print("loss = "); flint_println_f64(loss)
+        }
+        flt_destroy(grad)
+        epoch = epoch + 1
+    }
+    flint_print("Result: w = "); flt_print_tensor(w, 5)
+    flint_print("Result: b = "); flt_print_tensor(b, 5)
+    flint_print("Expected: w≈2.0, b≈0.5\n")
+    flt_destroy(x); flt_destroy(y); flt_destroy(w)
+    flt_destroy(b); flt_destroy(pred)
+    return 0
+}
+
+fn forward_xor() -> i64 {
+    flint_print("\n=== XOR Forward Pass (autograd) ===\n")
+    sd = make_shape(2, 4, 2)
+    x = flt_create(2, sd)
+    sd1 = make_shape(2, 4, 1)
+    y = flt_create(2, sd1)
+    flt_set(x, 0, 0.0); flt_set(x, 1, 0.0); flt_set(x, 2, 0.0)
+    flt_set(x, 3, 1.0); flt_set(x, 4, 1.0); flt_set(x, 5, 0.0)
+    flt_set(x, 6, 1.0); flt_set(x, 7, 1.0)
+    flt_set(y, 0, 0.0); flt_set(y, 1, 1.0)
+    flt_set(y, 2, 1.0); flt_set(y, 3, 0.0)
+
+    ag_init()
+    w1 = flt_create(2, make_shape(2, 2, 4)); gid1 = ag_track_tensor(w1)
+    b1 = flt_create(2, make_shape(2, 1, 4)); gid2 = ag_track_tensor(b1)
+    w2 = flt_create(2, make_shape(2, 4, 1)); gid3 = ag_track_tensor(w2)
+    b2 = flt_create(2, make_shape(2, 1, 1)); gid4 = ag_track_tensor(b2)
+    flt_uniform(w1, -0.5, 0.5); flt_uniform(w2, -0.5, 0.5)
+    flt_fill(b1, 0.0); flt_fill(b2, 0.0)
+
+    h = ag_relu(ag_add(ag_matmul(x, w1), b1))
+    pred = ag_sigmoid(ag_add(ag_matmul(h, w2), b2))
+    loss: f64 = mse_loss(pred, y)
+    flint_print("XOR loss = "); flint_println_f64(loss)
+    flint_print("Predictions:\n")
+    flint_print("0,0 -> "); flint_println_f64(flt_get(pred, 0))
+    flint_print("0,1 -> "); flint_println_f64(flt_get(pred, 1))
+    flint_print("1,0 -> "); flint_println_f64(flt_get(pred, 2))
+    flint_print("1,1 -> "); flint_println_f64(flt_get(pred, 3))
+    flt_destroy(x); flt_destroy(y); flt_destroy(w1); flt_destroy(b1)
+    flt_destroy(w2); flt_destroy(b2); flt_destroy(h); flt_destroy(pred)
+    return 0
+}
+
+fn main() -> i64 {
+    train_linreg()
+    forward_xor()
+    return 0
+}

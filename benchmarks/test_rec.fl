@@ -1,0 +1,7 @@
+fn recurse(n: i64) -> i64 {
+    if n <= 0 { 0 } else { recurse(n - 1) }
+}
+fn main() -> i64 {
+    print(recurse(5))
+    0
+}

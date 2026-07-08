@@ -1,0 +1,30 @@
+fn main() {
+    // Regex match
+    let matched = flint_regex_match("hello", "hello world")
+    print(matched)
+    let no_match = flint_regex_match("xyz", "hello world")
+    print(no_match)
+
+    // Regex replace
+    let replaced = flint_regex_replace("world", "flint", "hello world")
+    print(replaced)
+
+    // CSV parsing
+    let col1 = flint_csv_parse_line("a,b,c", 0)
+    print(col1)
+    let col2 = flint_csv_parse_line("a,b,c", 1)
+    print(col2)
+
+    // File move
+    flint_write_file("mv_src.txt", "move me")
+    flint_file_move("mv_src.txt", "mv_dst.txt")
+    print(flint_exists("mv_dst.txt"))
+    print(flint_exists("mv_src.txt"))
+    let content = flint_read_file("mv_dst.txt")
+    print(content)
+    flint_remove("mv_dst.txt")
+
+    // JSON builder
+    let json = flint_json_build_object("name", "flint", 0, "", "")
+    print(json)
+}

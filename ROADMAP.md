@@ -335,14 +335,186 @@ clang output.ll runtime.o -o hello
 | **G3e** | Parallel function body emission — each thread needs own Parser/token copy; deferred (impractical with single-pass emit-mode) | 2-8x multicore | 🔧 Deferred |
 | **G4** | ModuleCache — content-addressed bitcode (`.bc`) + binary (`.bin`) caching for ~5x speedup on rebuild | — | ✅ |
 | **G5** | Timer-based profiler — nanosecond instrumentation with JSON report output | (diagnostic) | ✅ |
-| **G6** | Streaming lexer — `nextToken()` on-demand instead of full `vector<Token>` allocation | 1.5x | ❌ |
-| **G7** | `--run` mode via LLVM ORC JIT — compile straight to executable memory, zero file I/O | bonus | ❌ |
+| **G6** | Streaming lexer — `nextToken()` on-demand instead of full `vector<Token>` allocation | 1.5x | ✅ |
+| **G7** | `--run` mode via LLVM ORC JIT — compile straight to executable memory, zero file I/O | bonus | ✅ |
+
+**Benchmark notes (G6/G7):**
+- G6 streaming lexer: lazily generates tokens during parsing instead of pre-allocating the full vector. Eliminates the upfront `tokens.reserve()` + fill pass. On a ~50-line program, cold-cache compile time is unchanged (~60ms real total: `--run` and file-io paths both ~30ms/run for `comprehensive.fl`).
+- G7 ORC JIT `--run`: compiles straight to executable memory in ~30ms (cold cache, same as file path), skipping the linker subprocess entirely. Comparable speed to cached file compilation (~25ms). The JIT currently clones the module (avoids consuming the original for cache), adding ~5ms overhead. On very large programs (5000+ lines), `--run` avoids writing `.o` + spawning `clang`, which could save 100-200ms.
 
 **Caveats:**
 - `ffi_demo.fl` requires `--link "ffi_helper.o"` (the `add` function is in a separate C source)
 - `math.fl` has no `main` function — linking is skipped with a warning
 - `--use-interface` provides declarations only; the implementation `.o` must be linked separately
 - `spawnLinker` works when `runtime.o` is in the CWD; uses `clang` found in `$PATH`
+
+---
+
+---
+
+## Phase H: LLVM Backend Bottleneck Bypass
+
+**Goal:** Eliminate the #1 compile-time bottleneck — LLVM's optimization + object emission pipeline (86% of total compile time per benchmark profiling). Achieve 3-100x faster codegen through progressive phases.
+
+**Benchmarked baseline** (5k-line generated program on ARM64):
+
+| Metric | Current (LLVM default) | Target |
+|--------|----------------------|--------|
+| LLVM backend time | 3,107 ms (86%) | <300 ms |
+| Front-end (lex+parse) | 5 ms (0.13%) | — |
+| LLVM IR gen | 69 ms (1.9%) | — |
+| Link (clang) | 304 ms (8.4%) | — |
+| **Total compile** | **3,599 ms** | **<600 ms** |
+| Runtime vs C (-O2) | 1.3-2.8x slower | — |
+
+**Core insight:** The LLVM backend goes through 5+ intermediate representations (IR → SelectionDAG → MachineInstr → MCInst → binary) with ~50 passes even at default settings. The front-end (lexer + parser) is already extremely fast at ~1M lines/sec. The bottleneck is purely in LLVM's heavyweight backend pipeline.
+
+| Sub-task | Description | Est. Speedup | Status |
+|----------|-------------|-------------|--------|
+| **H1** | **LLVM -O0 default** — set `CodeGenOptLevel::None` + `--opt-level` CLI flag. Skips all LLVM optimization passes (inlining, GVN, scheduling, loop opts, vectorization). Uses FastISel for instruction selection. One-parameter change. | **3-10x on backend** | ✅ |
+| **H2** | **QBE backend integration** — emit QBE IL text as alternative backend. QBE (c9x.me/compile) is a 15k-line C backend with its own linear-scan register allocation, GVN, copy propagation. Code quality ~63% of GCC -O2 (often better than LLVM -O0). Integrate as: generate QBE IL text → pipe to `qbe` subprocess → `as` to `.o`. Supports ARM64, x86-64, RISC-V. | ~~10-30x~~ **slower than LLVM -O0** | ⚠️ done, but not faster |
+| **H3** | **TPDE-LLVM evaluation** — evaluate TPDE (github.com/tpde2/tpde, May 2025 from TUM) as a drop-in replacement for LLVM's `addPassesToEmitFile`. Claims 13x speedup over LLVM -O0 with ±9% code quality. If compatible, simplifies to a library call. | **10-20x on backend** | 📋 |
+| **H4** | **Custom direct ARM64 emission** — long-term: emit raw ELF `.o` files with direct machine code bytes via AsmJit or oaknut. Bypasses LLVM entirely. No optimizer passes, no SelectionDAG, no MC layer. Pentultimate performance. | **50-200x on backend** | ❌ |
+
+**H1 Implementation notes:**
+- Change `createTargetMachine()` call to pass `CodeGenOptLevel::None`
+- Add `--opt-level 0|1|2|3` CLI flag (default 0 for speed, 2 for release optimization)
+- Wire `optLevel` through all `emitModuleOutput()` call sites (4 total)
+- Profile result: ~1,000ms backend time → ~1,200ms total for 5k-line program
+
+**H2 Implementation notes:**
+- QBE IL is a simple text format (~25 opcodes, 4 types)
+- Write C++ IL emitter as a new module (parallel to Codegen class)
+- Invoke `qbe -t arm64` as subprocess, then `as` to assemble
+- Keep LLVM path as fallback for features QBE doesn't support (vectors, etc.)
+- See: Hare language (production), cproc C compiler — both use QBE successfully
+
+**H2 Result (implemented, benchmarked 2026-07):**
+- `QbeEmitter` class emits QBE IL for all 23 examples (numbers, strings, arithmetic,
+  comparisons, if/while, functions, structs, field access, references/deref, arrays,
+  enums + match, FFI externs, overflow-checked add/sub, Python `py_eval`).
+- Standalone `BorrowChecker` added because the QBE path bypasses the LLVM Codegen
+  (which previously did borrow/move checking inline). All 23 examples pass, including
+  `borrow_error`/`move_error` (compile-time failures) and `overflow` (runtime panic).
+- **Benchmark (3506-line program, aarch64, cold cache, median of 3):**
+  - QBE backend:   **~2.6 s**
+  - LLVM `-O0`:    **~0.9 s**  ← fastest
+  - LLVM `-O2`:    **~2.4 s**
+- **Conclusion: QBE is ~3x SLOWER than LLVM -O0, not faster.** Two reasons:
+  1. Process-spawn overhead: QBE path shells out to `qbe` (1.4 s) + `as` (0.2 s) as
+     subprocesses; LLVM emits `.o` in-process via `addPassesToEmitFile`.
+  2. IL bloat: overflow checks emit ~20 lines of QBE IL per `+`/`-`, producing a
+     935 KB `.ssa` for the 3506-line program, which QBE then re-parses and compiles.
+- Even for a trivial `hello` program QBE (0.47 s) trails LLVM -O0 (0.37 s) purely on
+  the two extra `fork`/`exec` round-trips.
+- **The Phase H premise ("LLVM is the bottleneck") does not hold at -O0.** LLVM -O0
+  with FastISel is already fast; H1 (default `-O0`) captured essentially all the win.
+  QBE remains available as `--backend qbe` for code-quality experiments / portability,
+  but is no longer on the critical path for compile speed.
+
+---
+
+---
+
+## Phase I: Ship Ready — AOT + Standard Library + Tooling
+
+**Goal:** Users can write real projects in Flint, compile them to standalone binaries, and ship them to end users. No JIT dependency, no manual linker flags.
+
+---
+
+### I-A: AOT Compilation (`--emit-exe`)
+
+**Goal:** `./flintc source.fl -o myprogram` produces a native executable in one step.
+
+| Sub-task | Status |
+|----------|--------|
+| `--emit-exe` / `-o` CLI flag | ✅ |
+| Compile `.fl` → LLVM IR → `.o` via TargetMachine | ✅ |
+| Link `.o` + `runtime.o` + stdlib `.o` files using system linker | ✅ |
+| Auto-detect Python runtime (`pyruntime.o` + `-lpython3.13`) | ✅ |
+| Auto-detect FFI helpers (`ffi_helper.o` if used) | ✅ |
+| Static linking mode (`--static`) | 📋 Planned |
+| Cross-compilation (`--target aarch64-linux-gnu`) | 📋 Planned |
+
+---
+
+### I-B: File I/O + System API
+
+**Goal:** Read/write files, environment, process spawning — essential for any real project.
+
+| Sub-task | Status |
+|----------|--------|
+| `flint_read_file(path) -> str` | ✅ |
+| `flint_write_file(path, data) -> i64` (overwrite) | ✅ |
+| `flint_append_file(path, data) -> i64` | ✅ |
+| `flint_file_copy(src, dst) -> i64` | ✅ |
+| `flint_temp_dir() -> str` | ✅ |
+| `flint_read_lines(path) -> str` | ✅ |
+| `flint_file_move(src, dst) -> i64` | ✅ |
+| `flint_command(cmd) -> i64` (exit code) | ✅ |
+| `flint_command_output(cmd) -> str` (capture stdout) | ✅ |
+
+---
+
+### I-C: Error Handling (Result / Option)
+
+**Goal:** Replace global error flag with proper typed results.
+
+| Sub-task | Status |
+|----------|--------|
+| `Result<T,E>` enum type — builtin enum in compiler | ✅ |
+| `Option<T>` enum type — builtin enum in compiler | ✅ |
+| `try` / `?` operator (postfix desugaring, unwrap on None/Err) | ✅ |
+| `unwrap()` / `expect()` builtins + C runtime | ✅ |
+| Pattern matching integration | ✅ (already works for enums) |
+
+---
+
+### I-D: Expanded Standard Library
+
+**Goal:** Batteries-included standard library covering everyday needs.
+
+| Sub-task | Status |
+|----------|--------|
+| Date/time arithmetic (parse, format, diff) | 📋 Planned |
+| JSON builder (construct JSON from Flint values) | ✅ |
+| HTTP server (listen + respond) | 📋 Planned |
+| Regex (pattern matching via C regex) | ✅ |
+| CSV parsing | ✅ |
+| JSON builder (construct JSON from Flint values) | ✅ |
+| Array slice syntax (`arr[1:3]`) | ✅ |
+
+---
+
+### I-E: Language Features for Ergonomics
+
+**Goal:** Make Flint pleasant and productive for large projects.
+
+| Sub-task | Status |
+|----------|--------|
+| String interpolation (`"hello {name}"`) | ✅ |
+| Lambda / closure expressions (`|x| x + 1`) | ✅ |
+| Iterator protocol (`for x in collection`) | ✅ |
+| Slice syntax (`arr[1:3]`) | ✅ |
+| Spread operator (`...arr` in array literals) | ✅ |
+| Default parameter values (`fn f(x: i64 = 5)`) | ✅ |
+| Named arguments (`f(name=value)`) | ✅ |
+| Operator overloading | 📋 Planned (requires trait system) |
+| Destructuring assignment (`let [a,b]=arr`, `let {x,y}=s`) | ✅ |
+
+---
+
+### I-F: Developer Tooling
+
+**Goal:** Professional developer experience.
+
+| Sub-task | Status |
+|----------|--------|
+| `flint test` command (`--test` flag, runs functions named `test_*`) | ✅ |
+| Error messages with source line + caret display | ✅ |
+| `flint fmt` (auto-formatter script) | ✅ |
+| `flint doc` (documentation generator script) | ✅ |
+| `flint-lsp` (basic LSP server with completion/hover) | ✅ |
 
 ---
 
@@ -356,4 +528,5 @@ clang output.ll runtime.o -o hello
 | 0.4.0   | 2026-06-30 | Phase C: Python embedding — `python{}` blocks, `py_eval()`, auto-linking |
 | 0.5.0   | 2026-06-30 | Phase D: Ownership + safety — move semantics, borrow checker, arrays |
 | 0.6.0   | 2026-06-30 | Phase E (complete): overflow checking, structs, enums, pattern matching, generics, module system |
-| **0.7.0** | **2026-07** | **Phase F: Flux Compilation — Extreme Performance** |
+| 0.7.0   | 2026-07-06 | Phase F: Flux Compilation — Extreme Performance |
+| **0.8.0** | **2026-07-06** | **Phase I: Ship Ready — AOT + Stdlib + Tooling** |

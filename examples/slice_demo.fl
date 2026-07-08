@@ -1,0 +1,25 @@
+fn main() {
+    let arr = [10, 20, 30, 40, 50]
+    print(arr[0])
+    print(arr[1])
+
+    // Slice: arr[1:4] → [20, 30, 40]
+    // This returns a Vec at runtime
+    let sliced = arr[1:4]
+    print(flint_vec_len(sliced))
+    print(flint_vec_get(sliced, 0))
+    print(flint_vec_get(sliced, 1))
+    print(flint_vec_get(sliced, 2))
+
+    // For x in collection
+    print("--- for-in loop ---")
+    for v in sliced {
+        print(v)
+    }
+
+    // For x in range still works
+    print("--- for-in range ---")
+    for i in 0..3 {
+        print(i)
+    }
+}

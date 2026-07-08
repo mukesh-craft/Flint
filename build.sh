@@ -38,7 +38,33 @@ echo "=== Building Flint FFI helper ==="
 clang -c $CFLAGS_RT examples/ffi_helper.c -o ffi_helper.o
 echo "  ffi helper:   ./ffi_helper.o"
 
+echo "=== Building Flint tensor runtime ==="
+clang -c $CFLAGS_RT runtime/flint_tensor.c -o flint_tensor.o
+echo "  tensor:       ./flint_tensor.o"
+
+echo "=== Building Flint AI Engine (v2 architecture) ==="
+clang -c $CFLAGS_RT runtime/flint_ai.c -o flint_ai.o
+echo "  flint_ai:     ./flint_ai.o"
+
+echo "=== Building Flint AI Optimizer (SIMD + MT + Sparse + f32) ==="
+clang -c $CFLAGS_RT runtime/flint_ai_opt.c -o flint_ai_opt.o
+echo "  flint_ai_opt: ./flint_ai_opt.o"
+
+echo "=== Building Flint Standard Library ==="
+clang -c $CFLAGS_RT runtime/flint_serial.c -o flint_serial.o
+echo "  flint_serial: ./flint_serial.o"
+clang -c $CFLAGS_RT runtime/flint_crypto.c -o flint_crypto.o
+echo "  flint_crypto: ./flint_crypto.o"
+clang -c $CFLAGS_RT runtime/flint_net.c -o flint_net.o
+echo "  flint_net:    ./flint_net.o"
+
 echo "=== Build complete ==="
 echo "  compiler:     ./flintc"
 echo "  profiled:     ./flintc_prof"
 echo "  runtime:      ./runtime.o"
+echo "  tensor:       ./flint_tensor.o"
+echo "  flint_ai:     ./flint_ai.o"
+echo "  flint_ai_opt: ./flint_ai_opt.o"
+echo "  flint_serial: ./flint_serial.o"
+echo "  flint_crypto: ./flint_crypto.o"
+echo "  flint_net:    ./flint_net.o"

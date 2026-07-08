@@ -1,0 +1,505 @@
+#!/data/data/com.termux/files/usr/bin/env python3
+"""flint-lsp — Advanced LSP server for Flint with real diagnostics, completions, and analysis."""
+
+import sys
+import json
+import os
+import re
+import subprocess
+import threading
+
+FLINTC_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "flintc")
+
+# ---- Flint Keyword / Builtin Tables ----
+KEYWORDS = [
+    "fn", "let", "mut", "var", "def", "if", "else", "elif", "while", "for",
+    "in", "return", "break", "match", "enum", "struct", "import", "extern",
+    "python", "try", "parallel",
+]
+TYPES = ["i64", "f64", "str", "bool", "ptr"]
+BUILTINS = [
+    "print", "println", "flint_read_file", "flint_write_file", "flint_append_file",
+    "flint_file_copy", "flint_file_move", "flint_read_lines", "flint_temp_dir",
+    "flint_command", "flint_command_output", "flint_unwrap", "flint_unwrap_str",
+    "flint_expect", "flint_null_check", "flint_vec_new", "flint_vec_push",
+    "flint_vec_get", "flint_vec_set", "flint_vec_pop", "flint_vec_len",
+    "flint_map_new", "flint_map_set", "flint_map_get", "flint_map_has",
+    "flint_sb_new", "flint_sb_append", "flint_sb_build",
+    "flint_time_now", "flint_time_format", "flint_sleep_ms",
+    "flint_regex_match", "flint_regex_replace",
+    "flint_csv_parse_line", "flint_json_build_object",
+    "flint_array_slice", "flint_array_concat",
+    "flint_assert", "flint_assert_eq_i64", "flint_assert_eq_str",
+    "flint_test_run",
+]
+
+# ---- JSON-RPC helpers ----
+log_file = None
+
+def log(msg):
+    global log_file
+    if log_file is None:
+        log_file = open("/tmp/flint-lsp.log", "a")
+    log_file.write(msg + "\n")
+    log_file.flush()
+
+def send(msg):
+    payload = json.dumps(msg, ensure_ascii=False)
+    header = f"Content-Length: {len(payload)}\r\n\r\n"
+    sys.stdout.buffer.write(header.encode() + payload.encode())
+    sys.stdout.buffer.flush()
+
+_buffer = b""
+
+def read_msg():
+    global _buffer
+    while b"\r\n\r\n" not in _buffer:
+        chunk = sys.stdin.buffer.read(4096)
+        if not chunk:
+            return None
+        _buffer += chunk
+    match = re.search(rb"Content-Length: (\d+)", _buffer)
+    if not match:
+        _buffer = b""
+        return None
+    length = int(match.group(1))
+    header_end = _buffer.index(b"\r\n\r\n") + 4
+    body_start = header_end
+    while len(_buffer) < body_start + length:
+        chunk = sys.stdin.buffer.read(4096)
+        if not chunk:
+            return None
+        _buffer += chunk
+    body = _buffer[body_start:body_start + length]
+    _buffer = _buffer[body_start + length:]
+    return json.loads(body.decode())
+
+# ---- Document store ----
+documents = {}
+
+def get_doc(path):
+    if path in documents:
+        return documents[path]
+    if os.path.exists(path):
+        with open(path) as f:
+            documents[path] = f.read()
+    return documents.get(path, "")
+
+# ---- Flint lexer (Python reimplementation for fast completion) ----
+FLINT_KEYWORD_SET = set(KEYWORDS + TYPES)
+
+def flint_lex(source):
+    tokens = []
+    i = 0
+    line = 1
+    col = 1
+    while i < len(source):
+        c = source[i]
+        start_col = col
+        # Whitespace
+        if c in " \t\r":
+            i += 1
+            col += 1
+            continue
+        if c == "\n":
+            line += 1
+            col = 1
+            i += 1
+            continue
+        # Comments
+        if c == "#":
+            while i < len(source) and source[i] != "\n":
+                i += 1
+                col += 1
+            continue
+        if c == "/" and i + 1 < len(source) and source[i + 1] == "/":
+            while i < len(source) and source[i] != "\n":
+                i += 1
+                col += 1
+            continue
+        # String
+        if c == '"':
+            i += 1
+            col += 1
+            start = i
+            while i < len(source) and source[i] != '"':
+                if source[i] == "\\": i += 1
+                i += 1
+                col += 1
+            if i < len(source):
+                tokens.append(("STRING", source[start:i], line, start_col))
+                i += 1
+                col += 1
+            continue
+        # Identifiers and keywords
+        if c.isalpha() or c == "_":
+            start = i
+            while i < len(source) and (source[i].isalnum() or source[i] == "_"):
+                i += 1
+                col += 1
+            word = source[start:i]
+            if word in FLINT_KEYWORD_SET:
+                tokens.append(("KEYWORD", word, line, start_col))
+            else:
+                tokens.append(("IDENTIFIER", word, line, start_col))
+            continue
+        # Numbers
+        if c.isdigit() or (c == "-" and i + 1 < len(source) and source[i + 1].isdigit()):
+            start = i
+            is_float = False
+            if c == "-": i += 1; col += 1
+            while i < len(source) and source[i].isdigit():
+                i += 1
+                col += 1
+            if i < len(source) and source[i] == ".":
+                is_float = True
+                i += 1
+                col += 1
+                while i < len(source) and source[i].isdigit():
+                    i += 1
+                    col += 1
+            tokens.append(("NUMBER", source[start:i], line, start_col))
+            continue
+        # Two-char operators
+        if c == "=" and i + 1 < len(source) and source[i + 1] == "=":
+            tokens.append(("OP", "==", line, col)); i += 2; col += 2; continue
+        if c == "!" and i + 1 < len(source) and source[i + 1] == "=":
+            tokens.append(("OP", "!=", line, col)); i += 2; col += 2; continue
+        if c == "<" and i + 1 < len(source) and source[i + 1] == "=":
+            tokens.append(("OP", "<=", line, col)); i += 2; col += 2; continue
+        if c == ">" and i + 1 < len(source) and source[i + 1] == "=":
+            tokens.append(("OP", ">=", line, col)); i += 2; col += 2; continue
+        if c == ":" and i + 1 < len(source) and source[i + 1] == "=":
+            tokens.append(("OP", ":=", line, col)); i += 2; col += 2; continue
+        if c == "|" and i + 1 < len(source) and source[i + 1] == ">":
+            tokens.append(("OP", "|>", line, col)); i += 2; col += 2; continue
+        if c == "-" and i + 1 < len(source) and source[i + 1] == ">":
+            tokens.append(("OP", "->", line, col)); i += 2; col += 2; continue
+        if c == "." and i + 1 < len(source) and source[i + 1] == ".":
+            tokens.append(("OP", "..", line, col)); i += 2; col += 2; continue
+        if c == "|" and i + 1 < len(source) and source[i + 1] == "|":
+            tokens.append(("OP", "||", line, col)); i += 2; col += 2; continue
+        # Single-char operators / punctuation
+        SINGLE = {
+            "(": "LPAREN", ")": "RPAREN", "{": "LBRACE", "}": "RBRACE",
+            "[": "LBRACKET", "]": "RBRACKET", ";": "SEMICOLON", ",": "COMMA",
+            ":": "COLON", ".": "DOT", "+": "PLUS", "-": "MINUS", "*": "STAR",
+            "/": "SLASH", "%": "MOD", "=": "ASSIGN", "<": "LT", ">": "GT",
+            "!": "NOT", "&": "AMPERSAND", "@": "AT", "|": "PIPE", "?": "QUESTION",
+            "~": "TILDE",
+        }
+        if c in SINGLE:
+            tokens.append((SINGLE[c], c, line, col))
+            i += 1
+            col += 1
+            continue
+        i += 1
+        col += 1
+    return tokens
+
+def find_definitions(tokens):
+    """Find function/struct/enum definitions for go-to-definition."""
+    defs = {}
+    for i, t in enumerate(tokens):
+        if t[0] == "KEYWORD" and t[1] in ("fn", "struct", "enum"):
+            if i + 1 < len(tokens) and tokens[i + 1][0] == "IDENTIFIER":
+                name = tokens[i + 1][1]
+                defs[name] = (t[2], tokens[i + 1][3])  # (line, col)
+    return defs
+
+def find_variables(tokens):
+    """Find variable declarations for completion."""
+    vars_at_line = {}
+    for i, t in enumerate(tokens):
+        if t[0] == "KEYWORD" and t[1] in ("let", "var", "mut", "fn"):
+            if i + 1 < len(tokens) and tokens[i + 1][0] == "IDENTIFIER":
+                name = tokens[i + 1][1]
+                if name not in vars_at_line:
+                    vars_at_line[name] = t[2]
+    return vars_at_line
+
+def run_diagnostics(path, text):
+    """Run flintc on a temp file and parse errors."""
+    if not text.strip():
+        return []
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".fl", delete=False, dir="/tmp")
+    tmp.write(text)
+    tmp.flush()
+    tmp.close()
+    try:
+        result = subprocess.run(
+            [FLINTC_PATH, tmp.name],
+            capture_output=True, text=True, timeout=10
+        )
+        errors = []
+        # Parse error format: "error at line N:M: message\n  source\n  ^"
+        for line in result.stderr.split("\n"):
+            m = re.match(r"error at line (\d+):(\d+): (.+)", line)
+            if m:
+                errors.append({
+                    "range": {
+                        "start": {"line": int(m.group(1)) - 1, "character": int(m.group(2)) - 1},
+                        "end": {"line": int(m.group(1)) - 1, "character": int(m.group(2)) + 5},
+                    },
+                    "severity": 1,
+                    "message": m.group(3),
+                    "source": "flintc",
+                })
+        # Also catch codegen errors
+        for line in result.stderr.split("\n"):
+            m = re.match(r"codegen: (.+)", line)
+            if m:
+                errors.append({
+                    "range": {"start": {"line": 0, "character": 0},
+                              "end": {"line": 0, "character": 5}},
+                    "severity": 1,
+                    "message": m.group(1),
+                    "source": "flintc",
+                })
+        return errors
+    except Exception as e:
+        log(f"diagnostics error: {e}")
+        return []
+    finally:
+        os.unlink(tmp.name)
+
+# ---- LSP Handlers ----
+def handle_completion(params, path, text):
+    position = params.get("position", {})
+    line_idx = position.get("line", 0)
+    char = position.get("character", 0)
+    lines = text.split("\n")
+    current_line = lines[line_idx] if line_idx < len(lines) else ""
+    prefix = current_line[:char]
+    word_match = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*$', prefix)
+    word = word_match[0] if word_match else ""
+
+    tokens = flint_lex(text)
+    defs = find_definitions(tokens)
+    vars_dict = find_variables(tokens)
+
+    items = []
+    seen = set()
+
+    # Function/struct/enum definitions
+    for name, (ln, _) in defs.items():
+        if word and not name.lower().startswith(word.lower()):
+            continue
+        if name not in seen:
+            items.append({"label": name, "kind": 2, "detail": "definition"})
+            seen.add(name)
+
+    # Variables
+    for name, ln in vars_dict.items():
+        if word and not name.lower().startswith(word.lower()):
+            continue
+        if name not in seen:
+            items.append({"label": name, "kind": 6, "detail": "variable"})
+            seen.add(name)
+
+    # Keywords
+    for kw in KEYWORDS:
+        if word and not kw.startswith(word.lower()):
+            continue
+        if kw not in seen:
+            items.append({"label": kw, "kind": 14, "detail": "keyword"})
+            seen.add(kw)
+
+    # Types
+    for t in TYPES:
+        if word and not t.startswith(word.lower()):
+            continue
+        if t not in seen:
+            items.append({"label": t, "kind": 22, "detail": "type"})
+            seen.add(t)
+
+    # Builtins
+    for b in BUILTINS:
+        if word and not b.lower().startswith(word.lower()):
+            continue
+        if b not in seen:
+            items.append({"label": b, "kind": 3, "detail": "builtin"})
+            seen.add(b)
+
+    return items
+
+def handle_hover(params, path, text):
+    position = params.get("position", {})
+    line_idx = position.get("line", 0)
+    char = position.get("character", 0)
+    lines = text.split("\n")
+    current_line = lines[line_idx] if line_idx < len(lines) else ""
+    # Find word at cursor
+    before = current_line[:char]
+    after = current_line[char:]
+    word_before = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*$', before)
+    word_after = re.findall(r'^[a-zA-Z_][a-zA-Z0-9_]*', after)
+    word = (word_before[0] if word_before else "") + (word_after[0] if word_after else "")
+    if not word:
+        return None
+
+    tokens = flint_lex(text)
+    defs = find_definitions(tokens)
+    vars_dict = find_variables(tokens)
+
+    if word in defs:
+        ln, col = defs[word]
+        return {
+            "contents": {"kind": "markdown", "value": f"**{word}** — defined at line {ln}:{col}"}
+        }
+    if word in vars_dict:
+        ln = vars_dict[word]
+        return {
+            "contents": {"kind": "markdown", "value": f"**{word}** — declared at line {ln}"}
+        }
+    if word in KEYWORDS:
+        return {
+            "contents": {"kind": "markdown", "value": f"**{word}** — keyword"}
+        }
+    if word in TYPES:
+        return {
+            "contents": {"kind": "markdown", "value": f"**{word}** — type"}
+        }
+    if word in BUILTINS:
+        return {
+            "contents": {"kind": "markdown", "value": f"**{word}** — builtin function"}
+        }
+    return {
+        "contents": {"kind": "markdown", "value": f"`{word}`"}
+    }
+
+def handle_definition(params, path, text):
+    position = params.get("position", {})
+    line_idx = position.get("line", 0)
+    char = position.get("character", 0)
+    lines = text.split("\n")
+    current_line = lines[line_idx] if line_idx < len(lines) else ""
+    before = current_line[:char]
+    word_match = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*$', before)
+    if not word_match:
+        return None
+    word = word_match[0]
+
+    tokens = flint_lex(text)
+    defs = find_definitions(tokens)
+    if word in defs:
+        ln, col = defs[word]
+        return [{
+            "uri": f"file://{path}",
+            "range": {
+                "start": {"line": ln - 1, "character": col - 1},
+                "end": {"line": ln - 1, "character": col + len(word) - 1},
+            }
+        }]
+    # Check variable declarations
+    for i, t in enumerate(tokens):
+        if t[0] == "KEYWORD" and t[1] in ("let", "var", "mut", "fn"):
+            if i + 1 < len(tokens) and tokens[i + 1][0] == "IDENTIFIER" and tokens[i + 1][1] == word:
+                return [{
+                    "uri": f"file://{path}",
+                    "range": {
+                        "start": {"line": t[2] - 1, "character": t[3] - 1},
+                        "end": {"line": t[2] - 1, "character": t[3] + len(word) - 1},
+                    }
+                }]
+    return None
+
+# ---- Main Loop ----
+def main():
+    log("flint-lsp starting")
+    log(f"flintc path: {FLINTC_PATH}")
+    diag_timer = None
+    pending_diag = {}
+
+    while True:
+        msg = read_msg()
+        if not msg:
+            break
+        method = msg.get("method")
+        msg_id = msg.get("id")
+        params = msg.get("params", {})
+
+        if method == "initialize":
+            send({
+                "jsonrpc": "2.0", "id": msg_id,
+                "result": {
+                    "capabilities": {
+                        "textDocumentSync": {
+                            "openClose": True,
+                            "change": {"syncKind": 1}  # full sync
+                        },
+                        "completionProvider": {
+                            "triggerCharacters": [".", ":", ">", "|"]
+                        },
+                        "hoverProvider": True,
+                        "definitionProvider": True,
+                        "referencesProvider": False,
+                    }
+                }
+            })
+        elif method == "initialized":
+            pass
+        elif method == "textDocument/didOpen":
+            uri = params.get("textDocument", {}).get("uri", "")
+            path = uri.replace("file://", "")
+            text = params.get("textDocument", {}).get("text", "")
+            documents[path] = text
+            # Fire diagnostics
+            diags = run_diagnostics(path, text)
+            send({
+                "jsonrpc": "2.0",
+                "method": "textDocument/publishDiagnostics",
+                "params": {"uri": uri, "diagnostics": diags}
+            })
+        elif method == "textDocument/didChange":
+            uri = params.get("textDocument", {}).get("uri", "")
+            path = uri.replace("file://", "")
+            changes = params.get("contentChanges", [])
+            if changes:
+                documents[path] = changes[-1].get("text", documents.get(path, ""))
+            # Debounced diagnostics
+            if path not in pending_diag:
+                pending_diag[path] = uri
+                def run():
+                    import time
+                    time.sleep(0.5)
+                    p = path
+                    u = pending_diag.pop(p, None)
+                    if u and p in documents:
+                        diags = run_diagnostics(p, documents[p])
+                        send({
+                            "jsonrpc": "2.0",
+                            "method": "textDocument/publishDiagnostics",
+                            "params": {"uri": u, "diagnostics": diags}
+                        })
+                t = threading.Thread(target=run, daemon=True)
+                t.start()
+        elif method == "textDocument/didClose":
+            uri = params.get("textDocument", {}).get("uri", "")
+            path = uri.replace("file://", "")
+            documents.pop(path, None)
+        elif method == "textDocument/completion":
+            uri = params.get("textDocument", {}).get("uri", "")
+            path = uri.replace("file://", "")
+            text = get_doc(path)
+            items = handle_completion(params, path, text)
+            send({"jsonrpc": "2.0", "id": msg_id, "result": {"items": items}})
+        elif method == "textDocument/hover":
+            uri = params.get("textDocument", {}).get("uri", "")
+            path = uri.replace("file://", "")
+            text = get_doc(path)
+            result = handle_hover(params, path, text)
+            send({"jsonrpc": "2.0", "id": msg_id, "result": result})
+        elif method == "textDocument/definition":
+            uri = params.get("textDocument", {}).get("uri", "")
+            path = uri.replace("file://", "")
+            text = get_doc(path)
+            result = handle_definition(params, path, text)
+            send({"jsonrpc": "2.0", "id": msg_id, "result": result})
+        elif method == "shutdown":
+            send({"jsonrpc": "2.0", "id": msg_id, "result": None})
+            break
+
+if __name__ == "__main__":
+    main()

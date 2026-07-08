@@ -1,0 +1,9 @@
+fn main() {
+    let name = "world"
+    let msg = "hello {name}"
+    print(msg)
+    let n = 42
+    let ns = flint_i64_to_string(n)
+    let msg2 = "the answer is {ns}"
+    print(msg2)
+}

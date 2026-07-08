@@ -1,0 +1,176 @@
+extern "C" {
+    fn flt_create(ndim: i64, shape: str) -> str
+    fn flt_destroy(t: str)
+    fn flt_fill(t: str, v: f64)
+    fn flt_get(t: str, i: i64) -> f64
+    fn flt_set(t: str, i: i64, v: f64)
+    fn flt_randn(t: str)
+    fn flt_uniform(t: str, lo: f64, hi: f64)
+    fn flt_matmul(a: str, b: str) -> str
+    fn flt_add_tt(a: str, b: str) -> str
+    fn flt_mul_tt(a: str, b: str) -> str
+    fn flt_relu(t: str) -> str
+    fn flt_sigmoid(t: str) -> str
+    fn mse_loss(p: str, t: str) -> f64
+    fn mse_loss_grad(p: str, t: str) -> str
+    fn flt_print_tensor(t: str, max: i64)
+    fn flt_print_shape(t: str)
+    fn flint_time_ns() -> i64
+}
+
+fn make_shape(ndim: i64, d0: i64, d1: i64) -> str {
+    s = flint_array_alloc(ndim)
+    sd = flint_array_data(s)
+    if ndim >= 1 { flint_array_write_i64(sd, 0, d0) }
+    if ndim >= 2 { flint_array_write_i64(sd, 1, d1) }
+    return sd
+}
+
+fn bench_matmul() -> i64 {
+    flint_print("=== Matrix Multiply Benchmark ===\n")
+    sizes = flint_array_alloc(3)
+    sd = flint_array_data(sizes)
+    flint_array_write_i64(sd, 0, 100)
+    flint_array_write_i64(sd, 1, 200)
+    flint_array_write_i64(sd, 2, 500)
+
+    mut si: i64 = 0
+    while si < 3 {
+        N: i64 = flint_array_read_i64(sd, si)
+        s = make_shape(2, N, N)
+        a: str = flt_create(2, s)
+        b: str = flt_create(2, s)
+        flt_randn(a); flt_randn(b)
+
+        # warmup
+        mut w: i64 = 0
+        while w < 3 { c: str = flt_matmul(a, b); flt_destroy(c); w = w + 1 }
+
+        t0: i64 = flint_time_ns()
+        mut iter: i64 = 0
+        while iter < 10 {
+            c: str = flt_matmul(a, b)
+            flt_destroy(c)
+            iter = iter + 1
+        }
+        t1: i64 = flint_time_ns()
+        avg: f64 = (t1 - t0) / 1000000000.0 / 10.0
+        flint_print("  size "); flint_println_i64(N)
+        flint_print("  avg s = ")
+        flint_println_f64(avg)
+
+        flt_destroy(a); flt_destroy(b)
+        flint_array_free(s)
+        si = si + 1
+    }
+    flint_array_free(sizes)
+    return 0
+}
+
+fn bench_forward() -> i64 {
+    flint_print("\n=== Forward Pass (512->256->128->10) ===\n")
+    batch: i64 = 64
+    s_x = make_shape(2, batch, 512)
+    s_w1 = make_shape(2, 512, 256); s_b1 = make_shape(2, 1, 256)
+    s_w2 = make_shape(2, 256, 128); s_b2 = make_shape(2, 1, 128)
+    s_w3 = make_shape(2, 128, 10);  s_b3 = make_shape(2, 1, 10)
+
+    x: str = flt_create(2, s_x)
+    w1: str = flt_create(2, s_w1); b1: str = flt_create(2, s_b1)
+    w2: str = flt_create(2, s_w2); b2: str = flt_create(2, s_b2)
+    w3: str = flt_create(2, s_w3); b3: str = flt_create(2, s_b3)
+    flt_randn(x); flt_randn(w1); flt_randn(w2); flt_randn(w3)
+    flt_fill(b1, 0.0); flt_fill(b2, 0.0); flt_fill(b3, 0.0)
+
+    # warmup
+    mut w: i64 = 0
+    while w < 3 {
+        h1 = flt_relu(flt_add_tt(flt_matmul(x, w1), b1))
+        h2 = flt_relu(flt_add_tt(flt_matmul(h1, w2), b2))
+        out = flt_add_tt(flt_matmul(h2, w3), b3)
+        flt_destroy(h1); flt_destroy(h2); flt_destroy(out)
+        w = w + 1
+    }
+
+    t0: i64 = flint_time_ns()
+    mut iter: i64 = 0
+    while iter < 100 {
+        h1 = flt_relu(flt_add_tt(flt_matmul(x, w1), b1))
+        h2 = flt_relu(flt_add_tt(flt_matmul(h1, w2), b2))
+        out = flt_add_tt(flt_matmul(h2, w3), b3)
+        flt_destroy(h1); flt_destroy(h2); flt_destroy(out)
+        iter = iter + 1
+    }
+    t1: i64 = flint_time_ns()
+    avg: f64 = (t1 - t0) / 1000000000.0 / 100.0
+    flint_print("avg forward pass = ")
+    flint_println_f64(avg)
+
+    flt_destroy(x); flt_destroy(w1); flt_destroy(b1)
+    flt_destroy(w2); flt_destroy(b2); flt_destroy(w3); flt_destroy(b3)
+    flint_array_free(s_x); flint_array_free(s_w1); flint_array_free(s_b1)
+    flint_array_free(s_w2); flint_array_free(s_b2)
+    flint_array_free(s_w3); flint_array_free(s_b3)
+    return 0
+}
+
+fn bench_training() -> i64 {
+    flint_print("\n=== Training Loop (N=1000, 500 epochs) ===\n")
+    n: i64 = 1000
+    sd = make_shape(2, n, 1)
+    x: str = flt_create(2, sd)
+    y: str = flt_create(2, sd)
+    flt_uniform(x, -1.0, 1.0)
+    mut i: i64 = 0
+    while i < n {
+        xi: f64 = flt_get(x, i)
+        flt_set(y, i, 2.0 * xi + 0.5)
+        i = i + 1
+    }
+
+    sd1 = make_shape(2, 1, 1)
+    w: str = flt_create(2, sd1)
+    b: str = flt_create(2, sd1)
+    flt_fill(w, 0.0); flt_fill(b, 0.0)
+    pred: str = flt_create(2, sd)
+
+    t0: i64 = flint_time_ns()
+    mut epoch: i64 = 0
+    while epoch < 500 {
+        mut j: i64 = 0
+        while j < n {
+            pj: f64 = flt_get(w, 0) * flt_get(x, j) + flt_get(b, 0)
+            flt_set(pred, j, pj)
+            j = j + 1
+        }
+        grad = mse_loss_grad(pred, y)
+        mut dw: f64 = 0.0; mut db: f64 = 0.0
+        j = 0
+        while j < n {
+            dw = dw + flt_get(grad, j) * flt_get(x, j)
+            db = db + flt_get(grad, j)
+            j = j + 1
+        }
+        flt_set(w, 0, flt_get(w, 0) - 0.1 * dw)
+        flt_set(b, 0, flt_get(b, 0) - 0.1 * db)
+        flt_destroy(grad)
+        epoch = epoch + 1
+    }
+    t1: i64 = flint_time_ns()
+    total: f64 = (t1 - t0) / 1000000000.0
+    flint_print("total time = ")
+    flint_println_f64(total)
+    flint_print("w = "); flt_print_tensor(w, 5)
+    flint_print("b = "); flt_print_tensor(b, 5)
+    flt_destroy(x); flt_destroy(y); flt_destroy(w)
+    flt_destroy(b); flt_destroy(pred)
+    flint_array_free(sd); flint_array_free(sd1)
+    return 0
+}
+
+fn main() -> i64 {
+    bench_matmul()
+    bench_forward()
+    bench_training()
+    return 0
+}

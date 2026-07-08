@@ -1,0 +1,11 @@
+enum Option {
+    None,
+    Some(i64),
+}
+
+fn main() -> i64 {
+    x = Option.None
+    val = x?
+    print(val)
+    0
+}

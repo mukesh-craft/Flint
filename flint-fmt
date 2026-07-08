@@ -1,0 +1,196 @@
+#!/data/data/com.termux/files/usr/bin/env python3
+"""flint-fmt — Parse-aware formatter for Flint source files.
+
+Reformats .fl files with consistent indentation, spacing, and layout
+using lexer-based token analysis.
+
+Usage: flint-fmt <file.fl> [file2.fl ...]
+"""
+
+import sys
+import re
+import os
+
+FLINT_KEYWORDS = {
+    "fn", "let", "mut", "var", "def", "if", "else", "elif", "while", "for",
+    "in", "return", "break", "match", "enum", "struct", "import", "extern",
+    "python", "try", "parallel", "i64", "f64", "str", "bool", "ptr",
+    "true", "false",
+}
+
+def tokenize(source):
+    tokens = []
+    i = 0
+    line = 1
+    col = 1
+    while i < len(source):
+        c = source[i]
+        if c in " \t\r":
+            i += 1
+            col += 1
+            continue
+        if c == "\n":
+            tokens.append(("NEWLINE", "\n", line, col))
+            line += 1
+            col = 1
+            i += 1
+            continue
+        if c == "#":
+            start = i
+            while i < len(source) and source[i] != "\n":
+                i += 1
+                col += 1
+            tokens.append(("COMMENT", source[start:i], line, col - (i - start)))
+            continue
+        if c == "/" and i + 1 < len(source) and source[i + 1] == "/":
+            start = i
+            while i < len(source) and source[i] != "\n":
+                i += 1
+                col += 1
+            tokens.append(("COMMENT", source[start:i], line, col - (i - start)))
+            continue
+        if c == '"':
+            i += 1
+            col += 1
+            start = i
+            while i < len(source) and source[i] != '"':
+                if source[i] == "\\": i += 1; col += 1
+                i += 1
+                col += 1
+            if i < len(source):
+                tokens.append(("STRING", source[start:i], line, col - (i - start)))
+                i += 1
+                col += 1
+            continue
+        if c.isalpha() or c == "_":
+            start = i
+            while i < len(source) and (source[i].isalnum() or source[i] == "_"):
+                i += 1
+                col += 1
+            word = source[start:i]
+            tt = "KEYWORD" if word in FLINT_KEYWORDS else "IDENTIFIER"
+            tokens.append((tt, word, line, col - (i - start)))
+            continue
+        if c.isdigit() or (c == "-" and i + 1 < len(source) and source[i + 1].isdigit()):
+            start = i
+            if c == "-": i += 1; col += 1
+            while i < len(source) and source[i].isdigit():
+                i += 1
+                col += 1
+            if i < len(source) and source[i] == ".":
+                i += 1
+                col += 1
+                while i < len(source) and source[i].isdigit():
+                    i += 1
+                    col += 1
+            tokens.append(("NUMBER", source[start:i], line, col - (i - start)))
+            continue
+        if i + 1 < len(source) and source[i:i+2] in ("==","!=","<=",">=",":=","||","&&","..","->","|>"):
+            tokens.append(("OP", source[i:i+2], line, col))
+            i += 2; col += 2; continue
+        SINGLE = {
+            "(":"LPAREN",")":"RPAREN","{":"LBRACE","}":"RBRACE",
+            "[":"LBRACKET","]":"RBRACKET",";":"SEMICOLON",",":"COMMA",
+            ":":"COLON",".":"DOT","+":"PLUS","-":"MINUS","*":"STAR",
+            "/":"SLASH","%":"MOD","=":"ASSIGN","<":"LT",">":"GT",
+            "!":"NOT","&":"AMPERSAND","@":"AT","|":"PIPE","?":"QUESTION",
+            "~":"TILDE",
+        }
+        if c in SINGLE:
+            tokens.append((SINGLE[c], c, line, col))
+            i += 1; col += 1; continue
+        i += 1; col += 1
+    return tokens
+
+def fmt_file(path):
+    with open(path) as f:
+        source = f.read()
+    if not source.strip():
+        return
+    tokens = tokenize(source)
+
+    lines_out = []
+    indent = 0
+    buf = ""
+    prev_was_spacing_keyword = False
+    SPACING_KEYWORDS = {"fn", "let", "var", "mut", "if", "elif", "else", "while",
+                        "for", "in", "return", "enum", "struct", "match", "import",
+                        "extern", "true", "false", "break"}
+    block_line = False  # True when we're on a line inside a block (starts with indent)
+
+    for tt, text, t_line, t_col in tokens:
+        if tt == "NEWLINE":
+            if buf.strip():
+                lines_out.append("    " * indent + buf.strip())
+            buf = ""
+            block_line = True
+            continue
+        if tt == "COMMENT":
+            if buf.strip():
+                lines_out.append("    " * indent + buf.strip())
+                buf = ""
+            lines_out.append("    " * indent + text)
+            continue
+        if text == "{":
+            lines_out.append("    " * indent + buf.strip() + " {")
+            buf = ""
+            indent += 1
+            block_line = True
+            continue
+        if text == "}":
+            if buf.strip():
+                lines_out.append("    " * indent + buf.strip())
+                buf = ""
+            indent = max(0, indent - 1)
+            lines_out.append("    " * indent + "}")
+            block_line = True
+            continue
+        if text == ",":
+            buf += ", "
+            continue
+        if text == ":":
+            buf += ": "
+            continue
+        if text == ";":
+            buf += ";"
+            continue
+        # Spacing: no space before/after punctuation (call, member access, etc.)
+        if buf and buf[-1] not in (" ", "(", "["):
+            if buf[-1] == "=":
+                buf += " "  # always space after assignment
+            elif prev_was_spacing_keyword:
+                buf += " "  # space after control keywords (let, if, return, etc.)
+            elif text in ("(", ")", "[", "]", ",", ";", ":", "."):
+                pass  # no space before these
+            elif buf[-1] in ("(", "[", "."):
+                pass  # no space after these
+            else:
+                buf += " "
+        prev_was_spacing_keyword = (tt == "KEYWORD" and text in SPACING_KEYWORDS)
+        buf += text
+
+    if buf.strip():
+        lines_out.append("    " * indent + buf.strip())
+
+    # Post-process
+    result = "\n".join(lines_out)
+    result = re.sub(r"\n{3,}", "\n\n", result)
+    result = result.lstrip("\n")
+    result = result.rstrip("\n") + "\n"
+
+    with open(path, "w") as f:
+        f.write(result)
+    print(f"formatted: {path}")
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: flint-fmt <file.fl> [file2.fl ...]", file=sys.stderr)
+        sys.exit(1)
+    for path in sys.argv[1:]:
+        if not os.path.exists(path):
+            print(f"error: file not found: {path}", file=sys.stderr)
+            sys.exit(1)
+        fmt_file(path)
+
+if __name__ == "__main__":
+    main()
