@@ -2459,7 +2459,9 @@ private:
             return buildRangeLoop(std::move(startExpr), std::move(endExpr));
         } else {
             // Collection for: for x in collection { body }
-            // Desugars to: { let __c = collection; mut __i = 0; while __i < flint_vec_len(__c) { let x = flint_vec_get(__c, __i); body; __i = __i + 1 } }
+            // Desugars to: { let __coll = collection; mut __idx = 0; while __idx < len(__coll) { let x = coll[__idx]; body; __idx = __idx + 1 } }
+            // with kind-aware len/elem (array: hoisted len + data ptr; str: str_length + byte load).
+            // Non-array/non-str never reach here (loud parse error above).
             auto body = parseBlock();
             if (!body) return nullptr;
 
@@ -2469,8 +2471,16 @@ private:
             Type collTy = inferType(startExpr.get());
             bool isArray = collTy.kind == TypeKind::Array;
             bool isStr = collTy.kind == TypeKind::Str;
+            // A2: only arrays and strings are iterable. Anything else
+            // (int/map/void/...) used to fall through to vec-runtime calls
+            // (or a str fallback) on a non-vec value → JIT segfault or
+            // silent skip. Fail loudly instead (matches stage3 e_for:
+            // "for needs range, array or str").
+            if (!isArray && !isStr) {
+                parseError("for-in needs an array or str collection");
+                return nullptr;
+            }
             Type collDeclTy = collTy;
-            if (collDeclTy.kind == TypeKind::Void) collDeclTy = Type::str();
             auto collDecl = std::make_unique<VarDeclAST>(collVar, false, collDeclTy, std::move(startExpr));
             collDecl->loc = loopVar.loc;
             block->stmts.push_back(std::move(collDecl));
@@ -2520,14 +2530,11 @@ private:
             std::unique_ptr<ExprAST> lenExpr;
             if (isArray) {
                 lenExpr = std::make_unique<VariableExprAST>(lenVar);
-            } else if (isStr) {
+            } else {
+                // isStr (non-array/non-str rejected above).
                 std::vector<std::unique_ptr<ExprAST>> lenArgs;
                 lenArgs.push_back(std::make_unique<VariableExprAST>(collVar));
                 lenExpr = std::make_unique<CallExprAST>("flint_str_length", std::move(lenArgs));
-            } else {
-                std::vector<std::unique_ptr<ExprAST>> lenArgs;
-                lenArgs.push_back(std::make_unique<VariableExprAST>(collVar));
-                lenExpr = std::make_unique<CallExprAST>("flint_vec_len", std::move(lenArgs));
             }
             lenExpr->loc = loopVar.loc;
             auto idxRef = std::make_unique<VariableExprAST>(idxVar);
@@ -2545,17 +2552,11 @@ private:
                 a.push_back(std::move(d));
                 a.push_back(std::move(idx));
                 elementInit = std::make_unique<CallExprAST>("flint_array_read_i64", std::move(a));
-            } else if (isStr) {
+            } else {
+                // isStr (non-array/non-str rejected above).
                 auto base = std::make_unique<VariableExprAST>(collVar);
                 auto idx = std::make_unique<VariableExprAST>(idxVar);
                 elementInit = std::make_unique<IndexExprAST>(std::move(base), std::move(idx));
-            } else {
-                auto collRef2 = std::make_unique<VariableExprAST>(collVar);
-                auto idxRef2 = std::make_unique<VariableExprAST>(idxVar);
-                std::vector<std::unique_ptr<ExprAST>> getArgs;
-                getArgs.push_back(std::move(collRef2));
-                getArgs.push_back(std::move(idxRef2));
-                elementInit = std::make_unique<CallExprAST>("flint_vec_get", std::move(getArgs));
             }
             auto getCall = std::move(elementInit);
             getCall->loc = loopVar.loc;
@@ -7099,9 +7100,15 @@ void Parser::parseForStmtEmit() {
         cg->symTable.exitScope();
         return;
     }
-    // `for x in collection` — D1 kind-aware (array/str/vec)
+    // `for x in collection` — D1 kind-aware (array struct vs string ptr).
+    // Anything else (e.g. an i64) used to be bitcast to ptr → garbage/
+    // segfault. Fail loudly instead (matches AST path + stage3 e_for).
     llvm::Value* collVal = firstVal;
     bool isArray = collVal->getType()->isStructTy();
+    if (!isArray && !collVal->getType()->isPointerTy()) {
+        parseError("for-in needs an array or str collection");
+        return;
+    }
     // string vs vec are both ptr; treat ptr collections as string for now
     // (vec iteration not covered by current ladder; string "ab" was the P0).
     // Array struct is {ptr,i64}, string/vec is ptr.

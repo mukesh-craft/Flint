@@ -1,0 +1,11 @@
+// A2 regression: for-in over a non-iterable must fail LOUDLY at compile
+// time (used to segfault the JIT / silently skip). This file must NOT
+// compile or run — tests/run.sh check_fail asserts the error.
+fn main() -> i64 {
+    mut s: i64 = 0
+    for x in 5 {
+        s = s + x
+    }
+    print(s)
+    0
+}

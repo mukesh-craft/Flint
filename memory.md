@@ -2061,6 +2061,32 @@ gates concurrently (cross-contamination mimics miscompiles).
   0 fails, opt-identity 11/11 (the AOT-correctness gate for this change).
 - ROADMAP Phase J A1 flipped ✅. Next: A2 for-in-collection P0 crash.
 
+### SESSION 2026-09-24d — roadmap Phase J/A2: for-in P0 (loud error, not crash)
+
+- **Repro**: `for x in 5` → JIT **segfault (rc=139)**, zero output;
+  `for x in map{...}` → silent skip (prints 0, rc=0). Array/str/range
+  loops already correct (60/3/edge 0+5, JIT+AOT) — the array/str
+  desugar was kind-aware; only the anything-else fallback was lethal
+  (`flint_vec_len/get` on non-vec in AST path, i64→ptr bitcast in
+  emit path). No Vec TypeKind exists, so the fallback served no legit
+  case.
+- **Fix** (`src/main.cpp`, CPP-ONLY): `parseForStmt` errors loudly
+  (`for-in needs an array or str collection`) for non-array/non-str
+  (also kills the Void→str coercion hole); dead vec fallbacks removed
+  from len/element desugar; `parseForStmtEmit` rejects non-struct/
+  non-pointer the same way. Stage3 `e_for` already errored loudly
+  (verified on hand-written for-int S-expr) — parity now holds on all
+  three paths. QBE reuses the AST → covered.
+- **Regression**: `tests/t_for_bad.fl` (must-fail-compile) +
+  `check_fail` in `tests/run.sh`. Safe for corpus gates: the file
+  parses/lexes fine (Flint-level rejection happens at emit), confirmed
+  parse.0/lex.0/dump exit 0; parse-gate 91, fixpoint 91, lexdiff 90
+  (each +1 for the new file).
+- Verified solo: int/map → clean error rc=1 (was 139/silent);
+  smoke 15/15, differential 5/5, ladder 21/21, tutorial 8/8,
+  errors 116/116, merge 6/6, emit 3/3. ROADMAP A2 flipped ✅.
+  Next: A3 flamegraph + check-bce diagnostic.
+
 1. Read `REQUIREMENTS.md` for setup
 2. Read `ROADMAP.md` for phase status
 3. Test with `./flintc examples/hello.fl` (JIT run) or `./flintc examples/hello.fl output.ll && clang output.ll runtime.o -o hello && ./hello` (AOT)
