@@ -1,0 +1,29 @@
+# Tricky lexer inputs: every escape, every multi-char operator boundary,
+// comments in both styles, dots and arrows, numbers at edges.
+fn ops(a: i64, b: i64) -> i64 {
+    x = 3.5 + 2.0
+    y = 3 .5
+    z = a..b
+    w = a...b
+    q = a -> b
+    r = a => b
+    s = a := b
+    t = a // b
+    u = a / b
+    v = a /= b
+    p = a | b
+    q2 = a || b
+    r2 = a |> b
+    s2 = a && b
+    t2 = a & b
+    u2 = not a and b or c
+    esc = "tab\there nl\nhere cr\rhere bs\\here dq\"here"
+    hex = "A\x41B\x4zC"
+    uni = "e\u00e9f\uZZZZg\u0041"
+    unk = "q\qq"
+    empty = ""
+    f = 42
+    g = 3.
+    h = .5
+    0
+}

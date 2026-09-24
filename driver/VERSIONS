@@ -1,0 +1,23 @@
+# Pinned toolchain versions (P2 — RUNTIME_ABI record)
+#
+# Regenerate: llvm-config --version; clang --version; sha256sum runtime/*.c
+# The self-hosted pipeline is validated ONLY against these versions.
+# LLVM IR text is target-specific; cross-version drift shows up first as
+# llvm-as diagnostics, second as fixed-point divergence (Phase C).
+
+LLVM: 21.1.8
+CLANG: 21.1.8 (aarch64-unknown-linux-android24)
+FLINT: 0.22.0 (src/main.cpp reference)
+
+Runtime sources linked into every Flint binary (runtime.c + -lm):
+- runtime/runtime.c (core: str/vec/sb/map/chan/IO/process/files)
+
+RUNTIME_ABI (stable contract the emitter may rely on):
+- FlintArray layout: {ptr, i64} (data, len)
+- Enum values: i64 tag index (payload-less)
+- Map: opaque ptr, str keys, i64 values (flint_map_*)
+- Handles (vec/sb): opaque ptr
+- main wrapper: define i32 @main(i64 %flint_argc, ptr %flint_argv)
+  with @flint_g_argc/@flint_g_argv globals
+- Panics: void @flint_panic(ptr), abort after message
+- Bounds: void @flint_bounds_check(i64 index, i64 length)

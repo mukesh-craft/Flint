@@ -1,0 +1,5 @@
+import "./helper.fl"
+fn main() -> i64 {
+    print(helper(20))
+    0
+}

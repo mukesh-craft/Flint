@@ -1,0 +1,10 @@
+// AEGIS negative test: use-after-free must be rejected AT COMPILE TIME
+// by the AegisChecker static pass (no runtime needed).
+fn main() -> i64 {
+    lease = flint_aegis_alloc(16)
+    flint_aegis_write_i64(lease, 0, 1)
+    flint_aegis_free(lease)
+    v = flint_aegis_read_i64(lease, 0)
+    print(v)
+    0
+}

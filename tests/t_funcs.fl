@@ -1,0 +1,15 @@
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn fib(n: i64) -> i64 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() -> i64 {
+    print(add(20, 22))
+    print(fib(10))
+    dbl = |x| x + x
+    print(dbl(21))
+    0
+}

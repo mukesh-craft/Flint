@@ -7,16 +7,39 @@
 #include <math.h>
 #include <time.h>
 #include <sys/stat.h>
+// PORT(v0.20): POSIX-only headers below (dirent/unistd/sys-wait/regex/pthread).
+// Linux + macOS + Android: fine as-is. Windows/MinGW: mostly provided by the
+// toolchain; MSVC needs shims (FindFirstFile, threads, bundled regex).
 #include <dirent.h>
 #include <unistd.h>
 #include <errno.h>
 #include <ctype.h>
+// PORT: sys/wait.h (WEXITSTATUS) is POSIX-only. Windows system() already
+// returns the exit code, so the header + macro are skipped there.
+#ifndef _WIN32
 #include <sys/wait.h>
+#endif
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> // GetSystemInfo (core count); MinGW + MSVC both have it
+#include <direct.h> // _mkdir on Windows (mkdir takes no mode arg there)
+#endif
+// PORT: POSIX regex.h is absent from Windows toolchains (MinGW + MSVC).
+// flint_regex_* below degrade to err-flagged stubs there (documented Tier-3
+// gap; use string find/replace builtins instead).
+#ifndef _WIN32
 #include <regex.h>
+#else
+#define FLINT_NO_POSIX_REGEX 1
+#endif
 
 // CLI argument globals (set by compiler-generated code in main())
 int64_t flint_g_argc = 0;
 char** flint_g_argv = NULL;
+
+// Forward declarations (used by early array/string helpers before definition).
+void flint_set_err(int64_t err);
+void flint_panic(const char* msg);
 
 void flint_print_i64(int64_t val) {
     printf("%ld", (long)val);
@@ -27,7 +50,8 @@ void flint_println_i64(int64_t val) {
 }
 
 void flint_println_f64(double val) {
-    printf("%f\n", val);
+    // %g like flint_f64_to_string (was %f: "3.500000" vs "3.5" elsewhere).
+    printf("%g\n", val);
 }
 
 void flint_print_str(const char* s) {
@@ -41,10 +65,14 @@ void flint_println_str(const char* s) {
 
 // NOTE: `fmt` must be a trusted compile-time literal produced by the code
 // generator, never untrusted user input (format-string vulnerability).
+// Runtime defense-in-depth: reject %n (arbitrary write) even from trusted code.
 void flint_print_fmt(const char* fmt, ...)
     __attribute__((format(printf, 1, 2)));
 void flint_print_fmt(const char* fmt, ...) {
     if (!fmt) return;
+    for (const char* p = fmt; *p; p++) {
+        if (p[0] == '%' && p[1] == 'n') return; // refuse %n write primitive
+    }
     va_list args;
     va_start(args, fmt);
     vprintf(fmt, args);
@@ -52,15 +80,21 @@ void flint_print_fmt(const char* fmt, ...) {
 }
 
 void flint_panic(const char* msg) {
+    // Flush user output first: otherwise prints before the panic are lost
+    // (stdio buffers are discarded by abort). All PANIC paths funnel here.
+    fflush(stdout);
+    fflush(stderr);
     fprintf(stderr, "PANIC: %s\n", msg ? msg : "(null)");
+    fflush(stderr);
     abort();
 }
 
 void flint_bounds_check(int64_t index, int64_t length) {
     if (index < 0 || index >= length) {
-        fprintf(stderr, "PANIC: index %ld out of bounds for length %ld\n",
-                (long)index, (long)length);
-        abort();
+        char msg[128];
+        snprintf(msg, sizeof(msg), "index %lld out of bounds for length %lld",
+                 (long long)index, (long long)length);
+        flint_panic(msg);
     }
 }
 
@@ -84,12 +118,16 @@ char* flint_get_arg(int64_t i) {
 char* flint_str_concat(const char* a, const char* b) {
     if (!a) a = "";
     if (!b) b = "";
+    // Fast paths: empty side avoids malloc+memcpy (also cuts the constant
+    // factor of concat-in-loop patterns like string building).
+    if (*a == '\0') return strdup(b);
+    if (*b == '\0') return strdup(a);
     size_t la = strlen(a);
     size_t lb = strlen(b);
     // Overflow guard: la + lb + 1 must not wrap.
     if (la > SIZE_MAX - lb - 1) return NULL;
     char* r = (char*)malloc(la + lb + 1);
-    if (!r) return NULL;
+    if (!r) flint_panic("out of memory");
     memcpy(r, a, la);
     memcpy(r + la, b, lb);
     r[la + lb] = '\0';
@@ -102,27 +140,61 @@ int64_t flint_str_compare(const char* a, const char* b) {
     return (int64_t)strcmp(a, b);
 }
 
+// strlen memo for long-lived strings. The compiler reads a few large
+// strings (notably the S-expr source) char-by-char through
+// flint_str_length / flint_str_char_at / flint_str_substring; without this
+// every access is O(n) strlen and whole passes degrade to O(n^2).
+// Only strings >= 256 bytes are cached: short-string strlen is already
+// cheap, and this keeps transient small strings (tokens, map keys) from
+// evicting the large working set under interleaved access (a 1-entry
+// cache was measured at ~0% hit rate for this reason). Flint strings are
+// never length-mutated in place (all writes go to fresh buffers), so
+// caching (ptr -> len) is sound. Single-threaded use only.
+#define FLINT_LENCACHE_N 8
+#define FLINT_LENCACHE_MIN 256
+static const char* flint_lc_s[FLINT_LENCACHE_N] = { NULL, NULL, NULL, NULL,
+    NULL, NULL, NULL, NULL };
+static int64_t flint_lc_n[FLINT_LENCACHE_N] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+static unsigned flint_lc_rr = 0;
+
+static int64_t flint_cached_strlen(const char* s) {
+    int k;
+    int64_t n;
+    unsigned slot;
+    if (!s) return 0;
+    for (k = 0; k < FLINT_LENCACHE_N; k++) {
+        if (s == flint_lc_s[k]) return flint_lc_n[k];
+    }
+    n = (int64_t)strlen(s);
+    if (n >= FLINT_LENCACHE_MIN) {
+        slot = flint_lc_rr++ % FLINT_LENCACHE_N;
+        flint_lc_s[slot] = s;
+        flint_lc_n[slot] = n;
+    }
+    return n;
+}
+
 int64_t flint_str_length(const char* s) {
-    return s ? (int64_t)strlen(s) : 0;
+    return flint_cached_strlen(s);
 }
 
 int64_t flint_str_char_at(const char* s, int64_t i) {
     if (!s) flint_panic("str_char_at: null string");
-    int64_t len = (int64_t)strlen(s);
+    int64_t len = flint_cached_strlen(s);
     flint_bounds_check(i, len);
     return (unsigned char)s[i];
 }
 
 char* flint_str_substring(const char* s, int64_t start, int64_t end) {
     if (!s) return NULL;
-    int64_t slen = (int64_t)strlen(s);
+    int64_t slen = flint_cached_strlen(s);
     // Validate ordering and bounds — reject inverted/out-of-range slices.
     if (start < 0 || end < start || end > slen) {
         flint_panic("str_substring: invalid range");
     }
     int64_t len = end - start;               // guaranteed >= 0
     char* r = (char*)malloc((size_t)len + 1);
-    if (!r) return NULL;
+    if (!r) flint_panic("out of memory");
     memcpy(r, s + start, (size_t)len);
     r[len] = '\0';
     return r;
@@ -131,25 +203,67 @@ char* flint_str_substring(const char* s, int64_t start, int64_t end) {
 char* flint_i64_to_string(int64_t n) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%lld", (long long)n);
-    return strdup(buf); // may return NULL on OOM; caller may check
+    char* r = strdup(buf);
+    if (!r) flint_panic("out of memory");
+    return r;
 }
+
+// Bulk scanners for reader hot loops. A single C call replaces N
+// per-character Flint<->C round trips (each round trip is a Flint frame
+// plus several C calls; the self-hosted reader issues ~100K of them per
+// 28KB input). Stop sets mirror the Flint readers exactly:
+// skip_ws {space, \n, \t, \r} (e_skip), word_end {space, \n, (, )} (e_word).
+// Bounds use the length memo; positions clamp to [0, len].
+int64_t flint_str_skip_ws(const char* s, int64_t pos) {
+    int64_t len = flint_cached_strlen(s);
+    int64_t i = pos < 0 ? 0 : pos;
+    while (i < len) {
+        char c = s[i];
+        if (c == ' ' || c == '\n' || c == '\t' || c == '\r') i++;
+        else break;
+    }
+    return i;
+}
+
+int64_t flint_str_word_end(const char* s, int64_t pos) {
+    int64_t len = flint_cached_strlen(s);
+    int64_t i = pos < 0 ? 0 : pos;
+    while (i < len) {
+        char c = s[i];
+        if (c == ' ' || c == '\n' || c == '(' || c == ')') break;
+        i++;
+    }
+    return i;
+}
+
+// Max file size for flint_file_read / flint_read_file: 64 MiB (DoS cap).
+#define FLINT_MAX_FILE_READ (64 * 1024 * 1024)
 
 char* flint_file_read(const char* path) {
     if (!path) return NULL;
     FILE* f = fopen(path, "rb");
     if (!f) return NULL;
-    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
-    long len = ftell(f);
-    if (len < 0) { fclose(f); return NULL; }              // ftell error / unseekable
-    if (fseek(f, 0, SEEK_SET) != 0) { fclose(f); return NULL; }
-    if ((unsigned long)len >= SIZE_MAX) { fclose(f); return NULL; } // overflow guard
-
-    char* content = (char*)malloc((size_t)len + 1);
+    // Chunked growing buffer: works on pipes/special files (no fseek needed),
+    // single pass, exponential growth => O(n) instead of 2-pass stat+read.
+    size_t cap = 8192, len = 0;
+    char* content = (char*)malloc(cap + 1);
     if (!content) { fclose(f); return NULL; }
-
-    size_t n = fread(content, 1, (size_t)len, f);
+    size_t n;
+    while ((n = fread(content + len, 1, cap - len, f)) > 0) {
+        len += n;
+        if (len > FLINT_MAX_FILE_READ) { free(content); fclose(f); return NULL; }
+        if (len == cap) {
+            size_t ncap = cap * 2;
+            if (ncap > FLINT_MAX_FILE_READ + 1) ncap = FLINT_MAX_FILE_READ + 1;
+            if (ncap <= cap) { free(content); fclose(f); return NULL; }
+            char* nd = (char*)realloc(content, ncap + 1);
+            if (!nd) { free(content); fclose(f); return NULL; }
+            content = nd; cap = ncap;
+        }
+        if (feof(f)) break;
+    }
     if (ferror(f)) { free(content); fclose(f); return NULL; }
-    content[n] = '\0';   // terminate at actual bytes read
+    content[len] = '\0';
     fclose(f);
     return content;
 }
@@ -159,9 +273,19 @@ char* flint_file_read(const char* path) {
 
 // Returns a monotonic timestamp in nanoseconds (for benchmarking).
 int64_t flint_time_ns(void) {
+#ifdef _WIN32
+    // QueryPerformanceCounter is the monotonic high-res Windows clock
+    // (clock_gettime is absent from some Windows toolchains entirely).
+    static LARGE_INTEGER freq = {{0}};
+    LARGE_INTEGER now;
+    if (freq.QuadPart == 0) QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&now);
+    return (int64_t)(now.QuadPart * 1000000000LL / (freq.QuadPart ? freq.QuadPart : 1));
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+#endif
 }
 
 // Return FILE* for standard streams (as void* for Flint's str type)
@@ -201,10 +325,14 @@ void* flint_int_to_ptr(int64_t i) {
 }
 
 int64_t flint_array_read_i64(void* ptr, int64_t index) {
+    // UNCHECKED raw-pointer API (no length available — cannot validate).
+    // Prefer flint_array_get (bounds-checked, panics). Only use when the
+    // caller has hoisted the check, same contract as aegis _unchecked fns.
     return ((int64_t*)ptr)[index];
 }
 
 void flint_array_write_i64(void* ptr, int64_t index, int64_t value) {
+    // UNCHECKED: see flint_array_read_i64. Prefer flint_array_set.
     ((int64_t*)ptr)[index] = value;
 }
 
@@ -212,25 +340,49 @@ typedef struct { void* data; int64_t len; } FlintArray;
 
 FlintArray flint_array_alloc(int64_t n) {
     FlintArray a;
-    a.data = (n > 0) ? malloc((size_t)(n * sizeof(int64_t))) : NULL;
+    // Overflow guard: n * 8 must not wrap; also cap at 128M elems (~1GiB).
+    if (n < 0 || n > ((int64_t)1 << 27) || (uint64_t)n > SIZE_MAX / sizeof(int64_t)) {
+        a.data = NULL; a.len = 0; flint_set_err(1); return a;
+    }
+    // Zeroed (calloc): fresh arrays read as 0. malloc without memset works
+    // only by OS-page luck and breaks under ASan (0xbe fill) or heap reuse
+    // — the primes sieve returned wrong counts deterministically there.
+    a.data = (n > 0) ? calloc((size_t)n, sizeof(int64_t)) : NULL;
     a.len = n;
     return a;
 }
+
+int64_t flint_array_len(FlintArray a) { return a.len; }
+int64_t flint_array_len_ptr(FlintArray *a) { return a ? a->len : 0; }
+void* flint_array_data_ptr(FlintArray *a) { return a ? a->data : NULL; }
 
 void flint_array_free(FlintArray a) {
     free(a.data);
 }
 
 int64_t flint_array_get(FlintArray a, int64_t index) {
-    if (!a.data) return 0;
-    if (index < 0 || index >= a.len) return 0;
+    // P0-5: OOB reads returned heap garbage silently. Panic like `a[i]`
+    // syntax (flint_bounds_check) instead — one memory-safety rule.
+    if (!a.data || index < 0 || index >= a.len) {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "flint_array_get index %lld out of bounds for length %lld",
+                 (long long)index, (long long)a.len);
+        flint_panic(msg);
+    }
     return ((int64_t*)a.data)[index];
 }
 
 void flint_array_set(FlintArray a, int64_t index, int64_t value) {
-    if (!a.data) return;
-    if (index >= 0 && index < a.len)
-        ((int64_t*)a.data)[index] = value;
+    // P0-5: OOB writes were silently dropped. Panic instead.
+    if (!a.data || index < 0 || index >= a.len) {
+        char msg[128];
+        snprintf(msg, sizeof(msg),
+                 "flint_array_set index %lld out of bounds for length %lld",
+                 (long long)index, (long long)a.len);
+        flint_panic(msg);
+    }
+    ((int64_t*)a.data)[index] = value;
 }
 
 void flint_null_check(void* ptr, const char* msg) {
@@ -242,11 +394,19 @@ void flint_null_check(void* ptr, const char* msg) {
 
 FlintArray flint_array_concat(FlintArray a, FlintArray b) {
     FlintArray result;
-    result.len = a.len + b.len;
-    result.data = malloc((size_t)result.len * sizeof(int64_t));
-    if (!result.data) { result.len = 0; return result; }
-    if (a.len > 0) memcpy(result.data, a.data, (size_t)a.len * sizeof(int64_t));
-    if (b.len > 0) memcpy((int64_t*)result.data + a.len, b.data, (size_t)b.len * sizeof(int64_t));
+    int64_t total;
+    // Overflow guard on length addition.
+    if (__builtin_add_overflow(a.len, b.len, &total) || total < 0 ||
+        (uint64_t)total > SIZE_MAX / sizeof(int64_t)) {
+        result.data = NULL; result.len = 0; flint_set_err(1); return result;
+    }
+    result.len = total;
+    result.data = total > 0 ? malloc((size_t)total * sizeof(int64_t)) : NULL;
+    if (total > 0 && !result.data) { result.len = 0; flint_set_err(1); return result; }
+    if (a.len > 0 && a.data) memcpy(result.data, a.data, (size_t)a.len * sizeof(int64_t));
+    else if (a.len > 0) memset(result.data, 0, (size_t)a.len * sizeof(int64_t));
+    if (b.len > 0 && b.data) memcpy((int64_t*)result.data + a.len, b.data, (size_t)b.len * sizeof(int64_t));
+    else if (b.len > 0) memset((int64_t*)result.data + a.len, 0, (size_t)b.len * sizeof(int64_t));
     return result;
 }
 
@@ -299,7 +459,13 @@ static void* parallel_worker(void* arg) {
 // fn must have signature i64(i64) — called as fn(iteration_index).
 int64_t flint_parallel_for(int64_t n, void* fn, int64_t num_threads) {
     if (num_threads < 1) {
+#ifdef _WIN32
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        long hw = (long)si.dwNumberOfProcessors;
+#else
         long hw = sysconf(_SC_NPROCESSORS_ONLN);
+#endif
         num_threads = hw > 0 ? hw : 4;
     }
     if (num_threads > FLINT_MAX_THREADS) num_threads = FLINT_MAX_THREADS;
@@ -388,7 +554,9 @@ int64_t flint_rand_i64_range(int64_t lo, int64_t hi) {
 char* flint_f64_to_string(double v) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", v);
-    return strdup(buf);
+    char* r = strdup(buf);
+    if (!r) flint_panic("out of memory");
+    return r;
 }
 
 int64_t flint_str_to_i64(const char* s) {
@@ -427,7 +595,7 @@ char* flint_str_repeat(const char* s, int64_t n) {
     int64_t total = slen * n;
     if (total / n != slen) return NULL;
     char* r = (char*)malloc((size_t)total + 1);
-    if (!r) return NULL;
+    if (!r) flint_panic("out of memory");
     for (int64_t i = 0; i < n; i++)
         memcpy(r + i * slen, s, (size_t)slen);
     r[total] = '\0';
@@ -437,7 +605,7 @@ char* flint_str_repeat(const char* s, int64_t n) {
 char* flint_str_to_upper(const char* s) {
     if (!s) return NULL;
     char* r = strdup(s);
-    if (!r) return NULL;
+    if (!r) flint_panic("out of memory");
     for (char* p = r; *p; p++) *p = (char)toupper((unsigned char)*p);
     return r;
 }
@@ -445,7 +613,7 @@ char* flint_str_to_upper(const char* s) {
 char* flint_str_to_lower(const char* s) {
     if (!s) return NULL;
     char* r = strdup(s);
-    if (!r) return NULL;
+    if (!r) flint_panic("out of memory");
     for (char* p = r; *p; p++) *p = (char)tolower((unsigned char)*p);
     return r;
 }
@@ -507,7 +675,7 @@ char* flint_str_replace(const char* s, const char* old, const char* newstr) {
     int64_t reslen = slen + count * (nlen - olen);
     if (reslen < 0) return NULL;
     char* result = (char*)malloc((size_t)reslen + 1);
-    if (!result) return NULL;
+    if (!result) flint_panic("out of memory");
     char* dst = result;
     const char* src = s;
     const char* next;
@@ -528,15 +696,20 @@ char* flint_str_replace(const char* s, const char* old, const char* newstr) {
 char* flint_str_join(char** parts, int64_t n, const char* sep) {
     if (!parts || n < 0) return NULL;
     if (n == 0) return strdup("");
+    if (n > ((int64_t)1 << 24)) return NULL; // absurd count cap (16M parts)
     if (!sep) sep = "";
     int64_t seplen = (int64_t)strlen(sep);
     int64_t total = 0;
     for (int64_t i = 0; i < n; i++) {
-        if (parts[i]) total += (int64_t)strlen(parts[i]);
+        int64_t l = parts[i] ? (int64_t)strlen(parts[i]) : 0;
+        if (__builtin_add_overflow(total, l, &total)) return NULL;
     }
-    total += seplen * (n - 1);
+    int64_t sepTotal;
+    if (__builtin_mul_overflow(seplen, n - 1, &sepTotal) ||
+        __builtin_add_overflow(total, sepTotal, &total)) return NULL;
+    if ((uint64_t)total > SIZE_MAX - 1) return NULL;
     char* r = (char*)malloc((size_t)total + 1);
-    if (!r) return NULL;
+    if (!r) flint_panic("out of memory");
     char* dst = r;
     for (int64_t i = 0; i < n; i++) {
         if (i > 0) { memcpy(dst, sep, (size_t)seplen); dst += seplen; }
@@ -605,9 +778,18 @@ void flint_sb_free(FlintStrBuilder* sb) {
 void flint_sb_append(FlintStrBuilder* sb, const char* s) {
     if (!sb || !s) return;
     int64_t slen = (int64_t)strlen(s);
-    if (sb->len + slen > sb->cap) {
+    int64_t need;
+    // Overflow guard: len + slen must not wrap (perf: single branch, no 2nd scan).
+    if (__builtin_add_overflow(sb->len, slen, &need)) { flint_panic("sb_append: length overflow"); return; }
+    if (need > sb->cap) {
         int64_t newCap = sb->cap ? sb->cap * 2 : 64;
-        while (newCap < sb->len + slen) newCap *= 2;
+        // Cap growth at 1 GiB to avoid runaway realloc on hostile input.
+        const int64_t MAX_CAP = (int64_t)1 << 30;
+        while (newCap < need) {
+            if (newCap > MAX_CAP / 2) { newCap = need > MAX_CAP ? MAX_CAP + 1 : need; break; }
+            newCap *= 2;
+        }
+        if (newCap > MAX_CAP || newCap < need) { flint_panic("sb_append: exceeds 1GiB cap"); return; }
         char* nd = (char*)realloc(sb->data, (size_t)newCap);
         if (!nd) { flint_panic("sb_append: OOM"); return; }
         sb->data = nd; sb->cap = newCap;
@@ -618,8 +800,16 @@ void flint_sb_append(FlintStrBuilder* sb, const char* s) {
 
 void flint_sb_append_char(FlintStrBuilder* sb, char c) {
     if (!sb) return;
-    char buf[2] = {c, '\0'};
-    flint_sb_append(sb, buf);
+    // Fast path: direct char append, no temp string / strlen / 2nd scan.
+    if (sb->len + 1 > sb->cap) {
+        int64_t newCap = sb->cap ? sb->cap * 2 : 64;
+        const int64_t MAX_CAP = (int64_t)1 << 30;
+        if (newCap > MAX_CAP) { flint_panic("sb_append_char: exceeds 1GiB cap"); return; }
+        char* nd = (char*)realloc(sb->data, (size_t)newCap);
+        if (!nd) { flint_panic("sb_append_char: OOM"); return; }
+        sb->data = nd; sb->cap = newCap;
+    }
+    sb->data[sb->len++] = c;
 }
 
 void flint_sb_append_i64(FlintStrBuilder* sb, int64_t v) {
@@ -680,6 +870,10 @@ void flint_vec_push(FlintVec* v, int64_t val) {
     if (!v) return;
     if (v->len >= v->cap) {
         int64_t newCap = v->cap ? v->cap * 2 : 8;
+        // Guard: newCap * 8 must not overflow size_t; cap at ~128M elems.
+        const int64_t MAX_CAP = (int64_t)1 << 27;
+        if (newCap > MAX_CAP) { flint_panic("vec_push: exceeds element cap"); return; }
+        if ((uint64_t)newCap > SIZE_MAX / sizeof(int64_t)) { flint_panic("vec_push: size overflow"); return; }
         int64_t* nd = (int64_t*)realloc(v->data, (size_t)(newCap * sizeof(int64_t)));
         if (!nd) { flint_panic("vec_push: OOM"); return; }
         v->data = nd; v->cap = newCap;
@@ -782,7 +976,9 @@ void flint_map_set(FlintMap* m, const char* key, int64_t val) {
     if (map_probe(m, key, &slot)) {
         m->values[slot] = val;
     } else {
-        m->keys[slot] = strdup(key);
+        char* dup = strdup(key);
+        if (!dup) { flint_panic("map_set: OOM"); return; }
+        m->keys[slot] = dup;
         m->values[slot] = val;
         m->len++;
     }
@@ -827,7 +1023,11 @@ void flint_sleep_ms(int64_t ms) {
 
 int64_t flint_mkdir(const char* path) {
     if (!path) return -1;
+#ifdef _WIN32
+    return _mkdir(path) == 0 ? 0 : -1; // MSVCRT takes no mode arg
+#else
     return mkdir(path, 0755) == 0 ? 0 : -1;
+#endif
 }
 
 int64_t flint_rmdir(const char* path) {
@@ -898,19 +1098,10 @@ int64_t flint_chdir(const char* path) {
 
 char* flint_read_file(const char* path) {
     if (!path) { flint_set_err(1); return NULL; }
-    FILE* f = fopen(path, "rb");
-    if (!f) { flint_set_err(1); return NULL; }
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    if (len < 0) { fclose(f); flint_set_err(1); return NULL; }
-    rewind(f);
-    char* buf = (char*)malloc((size_t)(len + 1));
-    if (!buf) { fclose(f); flint_set_err(1); return NULL; }
-    size_t n = fread(buf, 1, (size_t)len, f);
-    if (ferror(f)) { fclose(f); free(buf); flint_set_err(1); return NULL; }
-    buf[n] = '\0';
-    fclose(f);
-    return buf;
+    // Delegate to capped chunked reader; translate NULL to error state.
+    char* r = flint_file_read(path);
+    if (!r) flint_set_err(1);
+    return r;
 }
 
 int64_t flint_write_file(const char* path, const char* data) {
@@ -935,11 +1126,23 @@ int64_t flint_append_file(const char* path, const char* data) {
 
 int64_t flint_file_copy(const char* src, const char* dst) {
     if (!src || !dst) { flint_set_err(1); return -1; }
-    char* data = flint_read_file(src);
-    if (!data) return -1;
-    int64_t ret = flint_write_file(dst, data);
-    free(data);
-    return ret;
+    // Streaming copy: O(64KB) memory, binary-safe (no strlen/NUL issues).
+    FILE* in = fopen(src, "rb");
+    if (!in) { flint_set_err(1); return -1; }
+    FILE* out = fopen(dst, "wb");
+    if (!out) { fclose(in); flint_set_err(1); return -1; }
+    char buf[65536];
+    size_t n;
+    int64_t total = 0;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) { fclose(in); fclose(out); flint_set_err(1); return -1; }
+        total += (int64_t)n;
+        if (total > FLINT_MAX_FILE_READ) { fclose(in); fclose(out); flint_set_err(1); return -1; }
+    }
+    if (ferror(in)) { fclose(in); fclose(out); flint_set_err(1); return -1; }
+    if (fclose(out) != 0) { fclose(in); flint_set_err(1); return -1; }
+    fclose(in);
+    return 0;
 }
 
 char* flint_temp_dir(void) {
@@ -951,22 +1154,35 @@ char* flint_temp_dir(void) {
 }
 
 // ==================== PROCESS SPAWNING ====================
+// SECURITY: system()/popen() invoke /bin/sh — callers must never pass
+// untrusted Flint user input directly. Defense-in-depth caps applied here.
+#define FLINT_MAX_CMD_LEN 32768
+#define FLINT_MAX_CMD_OUT (4 * 1024 * 1024)
 
 int64_t flint_command(const char* cmd) {
     if (!cmd) { flint_set_err(1); return -1; }
+    if (cmd[0] == '\0' || strlen(cmd) > FLINT_MAX_CMD_LEN) { flint_set_err(1); return -1; }
     int ret = system(cmd);
     if (ret == -1) { flint_set_err(1); return -1; }
+#ifdef _WIN32
+    return (int64_t)ret; // MSVCRT system() already returns the exit code
+#else
     return (int64_t)WEXITSTATUS(ret);
+#endif
 }
 
 char* flint_command_output(const char* cmd) {
     if (!cmd) { flint_set_err(1); return NULL; }
+    if (cmd[0] == '\0' || strlen(cmd) > FLINT_MAX_CMD_LEN) { flint_set_err(1); return NULL; }
     FILE* pipe = popen(cmd, "r");
     if (!pipe) { flint_set_err(1); return NULL; }
     FlintStrBuilder* sb = flint_sb_new();
-    if (!sb) { pclose(pipe); return NULL; }
+    if (!sb) { pclose(pipe); flint_set_err(1); return NULL; }
     char buf[4096];
+    size_t total = 0;
     while (fgets(buf, sizeof(buf), pipe)) {
+        total += strlen(buf);
+        if (total > FLINT_MAX_CMD_OUT) { pclose(pipe); flint_sb_free(sb); flint_set_err(1); return NULL; }
         flint_sb_append(sb, buf);
     }
     int rc = pclose(pipe);
@@ -982,6 +1198,22 @@ char* flint_command_output(const char* cmd) {
 }
 
 // ==================== REGEX ====================
+
+#ifdef FLINT_NO_POSIX_REGEX
+// Windows has no POSIX regex engine: fail loudly via the err flag so
+// programs detect it (use str find/replace builtins instead).
+int64_t flint_regex_match(const char* pattern, const char* str) {
+    (void)pattern; (void)str;
+    flint_set_err(1);
+    return 0;
+}
+
+char* flint_regex_replace(const char* pattern, const char* repl, const char* str) {
+    (void)pattern; (void)repl; (void)str;
+    flint_set_err(1);
+    return NULL;
+}
+#else
 
 int64_t flint_regex_match(const char* pattern, const char* str) {
     if (!pattern || !str) { flint_set_err(1); return 0; }
@@ -1003,12 +1235,22 @@ char* flint_regex_replace(const char* pattern, const char* repl, const char* str
     FlintStrBuilder* sb = flint_sb_new();
     if (!sb) { regfree(&re); return NULL; }
     while (regexec(&re, p, 1, &pm, 0) == 0) {
+        // Guard: empty match (rm_eo==0) would loop forever — advance 1 byte.
+        if (pm.rm_eo == pm.rm_so) {
+            flint_sb_append_char(sb, *p ? *p : '\0');
+            if (*p) p++;
+            else break;
+            // Avoid infinite loop on trailing empty match.
+            if (*p == '\0') break;
+            continue;
+        }
         if (pm.rm_so > 0) {
             char* seg = strndup(p, (size_t)pm.rm_so);
             if (seg) { flint_sb_append(sb, seg); free(seg); }
         }
         flint_sb_append(sb, repl);
         p += pm.rm_eo;
+        if (*p == '\0') break;
     }
     flint_sb_append(sb, p);
     regfree(&re);
@@ -1017,24 +1259,32 @@ char* flint_regex_replace(const char* pattern, const char* repl, const char* str
     return result;
 }
 
+#endif // FLINT_NO_POSIX_REGEX
+
 // ==================== CSV ====================
 
 char* flint_csv_parse_line(const char* line, int64_t col) {
     if (!line || col < 0) { flint_set_err(1); return NULL; }
+    if (col > 100000) { flint_set_err(1); return NULL; } // absurd column cap
     int64_t c = 0;
     const char* p = line;
     int in_quotes = 0;
+    const char* field_start = line; // fast path: track run, append in one go
+    // We buffer the current field via start pointer + quotes stripped on flush.
+    // Simpler efficient approach: accumulate with sb but append chars directly.
     FlintStrBuilder* sb = flint_sb_new();
     if (!sb) return NULL;
+    (void)field_start;
     while (*p) {
         if (*p == '"') { in_quotes = !in_quotes; p++; continue; }
         if (*p == ',' && !in_quotes) {
             if (c == col) { char* r = flint_sb_build(sb); flint_sb_free(sb); return r; }
-            c++; flint_sb_free(sb); sb = flint_sb_new(); if (!sb) return NULL;
+            c++; if (c > col + 1 && col < c - 1) { /* past target, can early-out */ }
+            // Reset builder without free/malloc churn.
+            sb->len = 0;
             p++; continue;
         }
-        char ch[2] = { *p, '\0' };
-        flint_sb_append(sb, ch);
+        flint_sb_append_char(sb, *p);
         p++;
     }
     char* result = (c == col) ? flint_sb_build(sb) : NULL;
@@ -1113,16 +1363,20 @@ int64_t flint_time_now(void) {
 }
 
 int64_t flint_time_ns_monotonic(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
+    // Same clock as flint_time_ns (single source of monotonic time).
+    return flint_time_ns();
 }
 
 char* flint_time_format(const char* fmt) {
     if (!fmt) return NULL;
     time_t now = time(NULL);
     struct tm result;
+#ifdef _WIN32
+    // localtime_s takes (out, in) — reversed vs localtime_r.
+    if (localtime_s(&result, &now) != 0) return NULL;
+#else
     localtime_r(&now, &result);
+#endif
     char buf[256];
     if (strftime(buf, sizeof(buf), fmt, &result) == 0) return NULL;
     return strdup(buf);

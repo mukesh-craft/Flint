@@ -121,6 +121,8 @@ char* flint_hex_encode(const char* data, int64_t len) {
         r[0] = '\0';
         return r;
     }
+    // Overflow guard: len*2+1 must fit size_t (DoS via giant len).
+    if ((uint64_t)len > (SIZE_MAX - 1) / 2) { flint_set_err(1); return NULL; }
     char* out = malloc((size_t)(len * 2 + 1));
     if (!out) return NULL;
     for (int64_t i = 0; i < len; i++) {

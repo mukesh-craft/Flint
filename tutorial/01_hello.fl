@@ -1,0 +1,16 @@
+// Lesson 01 — your first Flint program.
+// Every program starts at fn main. print shows values. Variables are
+// immutable unless you say `mut`. Run: flintc run tutorial/01_hello.fl
+fn main() -> i64 {
+    print("hello, flint!")
+    x = 41
+    print(x + 1)
+    mut y = 10
+    y += 5
+    print(y)
+    0
+}
+// EXPECT:
+// hello, flint!
+// 42
+// 15

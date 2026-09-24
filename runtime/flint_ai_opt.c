@@ -4,7 +4,12 @@
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
-#include <unistd.h>
+#ifndef _WIN32
+#include <unistd.h> // sysconf (absent from lean Windows headers by design)
+#else
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h> // GetSystemInfo for core count
+#endif
 
 // =========================================================================
 // Hardware detection
@@ -44,8 +49,14 @@ int fao_has_avx(void) {
 }
 
 int fao_core_count(void) {
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return si.dwNumberOfProcessors > 0 ? (int)si.dwNumberOfProcessors : 4;
+#else
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     return n > 0 ? (int)n : 4;
+#endif
 }
 
 // =========================================================================

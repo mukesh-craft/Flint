@@ -1,0 +1,14 @@
+fn main() -> i64 {
+    mut s: i64 = 0
+    for i in range(1, 101) {
+        s += i
+    }
+    print(s)
+    mut p: i64 = 1
+    for i in range(1, 7) {
+        p *= i
+    }
+    print(p)
+    print(if s > p { 1 } else { 0 })
+    0
+}

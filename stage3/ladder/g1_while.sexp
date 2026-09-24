@@ -1,0 +1,1 @@
+(prog (fn main (tparams) () i64 (block (decl mut i i64 (num 0)) (decl mut s i64 (num 0)) (while (bin < (var i) (num 5)) (block (assign i (bin + (var i) (num 1))) (if (bin == (var i) (num 3)) (block (continue) )) (if (bin == (var i) (num 4)) (block (break) )) (assign s (bin + (var s) (var i))) )) (expr (call print (var s))) (expr (num 0)) )) )

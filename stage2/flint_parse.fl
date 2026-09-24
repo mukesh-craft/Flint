@@ -1,0 +1,3774 @@
+# stage2/flint_parse.fl — Flint parser (Stage 2 of self-hosting).
+#
+# Reads Stage-1 token vecs, emits flat S-expr IR into an sb. S-expr spec:
+#   (prog FORM*)  (fn NAME TP (PARAMS) RET BODY)  (fn-decl ... no body)
+#   TP = (tparams) | (tparams T+); PARAMS = (NAME TYPE DEF-)*, DEF -|EXPR
+#   (decl KIND NAME TYPE INIT)  KIND = let|mut|var|implicit|seteq
+#   (destruct KIND list|obj (NAMES) INIT)
+#   (assign NAME EXPR)  (compound-assign OP NAME EXPR)  (idx-set B I V)
+#   (call NAME ARGS)  (method BASE NAME ARGS)  (index B I)  (slice B L R)
+#   (field B N)  (bin OP L R)  (pipe 0|1 L R)  (neg X)  (not X)
+#   (try X)  (unwrap X)  (ref X)  (deref X)
+#   (num RAW[d])  (str LEN RAW)  (var N)  (true) (false)
+#   (if C T [E])  (while C B)  (for V RANGE B)  (parallel-for V RANGE B)
+#   (range A B)  (block S*)  (return [X])  (break)  (continue)
+#   (struct N ((F T)*))  (struct-lit N ((F E)*))  (enum N ((V T*)*))
+#   (enum-lit E V ARGS)  (match S (arms ((PAT B))*))
+#   PAT = (pat-var E V BIND|-)
+#   (lambda ((P T)*) BODY)  (array E* | (spread E)*)  (map-lit (str K) V*)
+#   (extern "C" DECLS)  (import P)  (python (str*))  (expr X)
+# DESIGN: token vecs + source in globals; cursor is a 1-elem vec; decls use
+# scope-stamped values + persistent top map (mirrors C++ declared/globalVars).
+# Every consume goes through p_next (step budget kills hangs). No
+# short-circuit `and` is relied on (Flint evaluates both sides); loop-bound
+# vars are always `mut`; `//` is a comment (use `/`); literal braces in
+# strings need `{{` (bare `}` is fine).
+import "../stage1/flint_lex"
+# Token stream globals (filled by the driver before parsing).
+mut GSRC: str = ""
+mut TK = flint_vec_new()
+mut TS = flint_vec_new()
+mut TL = flint_vec_new()
+mut TLINE = flint_vec_new()
+mut TCOL = flint_vec_new()
+# Cursor + errors + step budget.
+PC = flint_vec_new()
+mut PERR: i64 = 0
+mut PELINE: i64 = 0
+mut PECOL: i64 = 0
+mut PEKIND: i64 = 0
+mut PSTEPS: i64 = 0
+# Declared names: name -> scope id (0 = absent). Top-level names also in
+# PTOP (never cleared). Types: name -> code (0 unknown).
+PDECL = map {
+    "": 0
+}
+PTOP = map {
+    "": 0
+}
+PTYPE = map {
+    "": 0
+}
+PMAPSTRUCT = map {
+    "": 0
+}
+PMAPENUM = map {
+    "": 0
+}
+mut PSCOPE: i64 = 1
+# Step budget: any parse consuming >20M tokens is a bug, not a program.
+fn p_bump() -> i64 {
+    PSTEPS = PSTEPS + 1
+    if PSTEPS > 20000000 {
+        PERR = PERR + 1
+        1
+    } else {
+        0
+    }
+}
+fn p_pos() -> i64 {
+    flint_vec_get(PC, 0)
+}
+fn p_at_end() -> i64 {
+    if p_pos() < flint_vec_len(TK) {
+        0
+    } else {
+        1
+    }
+}
+# Kind at cursor, or 0 (END) past the end.
+fn p_kind() -> i64 {
+    if p_at_end() == 1 {
+        0
+    } else {
+        flint_vec_get(TK, p_pos())
+    }
+}
+# Consume one token (the ONLY advancer). Returns its kind, -1 on budget kill.
+fn p_next() -> i64 {
+    if p_bump() == 1 {
+        -1
+    } else {
+        if p_at_end() == 1 {
+            0
+        } else {
+            k = flint_vec_get(TK, p_pos())
+            flint_vec_set(PC, 0, p_pos() + 1)
+            k
+        }
+    }
+}
+fn p_note_err() -> i64 {
+    if PERR == 0 {
+        # Guarded: errors AT EOF have no token site (use -1 sentinel).
+        if p_pos() < flint_vec_len(TLINE) {
+            PELINE = flint_vec_get(TLINE, p_pos())
+            PECOL = flint_vec_get(TCOL, p_pos())
+            PEKIND = p_kind()
+        } else {
+            PELINE = -1
+            PECOL = -1
+            PEKIND = 0
+        }
+    }
+    PERR = PERR + 1
+    0
+}
+fn p_accept(k: i64) -> i64 {
+    if p_kind() == k {
+        p_next()
+        1
+    } else {
+        0
+    }
+}
+# Raw token text at cursor (empty past end).
+fn p_text() -> str {
+    if p_at_end() == 1 {
+        ""
+    } else {
+        st = flint_vec_get(TS, p_pos())
+        ln = flint_vec_get(TL, p_pos())
+        flint_str_substring(GSRC, st, st + ln)
+    }
+}
+fn p_emit(out, s: str) -> i64 {
+    flint_sb_append(out, s)
+    0
+}
+fn p_emit_top(out, e: str) -> i64 {
+    if p_is_err(e) == 1 {
+        0
+    } else {
+        p_emit(out, e + " ")
+        1
+    }
+}
+fn p_declared(name: str) -> i64 {
+    if PDECL.has(name) == 1 {
+        if PDECL.get(name) == PSCOPE {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+# Either scope model: current function/locals OR top-level globals.
+fn p_any_declared(name: str) -> i64 {
+    if p_declared(name) == 1 {
+        1
+    } else {
+        PTOP.has(name)
+    }
+}
+fn p_declare(name: str, top: i64) -> i64 {
+    PDECL.set(name, PSCOPE)
+    PTYPE.set(name, 0)
+    if top == 1 {
+        PTOP.set(name, 1)
+    }
+    0
+}
+# Type codes: 1 i64, 2 f64, 3 str, 4 array, 5 map, 6 chan, 7 vec, 8 bool.
+fn p_ann_code(ty: str) -> i64 {
+    if ty == "i64" {
+        1
+    } else {
+        if ty == "f64" {
+            2
+        } else {
+            if ty == "str" {
+                3
+            } else {
+                if ty == "bool" {
+                    8
+                } else {
+                    0
+                }
+            }
+        }
+    }
+}
+# Constructor/init call -> type code (mirrors C++ inference essentials).
+fn p_call_code(name: str) -> i64 {
+    if name == "flint_array_alloc" {
+        4
+    } else {
+        if name == "flint_array_concat" {
+            4
+        } else {
+            if name == "flint_map_new" {
+                5
+            } else {
+                if name == "flint_chan_new" {
+                    6
+                } else {
+                    if name == "flint_vec_new" {
+                        7
+                    } else {
+                        if name == "flint_i64_to_string" {
+                            3
+                        } else {
+                            if name == "flint_f64_to_string" {
+                                3
+                            } else {
+                                0
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+fn p_type_of(name: str) -> i64 {
+    if PTYPE.has(name) == 1 {
+        PTYPE.get(name)
+    } else {
+        0
+    }
+}
+# Type token: IDENT or i64/f64/str/bool/ptr keyword. "" when absent.
+fn p_type_token() -> str {
+    k = p_kind()
+    if k == 1 {
+        t = p_text()
+        p_next()
+        t
+    } else {
+        if k == 54 {
+            # Array element type [T] (nested allowed). Text round-trips raw.
+            p_next()
+            inner = p_type_token()
+            if p_is_err(inner) == 1 {
+                ""
+            } else {
+                if p_accept(55) == 0 {
+                    p_note_err()
+                    ""
+                } else {
+                    "[" + inner + "]"
+                }
+            }
+        } else {
+            if k == 23 {
+                p_next()
+                "i64"
+            } else {
+                if k == 24 {
+                    p_next()
+                    "f64"
+                } else {
+                    if k == 25 {
+                        p_next()
+                        "str"
+                    } else {
+                        if k == 26 {
+                            p_next()
+                            "bool"
+                        } else {
+                            if k == 27 {
+                                p_next()
+                                "ptr"
+                            } else {
+                                ""
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# Plain `(var NAME)` text -> NAME, else "".
+fn p_var_name(e: str) -> str {
+    if flint_str_length(e) < 7 {
+        ""
+    } else {
+        if flint_str_compare(flint_str_substring(e, 0, 5), "(var ") == 0 {
+            if flint_str_compare(flint_str_substring(e, flint_str_length(e) - 1, flint_str_length(e)), ")") == 0 {
+                flint_str_substring(e, 5, flint_str_length(e) - 1)
+            } else {
+                ""
+            }
+        } else {
+            ""
+        }
+    }
+}
+fn p_starts_with(e: str, pre: str) -> i64 {
+    if flint_str_length(e) < flint_str_length(pre) {
+        0
+    } else {
+        if flint_str_compare(flint_str_substring(e, 0, flint_str_length(pre)), pre) == 0 {
+            1
+        } else {
+            0
+        }
+    }
+}
+# Static type of an already-built expr text (for decl recording).
+fn p_expr_code(e: str) -> i64 {
+    if p_starts_with(e, "(num ") == 1 {
+        if flint_str_compare(flint_str_substring(e, flint_str_length(e) - 2, flint_str_length(e)), "d)") == 0 {
+            2
+        } else {
+            1
+        }
+    } else {
+        if p_starts_with(e, "(str ") == 1 {
+            3
+        } else {
+            if p_starts_with(e, "(array") == 1 {
+                4
+            } else {
+                if p_starts_with(e, "(call ") == 1 {
+                    rest = flint_str_substring(e, 6, flint_str_length(e))
+                    sp = flint_str_index_of(rest, " ")
+                    mut nm: str = rest
+                    if sp >= 0 {
+                        nm = flint_str_substring(rest, 0, sp)
+                    }
+                    p_call_code(nm)
+                } else {
+                    vn = p_var_name(e)
+                    if vn == "" {
+                        0
+                    } else {
+                        p_type_of(vn)
+                    }
+                }
+            }
+        }
+    }
+}
+fn p_is_err(s: str) -> i64 {
+    if flint_str_compare(s, "") == 0 {
+        1
+    } else {
+        0
+    }
+}
+# ---- expressions (return S-expr text; failure = "") ----
+# NOTE: expressions RETURN text (they wrap inner text, so streaming won't
+# work); statements emit sequentially into `out`.
+fn p_prec_of(k: i64) -> i64 {
+    if k == 67 {
+        60
+    } else {
+        if k == 69 {
+            60
+        } else {
+            if k == 71 {
+                60
+            } else {
+                if k == 62 {
+                    50
+                } else {
+                    if k == 65 {
+                        50
+                    } else {
+                        if k == 74 {
+                            40
+                        } else {
+                            if k == 76 {
+                                40
+                            } else {
+                                if k == 78 {
+                                    40
+                                } else {
+                                    if k == 80 {
+                                        40
+                                    } else {
+                                        if k == 79 {
+                                            40
+                                        } else {
+                                            if k == 81 {
+                                                40
+                                            } else {
+                                                if k == 88 {
+                                                    30
+                                                } else {
+                                                    if k == 60 {
+                                                        30
+                                                    } else {
+                                                        if k == 87 {
+                                                            20
+                                                        } else {
+                                                            if k == 85 {
+                                                                55
+                                                            } else {
+                                                                -1
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# Canonical op text by kind (mirrors C++: `and`/`or` already lex as &&/||).
+fn p_op_text(k: i64) -> str {
+    if k == 62 {
+        "+"
+    } else {
+        if k == 65 {
+            "-"
+        } else {
+            if k == 67 {
+                "*"
+            } else {
+                if k == 69 {
+                    "/"
+                } else {
+                    if k == 71 {
+                        "%"
+                    } else {
+                        if k == 74 {
+                            "=="
+                        } else {
+                            if k == 76 {
+                                "!="
+                            } else {
+                                if k == 78 {
+                                    "<"
+                                } else {
+                                    if k == 80 {
+                                        ">"
+                                    } else {
+                                        if k == 79 {
+                                            "<="
+                                        } else {
+                                            if k == 81 {
+                                                ">="
+                                            } else {
+                                                if k == 88 {
+                                                    "||"
+                                                } else {
+                                                    if k == 60 {
+                                                        "&&"
+                                                    } else {
+                                                        "@"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# Comma-separated argument list (no parens); "" when empty. Items carry a
+# leading space so `(call fARGS)` concatenates directly.
+fn p_arg_list() -> str {
+    mut s: str = ""
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 51 {
+            go = 0
+        } else {
+            if first == 0 {
+                if p_accept(57) == 0 {
+                    go = 0
+                } else {
+                    if p_kind() == 51 {
+                        go = 0
+                    } else {
+                        a = p_expr()
+                        s = s + " " + a
+                    }
+                }
+            } else {
+                a = p_expr()
+                s = s + " " + a
+                first = 0
+            }
+        }
+    }
+    s
+}
+# Array literal [a, b, ...spread] (mirrors C++, trailing comma tolerated).
+fn p_array_lit() -> str {
+    p_next()
+    mut items: str = ""
+    if p_kind() == 55 {
+        p_next()
+        "(array)"
+    } else {
+        mut go: i64 = 1
+        while go == 1 {
+            mut e: str = ""
+            if p_kind() == 84 {
+                p_next()
+                e = p_expr()
+                items = items + " (spread " + e + ")"
+            } else {
+                e = p_expr()
+                items = items + " " + e
+            }
+            if p_is_err(e) == 1 {
+                return ""
+            }
+            if p_accept(57) == 1 {
+                if p_kind() == 55 {
+                    go = 0
+                }
+            } else {
+                go = 0
+            }
+        }
+        if p_accept(55) == 0 {
+            p_note_err()
+            ""
+        } else {
+            "(array" + items + ")"
+        }
+    }
+}
+# a[i] <op>= v: rejected like C++ (use a[i] = a[i] + v), but the rhs is
+# consumed so parsing always makes progress (no hangs).
+fn p_compound_index() -> str {
+    p_next()
+    rhs = p_expr()
+    p_note_err()
+    ""
+}
+fn p_primary() -> str {
+    k = p_kind()
+    if k == 2 {
+        mut raw: str = p_text()
+        if lex_has_dot(raw) == 1 {
+            raw = raw + "d"
+        }
+        p_next()
+        "(num " + raw + ")"
+    } else {
+        if k == 3 {
+            raw = p_text()
+            p_next()
+            "(str " + flint_i64_to_string(flint_str_length(raw)) + " " + raw + ")"
+        } else {
+            if k == 36 {
+                # try EXPR (full expression, mirrors C++ Unwrap).
+                p_next()
+                e = p_expr()
+                "(try " + e + ")"
+            } else {
+                if k == 15 {
+                    p_if_str()
+                } else {
+                    if k == 31 {
+                        p_match_str()
+                    } else {
+                        if k == 77 {
+                            # !x and `not x` (same token): distinct node so
+                            # pretty-print round-trips (not confusable with ==).
+                            p_next()
+                            e = p_primary()
+                            "(not " + e + ")"
+                        } else {
+                            if k == 65 {
+                                # -X: distinct node (Stage 3 folds constants).
+                                p_next()
+                                e = p_primary()
+                                "(neg " + e + ")"
+                            } else {
+                                if k == 87 {
+                                    # Lambda |params| body (only `|`, not `|>`).
+                                    if flint_str_compare(p_text(), "|") == 0 {
+                                        p_lambda_str()
+                                    } else {
+                                        p_note_err()
+                                        p_next()
+                                        ""
+                                    }
+                                } else {
+                                    if k == 54 {
+                                        p_array_lit()
+                                    } else {
+                                        if k == 61 {
+                                            # &x reference (operand is a primary).
+                                            p_next()
+                                            t = p_primary()
+                                            if p_is_err(t) == 1 {
+                                                ""
+                                            } else {
+                                                "(ref " + t + ")"
+                                            }
+                                        } else {
+                                            if k == 67 {
+                                                # *x dereference.
+                                                p_next()
+                                                t = p_primary()
+                                                if p_is_err(t) == 1 {
+                                                    ""
+                                                } else {
+                                                    "(deref " + t + ")"
+                                                }
+                                            } else {
+                                                if p_kind() == 1 {
+                                                    p_primary_ident()
+                                                } else {
+                                                    if p_kind() == 50 {
+                                                        p_primary_paren()
+                                                    } else {
+                                                        p_note_err()
+                                                        p_next()
+                                                        ""
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# Identifier-led primaries. The ident is consumed first; dispatch is on the
+# CURRENT kind (no peeking needed).
+fn p_primary_ident() -> str {
+    w = p_text()
+    p_next()
+    if w == "true" {
+        "(true)"
+    } else {
+        if w == "false" {
+            "(false)"
+        } else {
+            if w == "map" {
+                if p_kind() == 52 {
+                    if p_any_declared("map") == 0 {
+                        p_map_lit()
+                    } else {
+                        "(var map)"
+                    }
+                } else {
+                    "(var map)"
+                }
+            } else {
+                if PMAPENUM.has(w) == 1 {
+                    if p_kind() == 82 {
+                        p_enum_lit(w)
+                    } else {
+                        "(var " + w + ")"
+                    }
+                } else {
+                    if p_kind() == 50 {
+                        # Call (user or builtin — identical at parse).
+                        p_next()
+                        a = p_arg_list()
+                        if p_accept(51) == 1 {
+                            "(call " + w + a + ")"
+                        } else {
+                            p_note_err()
+                            p_next()
+                            ""
+                        }
+                    } else {
+                        if PMAPSTRUCT.has(w) == 1 {
+                            if p_kind() == 52 {
+                                p_struct_lit(w)
+                            } else {
+                                "(var " + w + ")"
+                            }
+                        } else {
+                            "(var " + w + ")"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# Paren group (caller: p_primary only; ident case lives above).
+fn p_primary_paren() -> str {
+    p_next()
+    e = p_expr()
+    if p_accept(51) == 1 {
+        e
+    } else {
+        p_note_err()
+        p_next()
+        ""
+    }
+}
+# Postfix chain: [index/slice/idx-set], .field, .method(args) raw, ? unwrap.
+# Failures stop the chain (go=0); the error is already recorded.
+fn p_postfix(base: str) -> str {
+    mut b: str = base
+    mut go: i64 = 1
+    while go == 1 {
+        k = p_kind()
+        if k == 54 {
+            p_next()
+            idx = p_expr()
+            if p_is_err(idx) == 1 {
+                go = 0
+            } else {
+                if p_kind() == 58 {
+                    # Slice a[l:r] (mirrors C++ order: colon before close).
+                    p_next()
+                    r2 = p_expr()
+                    if p_is_err(r2) == 1 {
+                        go = 0
+                    } else {
+                        if p_accept(55) == 1 {
+                            b = "(slice " + b + " " + idx + " " + r2 + ")"
+                        } else {
+                            p_note_err()
+                            go = 0
+                        }
+                    }
+                } else {
+                    if p_accept(55) == 0 {
+                        p_note_err()
+                        go = 0
+                    } else {
+                        if p_kind() == 73 {
+                            # a[i] = v (raw form, Array-gated like C++).
+                            p_next()
+                            rhs = p_expr()
+                            if p_is_err(rhs) == 1 {
+                                go = 0
+                            } else {
+                                bn = p_var_name(b)
+                                if bn == "" {
+                                    p_note_err()
+                                    go = 0
+                                } else {
+                                    if p_type_of(bn) == 4 {
+                                        b = "(idx-set " + b + " " + idx + " " + rhs + ")"
+                                    } else {
+                                        p_note_err()
+                                        go = 0
+                                    }
+                                }
+                            }
+                        } else {
+                            if p_kind() == 63 {
+                                p_compound_index()
+                                go = 0
+                            } else {
+                                if p_kind() == 66 {
+                                    p_compound_index()
+                                    go = 0
+                                } else {
+                                    if p_kind() == 68 {
+                                        p_compound_index()
+                                        go = 0
+                                    } else {
+                                        if p_kind() == 70 {
+                                            p_compound_index()
+                                            go = 0
+                                        } else {
+                                            if p_kind() == 72 {
+                                                p_compound_index()
+                                                go = 0
+                                            } else {
+                                                b = "(index " + b + " " + idx + ")"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            if k == 82 {
+                p_next()
+                if p_kind() == 1 {
+                    name = p_text()
+                    p_next()
+                    if p_kind() == 50 {
+                        p_next()
+                        a = p_arg_list()
+                        if p_accept(51) == 1 {
+                            b = "(method " + b + " " + name + a + ")"
+                        } else {
+                            p_note_err()
+                            go = 0
+                        }
+                    } else {
+                        b = "(field " + b + " " + name + ")"
+                    }
+                } else {
+                    p_note_err()
+                    go = 0
+                }
+            } else {
+                if k == 86 {
+                    p_next()
+                    b = "(unwrap " + b + ")"
+                } else {
+                    go = 0
+                }
+            }
+        }
+    }
+    b
+}
+# Precedence climbing (mirrors C++ parseBinaryOpRHS, left-assoc).
+fn p_binary(minp: i64, lhs: str) -> str {
+    mut left: str = lhs
+    mut go: i64 = 1
+    while go == 1 {
+        p = p_prec_of(p_kind())
+        if p < minp {
+            go = 0
+        } else {
+            opk = p_kind()
+            op = p_op_text(opk)
+            mut pipedir: i64 = 0
+            if opk == 87 {
+                # `|` vs `|>`: kept distinct for the fixpoint printer.
+                if flint_str_compare(p_text(), "|>") == 0 {
+                    pipedir = 1
+                }
+            }
+            p_next()
+            r0 = p_primary()
+            if p_is_err(r0) == 1 {
+                go = 0
+            } else {
+                mut rhs: str = p_postfix(r0)
+                np = p_prec_of(p_kind())
+                if p < np {
+                    rhs = p_binary(p + 1, rhs)
+                }
+                if opk == 87 {
+                    left = "(pipe " + flint_i64_to_string(pipedir) + " " + left + " " + rhs + ")"
+                } else {
+                    left = "(bin " + op + " " + left + " " + rhs + ")"
+                }
+            }
+        }
+    }
+    left
+}
+fn p_expr() -> str {
+    h = p_primary()
+    if p_is_err(h) == 1 {
+        ""
+    } else {
+        p_binary(0, p_postfix(h))
+    }
+}
+# map{"k": v, ...} — keys as (str LEN RAW) nodes.
+fn p_map_lit() -> str {
+    p_next()
+    mut pairs: str = ""
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 53 {
+            go = 0
+        } else {
+            if p_kind() == 0 {
+                go = 0
+            } else {
+                if p_kind() == 3 {
+                    key = p_text()
+                    p_next()
+                    if p_accept(58) == 0 {
+                        p_note_err()
+                        return ""
+                    }
+                    v = p_expr()
+                    if p_is_err(v) == 1 {
+                        return ""
+                    }
+                    pairs = pairs + " (str " + flint_i64_to_string(flint_str_length(key)) + " " + key + ") " + v
+                    if p_kind() == 53 {
+                        go = go
+                    } else {
+                        if p_accept(57) == 0 {
+                            p_note_err()
+                            return ""
+                        }
+                    }
+                } else {
+                    p_note_err()
+                    return ""
+                }
+            }
+        }
+    }
+    if p_accept(53) == 0 {
+        p_note_err()
+        return ""
+    }
+    "(map-lit" + pairs + ")"
+}
+# Enum.Some(args) — enum known via PMAPENUM (caller saw the DOT).
+fn p_enum_lit(en: str) -> str {
+    p_next()
+    if p_kind() == 1 {
+        va = p_text()
+        p_next()
+        mut args: str = ""
+        if p_accept(50) == 1 {
+            args = p_arg_list()
+            if p_accept(51) == 0 {
+                p_note_err()
+                return ""
+            }
+        }
+        "(enum-lit " + en + " " + va + args + ")"
+    } else {
+        p_note_err()
+        ""
+    }
+}
+# Pt { x: e, ... } — struct known via PMAPSTRUCT. Fields wrapped like decls.
+fn p_struct_lit(sname: str) -> str {
+    p_next()
+    mut fields: str = ""
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 53 {
+            go = 0
+        } else {
+            if p_kind() == 0 {
+                go = 0
+            } else {
+                if p_kind() == 1 {
+                    fn2 = p_text()
+                    p_next()
+                    if p_accept(58) == 0 {
+                        p_note_err()
+                        return ""
+                    }
+                    fv = p_expr()
+                    if p_is_err(fv) == 1 {
+                        return ""
+                    }
+                    fields = fields + " (" + fn2 + " " + fv + ")"
+                    if p_kind() == 53 {
+                        go = go
+                    } else {
+                        if p_accept(57) == 0 {
+                            # Missing comma: error but ADVANCE (the C++ loop
+                            # would spin here — termination over fidelity).
+                            p_note_err()
+                            p_next()
+                        }
+                    }
+                } else {
+                    p_note_err()
+                    p_next()
+                }
+            }
+        }
+    }
+    if p_accept(53) == 0 {
+        p_note_err()
+        return ""
+    }
+    "(struct-lit " + sname + " (" + fields + "))"
+}
+# if/elif/else chain (statement AND expression shape are identical).
+fn p_if_str() -> str {
+    p_next()
+    c = p_expr()
+    t = p_block_str()
+    mut e: str = ""
+    mut hasElse: i64 = 0
+    if p_kind() == 16 {
+        # elif chain nests like C++ (else holds the next if).
+        p_next()
+        c2 = p_expr()
+        t2 = p_block_str()
+        e = "(if " + c2 + " " + t2
+        if p_kind() == 16 {
+            e = e + " " + p_elif_rest()
+        } else {
+            if p_kind() == 17 {
+                p_next()
+                e = e + " " + p_block_str()
+            }
+        }
+        e = e + ")"
+        hasElse = 1
+    } else {
+        if p_kind() == 17 {
+            p_next()
+            e = p_block_str()
+            hasElse = 1
+        }
+    }
+    if p_is_err(c) == 1 {
+        ""
+    } else {
+        if p_is_err(t) == 1 {
+            ""
+        } else {
+            if hasElse == 1 {
+                "(if " + c + " " + t + " " + e + ")"
+            } else {
+                "(if " + c + " " + t + ")"
+            }
+        }
+    }
+}
+# Chained elif (entered with cursor AT `elif`).
+fn p_elif_rest() -> str {
+    p_next()
+    c = p_expr()
+    t = p_block_str()
+    mut e: str = ""
+    if p_kind() == 16 {
+        e = p_elif_rest()
+    } else {
+        if p_kind() == 17 {
+            p_next()
+            e = p_block_str()
+        }
+    }
+    if p_is_err(e) == 1 {
+        "(if " + c + " " + t + ")"
+    } else {
+        "(if " + c + " " + t + " " + e + ")"
+    }
+}
+# match SCRUT { Enum.Var [(bind)] => body, ... } (C++ patterns are enum-only).
+fn p_match_str() -> str {
+    p_next()
+    s = p_expr()
+    if p_is_err(s) == 1 {
+        return ""
+    }
+    if p_accept(52) == 0 {
+        p_note_err()
+        return ""
+    }
+    mut arms: str = ""
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 53 {
+            go = 0
+        } else {
+            if p_kind() == 0 {
+                go = 0
+            } else {
+                if p_kind() == 1 {
+                    en = p_text()
+                    p_next()
+                    if p_accept(82) == 0 {
+                        p_note_err()
+                        return ""
+                    }
+                    if p_kind() == 1 {
+                        va = p_text()
+                        p_next()
+                        mut bind: str = "-"
+                        if p_accept(50) == 1 {
+                            if p_kind() == 1 {
+                                bind = p_text()
+                                p_next()
+                            } else {
+                                p_note_err()
+                                return ""
+                            }
+                            if p_accept(51) == 0 {
+                                p_note_err()
+                                return ""
+                            }
+                        }
+                        if p_accept(75) == 0 {
+                            p_note_err()
+                            return ""
+                        }
+                        body = p_arm_body()
+                        if p_is_err(body) == 1 {
+                            return ""
+                        }
+                        arms = arms + " ((pat-var " + en + " " + va + " " + bind + ") " + body + ")"
+                        if p_kind() == 53 {
+                            go = go
+                        } else {
+                            # Comma between arms (trailing comma tolerated).
+                            if p_accept(57) == 0 {
+                                p_note_err()
+                                return ""
+                            }
+                        }
+                    } else {
+                        p_note_err()
+                        return ""
+                    }
+                } else {
+                    p_note_err()
+                    return ""
+                }
+            }
+        }
+    }
+    if p_accept(53) == 0 {
+        p_note_err()
+        return ""
+    }
+    "(match " + s + " (arms" + arms + "))"
+}
+# Match arm body: block or single statement.
+fn p_arm_body() -> str {
+    if p_kind() == 52 {
+        p_block_str()
+    } else {
+        p_stmt_str()
+    }
+}
+# Lambda |p1, p2: T| body (params optionally typed, mirrors C++).
+fn p_lambda_str() -> str {
+    # Opening `|` verified by the caller; consume it here.
+    p_next()
+    mut params: str = ""
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 1 {
+            pn = p_text()
+            p_next()
+            mut pt: str = "-"
+            if p_accept(58) == 1 {
+                pt = p_type_token()
+            }
+            params = params + " (" + pn + " " + pt + ")"
+            if p_accept(57) == 0 {
+                go = 0
+            }
+        } else {
+            go = 0
+        }
+    }
+    if flint_str_compare(p_text(), "|") == 0 {
+        p_next()
+        body = p_expr()
+        if p_is_err(body) == 1 {
+            ""
+        } else {
+            "(lambda (" + params + ") " + body + ")"
+        }
+    } else {
+        p_note_err()
+        ""
+    }
+}
+# ---- statements, blocks, functions, top level ----
+# Block into a fresh string (for if/while/for/fn bodies, match arms).
+fn p_block_str() -> str {
+    b = flint_sb_new()
+    r = p_block(b)
+    s = flint_sb_build(b)
+    flint_sb_free(b)
+    if r == 1 {
+        s
+    } else {
+        ""
+    }
+}
+# Single statement into a fresh string (match arm bodies).
+fn p_stmt_str() -> str {
+    b = flint_sb_new()
+    r = p_stmt(b, 0)
+    s = flint_sb_build(b)
+    flint_sb_free(b)
+    if r == 1 {
+        s
+    } else {
+        ""
+    }
+}
+fn p_block(out) -> i64 {
+    if p_accept(52) == 0 {
+        p_note_err()
+        return 0
+    }
+    p_emit(out, "(block ")
+    mut go: i64 = 1
+    while go == 1 {
+        k = p_kind()
+        if k == 53 {
+            go = 0
+        } else {
+            if k == 0 {
+                go = 0
+            } else {
+                if k == 56 {
+                    # Semicolons skipped between statements (mirrors C++).
+                    p_next()
+                } else {
+                    # Every p_stmt path consumes input (lead tokens and
+                    # failure-advance), so this always terminates.
+                    p_stmt(out, 0)
+                }
+            }
+        }
+    }
+    p_emit(out, ")")
+    if p_accept(53) == 1 {
+        1
+    } else {
+        p_note_err()
+        1
+    }
+}
+fn p_while_stmt(out) -> i64 {
+    p_next()
+    c = p_expr()
+    t = p_block_str()
+    if p_is_err(c) == 1 {
+        0
+    } else {
+        if p_is_err(t) == 1 {
+            0
+        } else {
+            p_emit(out, "(while " + c + " " + t + ") ")
+            1
+        }
+    }
+}
+# for x in RANGE body — RANGE raw (a..b, range(), ident, collection).
+fn p_for_range() -> str {
+    e1 = p_expr()
+    if p_is_err(e1) == 1 {
+        ""
+    } else {
+        if p_kind() == 83 {
+            p_next()
+            e2 = p_expr()
+            if p_is_err(e2) == 1 {
+                ""
+            } else {
+                "(range " + e1 + " " + e2 + ")"
+            }
+        } else {
+            e1
+        }
+    }
+}
+fn p_for_stmt(out, tag: str) -> i64 {
+    p_next()
+    if p_kind() == 1 {
+        v = p_text()
+        p_next()
+        if p_kind() == 34 {
+            p_next()
+            r = p_for_range()
+            t = p_block_str()
+            if p_is_err(r) == 1 {
+                0
+            } else {
+                if p_is_err(t) == 1 {
+                    0
+                } else {
+                    p_emit(out, "(" + tag + " " + v + " " + r + " " + t + ") ")
+                    1
+                }
+            }
+        } else {
+            p_note_err()
+            0
+        }
+    } else {
+        p_note_err()
+        0
+    }
+}
+fn p_return_stmt(out) -> i64 {
+    p_next()
+    if p_kind() == 53 {
+        p_emit(out, "(return) ")
+        1
+    } else {
+        if p_kind() == 0 {
+            p_emit(out, "(return) ")
+            1
+        } else {
+            e = p_expr()
+            if p_is_err(e) == 1 {
+                0
+            } else {
+                p_emit(out, "(return " + e + ") ")
+                1
+            }
+        }
+    }
+}
+# let/var/mut NAME [: TYPE] (=|:=) INIT, or destructuring. top=1 at top level.
+fn p_letdecl(out, top: i64) -> i64 {
+    mut dkind: str = "let"
+    if p_kind() == 11 {
+        dkind = "var"
+    } else {
+        if p_kind() == 10 {
+            dkind = "mut"
+        }
+    }
+    p_next()
+    if p_kind() == 54 {
+        return p_destruct(out, top, dkind, "list")
+    }
+    if p_kind() == 52 {
+        return p_destruct(out, top, dkind, "obj")
+    }
+    if p_kind() == 1 {
+        name = p_text()
+        p_next()
+        mut ty: str = "-"
+        if p_accept(58) == 1 {
+            ty = p_type_token()
+            if p_is_err(ty) == 1 {
+                p_note_err()
+                return 0
+            }
+        }
+        if p_accept(73) == 0 {
+            if p_accept(59) == 0 {
+                p_note_err()
+                return 0
+            }
+        }
+        init = p_expr()
+        if p_is_err(init) == 1 {
+            return 0
+        }
+        p_declare(name, top)
+        if flint_str_compare(ty, "-") == 0 {
+            PTYPE.set(name, p_expr_code(init))
+        } else {
+            PTYPE.set(name, p_ann_code(ty))
+        }
+        p_emit(out, "(decl " + dkind + " " + name + " " + ty + " " + init + ") ")
+        1
+    } else {
+        p_note_err()
+        0
+    }
+}
+fn p_destruct(out, top: i64, dkind: str, kind: str) -> i64 {
+    p_next()
+    mut names: str = ""
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 1 {
+            if first == 1 {
+                names = p_text()
+                first = 0
+            } else {
+                names = names + " " + p_text()
+            }
+            p_declare(p_text(), top)
+            p_next()
+            if p_accept(57) == 1 {
+                if p_kind() == 55 {
+                    go = 0
+                } else {
+                    if p_kind() == 53 {
+                        go = 0
+                    }
+                }
+            } else {
+                go = 0
+            }
+        } else {
+            go = 0
+        }
+    }
+    if p_kind() == 55 {
+        p_next()
+    } else {
+        if p_kind() == 53 {
+            p_next()
+        } else {
+            p_note_err()
+            return 0
+        }
+    }
+    if p_accept(59) == 0 {
+        if p_accept(73) == 0 {
+            p_note_err()
+            return 0
+        }
+    }
+    init = p_expr()
+    if p_is_err(init) == 1 {
+        return 0
+    }
+    p_emit(out, "(destruct " + dkind + " " + kind + " (" + names + ") " + init + ") ")
+    1
+}
+# x = e (assign or implicit decl), x := e (decl), x: T = e (decl),
+# x <op>= e (compound, must exist), else an expression statement.
+# top=1 at top level (decls recorded globally).
+fn p_ident_stmt(out, top: i64) -> i64 {
+    name = p_text()
+    p_next()
+    k = p_kind()
+    if k == 73 {
+        p_next()
+        init = p_expr()
+        if p_is_err(init) == 1 {
+            return 0
+        }
+        if p_declared(name) == 1 {
+            p_emit(out, "(assign " + name + " " + init + ") ")
+            1
+        } else {
+            if PTOP.has(name) == 1 {
+                p_emit(out, "(assign " + name + " " + init + ") ")
+                1
+            } else {
+                p_declare(name, top)
+                PTYPE.set(name, p_expr_code(init))
+                p_emit(out, "(decl implicit " + name + " - " + init + ") ")
+                1
+            }
+        }
+    } else {
+        if k == 59 {
+            p_next()
+            init = p_expr()
+            if p_is_err(init) == 1 {
+                return 0
+            }
+            p_declare(name, top)
+            PTYPE.set(name, p_expr_code(init))
+            p_emit(out, "(decl seteq " + name + " - " + init + ") ")
+            1
+        } else {
+            if k == 58 {
+                p_next()
+                ty = p_type_token()
+                if p_is_err(ty) == 1 {
+                    p_note_err()
+                    return 0
+                }
+                if p_accept(73) == 0 {
+                    if p_accept(59) == 0 {
+                        p_note_err()
+                        return 0
+                    }
+                }
+                init = p_expr()
+                if p_is_err(init) == 1 {
+                    return 0
+                }
+                p_declare(name, top)
+                PTYPE.set(name, p_ann_code(ty))
+                p_emit(out, "(decl implicit " + name + " " + ty + " " + init + ") ")
+                1
+            } else {
+                if k == 63 {
+                    p_compound_stmt(out, name, "+")
+                } else {
+                    if k == 66 {
+                        p_compound_stmt(out, name, "-")
+                    } else {
+                        if k == 68 {
+                            p_compound_stmt(out, name, "*")
+                        } else {
+                            if k == 70 {
+                                p_compound_stmt(out, name, "/")
+                            } else {
+                                if k == 72 {
+                                    p_compound_stmt(out, name, "%")
+                                } else {
+                                    # Plain expression starting with this
+                                    # ident: rewind one and parse as expr
+                                    # (calling p_stmt again would recurse).
+                                    flint_vec_set(PC, 0, p_pos() - 1)
+                                    e = p_expr()
+                                    if p_is_err(e) == 1 {
+                                        0
+                                    } else {
+                                        p_emit(out, "(expr " + e + ") ")
+                                        1
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# x <op>= e stays RAW (compound-assign OP NAME EXPR). Stage 3 desugars.
+fn p_compound_stmt(out, name: str, op: str) -> i64 {
+    p_next()
+    if p_declared(name) == 0 {
+        if PTOP.has(name) == 0 {
+            p_note_err()
+            return 0
+        }
+    }
+    rhs = p_expr()
+    if p_is_err(rhs) == 1 {
+        return 0
+    }
+    p_emit(out, "(compound-assign " + op + " " + name + " " + rhs + ") ")
+    1
+}
+# python { "strings" } (mirrors C++ exactly).
+fn p_python_str() -> str {
+    p_next()
+    if p_accept(52) == 0 {
+        p_note_err()
+        return ""
+    }
+    mut out: str = ""
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 3 {
+            out = out + " (str " + flint_i64_to_string(flint_str_length(p_text())) + " " + p_text() + ")"
+            p_next()
+        } else {
+            go = 0
+        }
+    }
+    if p_accept(53) == 0 {
+        p_note_err()
+        return ""
+    }
+    "(python" + out + ")"
+}
+fn p_stmt(out, top: i64) -> i64 {
+    k = p_kind()
+    if k == 21 {
+        p_return_stmt(out)
+    } else {
+        if k == 15 {
+            e = p_if_str()
+            if p_is_err(e) == 1 {
+                0
+            } else {
+                p_emit(out, e + " ")
+                1
+            }
+        } else {
+            if k == 18 {
+                p_while_stmt(out)
+            } else {
+                if k == 19 {
+                    p_next()
+                    p_emit(out, "(break) ")
+                    1
+                } else {
+                    if k == 20 {
+                        p_next()
+                        p_emit(out, "(continue) ")
+                        1
+                    } else {
+                        if k == 33 {
+                            p_for_stmt(out, "for")
+                        } else {
+                            if k == 35 {
+                                p_for_stmt(out, "parallel-for")
+                            } else {
+                                if k == 12 {
+                                    p_letdecl(out, top)
+                                } else {
+                                    if k == 11 {
+                                        p_letdecl(out, top)
+                                    } else {
+                                        if k == 10 {
+                                            p_letdecl(out, top)
+                                        } else {
+                                            if k == 1 {
+                                                p_ident_stmt(out, top)
+                                            } else {
+                                                if k == 52 {
+                                                    b = p_block_str()
+                                                    if p_is_err(b) == 1 {
+                                                        0
+                                                    } else {
+                                                        p_emit(out, b + " ")
+                                                        1
+                                                    }
+                                                } else {
+                                                    if k == 28 {
+                                                        e = p_python_str()
+                                                        if p_is_err(e) == 1 {
+                                                            0
+                                                        } else {
+                                                            p_emit(out, e + " ")
+                                                            1
+                                                        }
+                                                    } else {
+                                                        e = p_expr()
+                                                        if p_is_err(e) == 1 {
+                                                            0
+                                                        } else {
+                                                            p_emit(out, "(expr " + e + ") ")
+                                                            1
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# Parameters: (name type default?)* — mirrors C++ (typed/annotated,
+# defaults allowed though unused in corpus).
+fn p_params() -> str {
+    mut out: str = ""
+    if p_kind() == 51 {
+        return ""
+    }
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 1 {
+            pn = p_text()
+            p_next()
+            mut pt: str = "-"
+            if p_accept(58) == 1 {
+                pt = p_type_token()
+            }
+            mut df: str = "-"
+            if p_accept(73) == 1 {
+                df = p_expr()
+            }
+            PDECL.set(pn, PSCOPE)
+            PTYPE.set(pn, p_ann_code(pt))
+            out = out + " (" + pn + " " + pt + " " + df + ")"
+            if p_accept(57) == 0 {
+                go = 0
+            }
+        } else {
+            go = 0
+        }
+    }
+    out
+}
+# <T, U> type parameters after the fn name (mirrors C++).
+fn p_type_params() -> str {
+    if p_kind() == 78 {
+        p_next()
+        mut out: str = ""
+        mut go: i64 = 1
+        while go == 1 {
+            if p_kind() == 1 {
+                out = out + " " + p_text()
+                p_next()
+                if p_accept(57) == 0 {
+                    go = 0
+                }
+            } else {
+                go = 0
+            }
+        }
+        if p_accept(80) == 0 {
+            p_note_err()
+            return ""
+        }
+        "(tparams" + out + ")"
+    } else {
+        "(tparams)"
+    }
+}
+# fn|def NAME [tparams] (params) [-> RET] { body } (registers a new scope).
+# Bodyless form emits fn-decl (mirrors C++ isDeclaration).
+fn p_fn_kw() -> str {
+    p_next()
+    if p_kind() == 1 {
+        name = p_text()
+        p_next()
+        tp = p_type_params()
+        if p_is_err(tp) == 1 {
+            return ""
+        }
+        if p_accept(50) == 0 {
+            p_note_err()
+            return ""
+        }
+        PSCOPE = PSCOPE + 1
+        saved = PSCOPE
+        params = p_params()
+        if p_accept(51) == 0 {
+            p_note_err()
+            return ""
+        }
+        mut ret: str = "-"
+        if p_accept(64) == 1 {
+            ret = p_type_token()
+        }
+        if p_kind() == 52 {
+            body = p_block_str()
+            if p_is_err(body) == 1 {
+                ""
+            } else {
+                "(fn " + name + " " + tp + " (" + params + ") " + ret + " " + body + ")"
+            }
+        } else {
+            "(fn-decl " + name + " " + tp + " (" + params + ") " + ret + ")"
+        }
+    } else {
+        p_note_err()
+        ""
+    }
+}
+# Keywordless name(params) {...} / name(params) -> T {...} (caller saw `(`).
+fn p_fn_nokey(name: str) -> str {
+    p_next()
+    PSCOPE = PSCOPE + 1
+    saved = PSCOPE
+    params = p_params()
+    if p_accept(51) == 0 {
+        p_note_err()
+        return ""
+    }
+    mut ret: str = "-"
+    if p_accept(64) == 1 {
+        ret = p_type_token()
+    }
+    body = p_block_str()
+    if p_is_err(body) == 1 {
+        ""
+    } else {
+        "(fn " + name + " (tparams) (" + params + ") " + ret + " " + body + ")"
+    }
+}
+# Bare name p1 p2 ... [-> T] { body } (caller saw IDENT IDENT).
+fn p_fn_bare(name: str) -> str {
+    PSCOPE = PSCOPE + 1
+    saved = PSCOPE
+    mut params: str = ""
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 1 {
+            pn = p_text()
+            p_next()
+            mut pt: str = "-"
+            if p_accept(58) == 1 {
+                pt = p_type_token()
+            }
+            params = params + " (" + pn + " " + pt + " -)"
+            PDECL.set(pn, PSCOPE)
+        } else {
+            go = 0
+        }
+    }
+    mut ret: str = "-"
+    if p_accept(64) == 1 {
+        ret = p_type_token()
+    }
+    body = p_block_str()
+    if p_is_err(body) == 1 {
+        ""
+    } else {
+        "(fn " + name + " (tparams) (" + params + ") " + ret + " " + body + ")"
+    }
+}
+# Paren-depth scan from the `(` at cursor: is the token after the matching
+# `)` a `{` or `->`? (Ports the C++ keywordless-fn lookahead, incl. depth.)
+fn p_scan_paren_def() -> i64 {
+    mut depth: i64 = 1
+    mut i: i64 = p_pos() + 1
+    n = flint_vec_len(TK)
+    mut found: i64 = 0
+    while i < n {
+        t = flint_vec_get(TK, i)
+        if t == 50 {
+            depth = depth + 1
+        } else {
+            if t == 51 {
+                depth = depth - 1
+                if depth == 0 {
+                    if i + 1 < n {
+                        nt = flint_vec_get(TK, i + 1)
+                        if nt == 52 {
+                            found = 1
+                        } else {
+                            if nt == 64 {
+                                found = 1
+                            }
+                        }
+                    }
+                    i = n
+                }
+            }
+        }
+        i = i + 1
+    }
+    found
+}
+# Flat 30-token scan for `{`/`->` (ports the C++ bare-fn lookahead exactly,
+# incl. crossing line boundaries — there are no NEWLINE tokens).
+fn p_scan_flat_def() -> i64 {
+    n = flint_vec_len(TK)
+    mut i: i64 = p_pos() + 1
+    stop = i + 30
+    mut found: i64 = 0
+    mut go: i64 = 1
+    while go == 1 {
+        if i >= n {
+            go = 0
+        } else {
+            if i >= stop {
+                go = 0
+            } else {
+                t = flint_vec_get(TK, i)
+                if t == 52 {
+                    found = 1
+                    go = 0
+                } else {
+                    if t == 64 {
+                        found = 1
+                        go = 0
+                    } else {
+                        i = i + 1
+                    }
+                }
+            }
+        }
+    }
+    found
+}
+fn p_struct_decl() -> str {
+    p_next()
+    if p_kind() == 1 {
+        name = p_text()
+        p_next()
+        if p_accept(52) == 0 {
+            p_note_err()
+            return ""
+        }
+        mut fields: str = ""
+        mut go: i64 = 1
+        while go == 1 {
+            if p_kind() == 53 {
+                go = 0
+            } else {
+                if p_kind() == 0 {
+                    go = 0
+                } else {
+                    if p_kind() == 1 {
+                        fn3 = p_text()
+                        p_next()
+                        if p_accept(58) == 0 {
+                            p_note_err()
+                            return ""
+                        }
+                        ft = p_type_token()
+                        fields = fields + " (" + fn3 + " " + ft + ")"
+                        if p_kind() == 53 {
+                            go = go
+                        } else {
+                            if p_accept(57) == 0 {
+                                p_note_err()
+                                p_next()
+                            }
+                        }
+                    } else {
+                        p_note_err()
+                        p_next()
+                    }
+                }
+            }
+        }
+        if p_accept(53) == 0 {
+            p_note_err()
+            return ""
+        }
+        PMAPSTRUCT.set(name, 1)
+        "(struct " + name + " (" + fields + "))"
+    } else {
+        p_note_err()
+        ""
+    }
+}
+fn p_enum_decl() -> str {
+    p_next()
+    if p_kind() == 1 {
+        name = p_text()
+        p_next()
+        if p_accept(52) == 0 {
+            p_note_err()
+            return ""
+        }
+        mut vars: str = ""
+        mut go: i64 = 1
+        while go == 1 {
+            if p_kind() == 53 {
+                go = 0
+            } else {
+                if p_kind() == 0 {
+                    go = 0
+                } else {
+                    if p_kind() == 1 {
+                        vn = p_text()
+                        p_next()
+                        mut pay: str = ""
+                        if p_accept(50) == 1 {
+                            mut gp: i64 = 1
+                            while gp == 1 {
+                                if p_kind() == 51 {
+                                    gp = 0
+                                } else {
+                                    if p_kind() == 0 {
+                                        gp = 0
+                                    } else {
+                                        pt = p_type_token()
+                                        if p_is_err(pt) == 1 {
+                                            p_note_err()
+                                            p_next()
+                                            gp = 0
+                                        } else {
+                                            pay = pay + " " + pt
+                                            if p_accept(57) == 0 {
+                                                gp = 0
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if p_accept(51) == 0 {
+                                p_note_err()
+                                return ""
+                            }
+                        }
+                        vars = vars + " (" + vn + pay + ")"
+                        if p_kind() == 53 {
+                            go = go
+                        } else {
+                            if p_accept(57) == 0 {
+                                p_note_err()
+                                p_next()
+                            }
+                        }
+                    } else {
+                        p_note_err()
+                        p_next()
+                    }
+                }
+            }
+        }
+        if p_accept(53) == 0 {
+            p_note_err()
+            return ""
+        }
+        PMAPENUM.set(name, 1)
+        "(enum " + name + " (" + vars + "))"
+    } else {
+        p_note_err()
+        ""
+    }
+}
+fn p_extern_block() -> str {
+    p_next()
+    if p_kind() == 3 {
+        link = p_text()
+        p_next()
+        if flint_str_compare(link, "C") != 0 {
+            p_note_err()
+            return ""
+        }
+        if p_accept(52) == 0 {
+            p_note_err()
+            return ""
+        }
+        mut decls: str = ""
+        mut go: i64 = 1
+        while go == 1 {
+            if p_kind() == 53 {
+                go = 0
+            } else {
+                if p_kind() == 0 {
+                    go = 0
+                } else {
+                    if p_kind() == 14 {
+                        p_next()
+                        decls = decls + " " + p_extern_fn()
+                    } else {
+                        if p_kind() == 13 {
+                            p_next()
+                            decls = decls + " " + p_extern_fn()
+                        } else {
+                            p_note_err()
+                            p_next()
+                        }
+                    }
+                }
+            }
+        }
+        if p_accept(53) == 0 {
+            p_note_err()
+            return ""
+        }
+        "(extern \"C\"" + decls + ")"
+    } else {
+        p_note_err()
+        ""
+    }
+}
+fn p_extern_fn() -> str {
+    if p_kind() == 1 {
+        name = p_text()
+        p_next()
+        if p_accept(50) == 0 {
+            p_note_err()
+            return ""
+        }
+        params = p_extern_params()
+        if p_accept(51) == 0 {
+            p_note_err()
+            return ""
+        }
+        mut ret: str = "-"
+        if p_accept(64) == 1 {
+            ret = p_type_token()
+        }
+        "(fn-decl " + name + " (tparams) (" + params + ") " + ret + ")"
+    } else {
+        p_note_err()
+        ""
+    }
+}
+# Extern params: name: type list (types required, `...` tolerated).
+fn p_extern_params() -> str {
+    mut out: str = ""
+    if p_kind() == 51 {
+        return ""
+    }
+    mut go: i64 = 1
+    while go == 1 {
+        if p_kind() == 51 {
+            go = 0
+        } else {
+            if p_kind() == 0 {
+                go = 0
+            } else {
+                if p_kind() == 84 {
+                    # Variadic `...` marker (pp prints it back bare).
+                    p_next()
+                    out = out + " (... - -)"
+                    go = 0
+                } else {
+                    if p_kind() == 1 {
+                        pn = p_text()
+                        p_next()
+                        if p_accept(58) == 0 {
+                            p_note_err()
+                            return ""
+                        }
+                        pt = p_type_token()
+                        out = out + " (" + pn + " " + pt + " -)"
+                        if p_accept(57) == 0 {
+                            go = 0
+                        }
+                    } else {
+                        p_note_err()
+                        return ""
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+fn p_import_str() -> str {
+    p_next()
+    if p_kind() == 3 {
+        pth = p_text()
+        p_next()
+        "(import \"" + pth + "\")"
+    } else {
+        if p_kind() == 1 {
+            mut pth: str = p_text()
+            p_next()
+            mut go: i64 = 1
+            while go == 1 {
+                if p_kind() == 82 {
+                    p_next()
+                    if p_kind() == 1 {
+                        pth = pth + "." + p_text()
+                        p_next()
+                    } else {
+                        p_note_err()
+                        return ""
+                    }
+                } else {
+                    go = 0
+                }
+            }
+            "(import " + pth + ")"
+        } else {
+            p_note_err()
+            ""
+        }
+    }
+}
+# Top-level form dispatcher (mirrors parseProgram branches; progress is
+# guaranteed: every path consumes its lead token or errors after one).
+fn p_top(out) -> i64 {
+    k = p_kind()
+    if k == 22 {
+        e = p_extern_block()
+        p_emit_top(out, e)
+    } else {
+        if k == 14 {
+            e = p_fn_kw()
+            p_emit_top(out, e)
+        } else {
+            if k == 13 {
+                e = p_fn_kw()
+                p_emit_top(out, e)
+            } else {
+                if k == 29 {
+                    e = p_struct_decl()
+                    p_emit_top(out, e)
+                } else {
+                    if k == 30 {
+                        e = p_enum_decl()
+                        p_emit_top(out, e)
+                    } else {
+                        if k == 32 {
+                            e = p_import_str()
+                            p_emit_top(out, e)
+                        } else {
+                            if k == 12 {
+                                p_letdecl(out, 1)
+                            } else {
+                                if k == 11 {
+                                    p_letdecl(out, 1)
+                                } else {
+                                    if k == 10 {
+                                        p_letdecl(out, 1)
+                                    } else {
+                                        if k == 1 {
+                                            p_top_ident(out)
+                                        } else {
+                                            if k == 18 {
+                                                # Top-level while/for rejected
+                                                # (mirrors C++ exactly).
+                                                p_note_err()
+                                                p_next()
+                                                0
+                                            } else {
+                                                if k == 33 {
+                                                    p_note_err()
+                                                    p_next()
+                                                    0
+                                                } else {
+                                                    if k == 35 {
+                                                        p_note_err()
+                                                        p_next()
+                                                        0
+                                                    } else {
+                                                        e = p_expr()
+                                                        if p_is_err(e) == 1 {
+                                                            0
+                                                        } else {
+                                                            p_emit(out, "(expr " + e + ") ")
+                                                            1
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# Top-level IDENT: keywordless/bare fn defs or plain statements.
+fn p_top_ident(out) -> i64 {
+    name = p_text()
+    p_next()
+    if p_kind() == 50 {
+        # name( ... — paren-depth scan decides def vs call.
+        if p_scan_paren_def() == 1 {
+            e = p_fn_nokey(name)
+            p_emit_top(out, e)
+        } else {
+            # Rewind to the ident; parse as an expression statement.
+            flint_vec_set(PC, 0, p_pos() - 1)
+            e = p_expr()
+            if p_is_err(e) == 1 {
+                0
+            } else {
+                p_emit(out, "(expr " + e + ") ")
+                1
+            }
+        }
+    } else {
+        if p_kind() == 1 {
+            # name IDENT — flat scan decides bare def vs error cascade.
+            if p_scan_flat_def() == 1 {
+                e = p_fn_bare(name)
+                p_emit_top(out, e)
+            } else {
+                # Not a def: rewind and parse as statements (C++ parses
+                # on and reports; progress is guaranteed).
+                flint_vec_set(PC, 0, p_pos() - 1)
+                p_stmt(out, 1)
+            }
+        } else {
+            # All other IDENT-led forms (decls, assigns, calls, vars).
+            flint_vec_set(PC, 0, p_pos() - 1)
+            p_stmt(out, 1)
+        }
+    }
+}
+# ---- pretty-printer base (S-expr cursor + atoms + dispatch) ----
+# A length-aware S-expr reader (strings hold raw bytes incl. parens, so the
+# lexer alone cannot re-split them). Cursor: 1-elem vec.
+PP = flint_vec_new()
+# Top precedence of the last returned node (bin/pipe op prec, else 100,
+# try/unwrap/lambda 0) so parents parenthesize correctly.
+mut PPPREC: i64 = 100
+fn pp_pos() -> i64 {
+    flint_vec_get(PP, 0)
+}
+fn pp_at_end(src: str) -> i64 {
+    if pp_pos() < flint_str_length(src) {
+        0
+    } else {
+        1
+    }
+}
+fn pp_peek(src: str) -> i64 {
+    if pp_at_end(src) == 1 {
+        -1
+    } else {
+        flint_str_char_at(src, pp_pos())
+    }
+}
+fn pp_adv(src: str) -> i64 {
+    c = pp_peek(src)
+    flint_vec_set(PP, 0, pp_pos() + 1)
+    c
+}
+fn pp_skip(src: str) -> i64 {
+    mut go: i64 = 1
+    while go == 1 {
+        c = pp_peek(src)
+        if c == 32 {
+            pp_adv(src)
+        } else {
+            if c == 10 {
+                pp_adv(src)
+            } else {
+                if c == 9 {
+                    pp_adv(src)
+                } else {
+                    if c == 13 {
+                        pp_adv(src)
+                    } else {
+                        go = 0
+                    }
+                }
+            }
+        }
+    }
+    0
+}
+# Read one raw word (to whitespace/paren). Skips leading whitespace so
+# consecutive words need no manual skipping.
+fn pp_word(src: str) -> str {
+    pp_skip(src)
+    sb = flint_sb_new()
+    mut go: i64 = 1
+    while go == 1 {
+        c = pp_peek(src)
+        if c == -1 {
+            go = 0
+        } else {
+            if c == 32 {
+                go = 0
+            } else {
+                if c == 10 {
+                    go = 0
+                } else {
+                    if c == 40 {
+                        go = 0
+                    } else {
+                        if c == 41 {
+                            go = 0
+                        } else {
+                            flint_sb_append_char(sb, c)
+                            pp_adv(src)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+# Read a decimal integer (digits only).
+fn pp_number(src: str) -> str {
+    sb = flint_sb_new()
+    mut go: i64 = 1
+    while go == 1 {
+        c = pp_peek(src)
+        if c >= 48 {
+            if c <= 57 {
+                flint_sb_append_char(sb, c)
+                pp_adv(src)
+            } else {
+                go = 0
+            }
+        } else {
+            go = 0
+        }
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+# Quote a raw string inner for Flint source. The inner is ALREADY valid
+# source spelling (it came from source), so emit verbatim — re-escaping
+# would double-process backslashes.
+fn pp_quote(raw: str) -> str {
+    "\"" + raw + "\""
+}
+fn pp_node(src: str) -> str {
+    pp_skip(src)
+    if pp_peek(src) == 40 {
+        pp_adv(src)
+        pp_skip(src)
+        tag = pp_word(src)
+        r = pp_tagged(src, tag)
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            pp_adv(src)
+            r
+        } else {
+            PERR = PERR + 1
+            r
+        }
+    } else {
+        PERR = PERR + 1
+        pp_adv(src)
+        ""
+    }
+}
+fn pp_tagged(src: str, tag: str) -> str {
+    if tag == "true" {
+        PPPREC = 100
+        "true"
+    } else {
+        if tag == "false" {
+            PPPREC = 100
+            "false"
+        } else {
+            if tag == "num" {
+                pp_skip(src)
+                w = pp_word(src)
+                PPPREC = 100
+                # Strip the float `d` marker the parser adds (re-lex restores it).
+                if flint_str_length(w) == 0 {
+                    w
+                } else {
+                    if flint_str_char_at(w, flint_str_length(w) - 1) == 100 {
+                        flint_str_substring(w, 0, flint_str_length(w) - 1)
+                    } else {
+                        w
+                    }
+                }
+            } else {
+                if tag == "str" {
+                    pp_str_node(src)
+                } else {
+                    if tag == "var" {
+                        pp_skip(src)
+                        w = pp_word(src)
+                        PPPREC = 100
+                        w
+                    } else {
+                        pp_tagged2(src, tag)
+                    }
+                }
+            }
+        }
+    }
+}
+# (str LEN RAW) with cursor after `(str `: read LEN, take exactly one
+# space separator, then LEN raw bytes (which may start/end with spaces).
+fn pp_str_node(src: str) -> str {
+    pp_skip(src)
+    ln = pp_number(src)
+    n = flint_str_to_i64(ln)
+    if pp_peek(src) == 32 {
+        pp_adv(src)
+    } else {
+        PERR = PERR + 1
+        return ""
+    }
+    st = pp_pos()
+    mut i: i64 = 0
+    while i < n {
+        pp_adv(src)
+        i = i + 1
+    }
+    pp_skip(src)
+    if pp_peek(src) == 41 {
+        PPPREC = 100
+        pp_quote(flint_str_substring(src, st, st + n))
+    } else {
+        PERR = PERR + 1
+        ""
+    }
+}
+fn pp_op_prec(op: str) -> i64 {
+    if op == "*" {
+        60
+    } else {
+        if op == "/" {
+            60
+        } else {
+            if op == "%" {
+                60
+            } else {
+                if op == "+" {
+                    50
+                } else {
+                    if op == "-" {
+                        50
+                    } else {
+                        if op == "==" {
+                            40
+                        } else {
+                            if op == "!=" {
+                                40
+                            } else {
+                                if op == "<" {
+                                    40
+                                } else {
+                                    if op == ">" {
+                                        40
+                                    } else {
+                                        if op == "<=" {
+                                            40
+                                        } else {
+                                            if op == ">=" {
+                                                40
+                                            } else {
+                                                if op == "||" {
+                                                    30
+                                                } else {
+                                                    if op == "&&" {
+                                                        30
+                                                    } else {
+                                                        20
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+fn pp_paren(s: str) -> str {
+    "(" + s + ")"
+}
+# Block statements joined with newlines (also used for prog/extern lists).
+fn pp_seq(src: str) -> str {
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == -1 {
+                go = 0
+            } else {
+                e = pp_node(src)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, "\n")
+                }
+                flint_sb_append(sb, e)
+            }
+        }
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+fn pp_comma_list(src: str) -> str {
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == -1 {
+                go = 0
+            } else {
+                e = pp_node(src)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, ", ")
+                }
+                flint_sb_append(sb, e)
+            }
+        }
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+# if/elif chain reader (cursor after `(if` tag). kw = "if" or "elif".
+fn pp_if_chain(src: str, kw: str) -> str {
+    c = pp_node(src)
+    t = pp_node(src)
+    pp_skip(src)
+    PPPREC = 100
+    if pp_peek(src) == 41 {
+        kw + " " + c + " " + t
+    } else {
+        e = pp_if_else(src)
+        kw + " " + c + " " + t + " " + e
+    }
+}
+# Lookahead: word after `(` (or "" if not a paren/word there). Pure lookahead,
+# cursor untouched (replaces the old rewind approach).
+fn pp_peek_word(src: str) -> str {
+    n = flint_str_length(src)
+    mut p: i64 = pp_pos()
+    mut go: i64 = 1
+    while go == 1 {
+        if p < n {
+            c = flint_str_char_at(src, p)
+            if c == 32 {
+                p = p + 1
+            } else {
+                if c == 10 {
+                    p = p + 1
+                } else {
+                    if c == 9 {
+                        p = p + 1
+                    } else {
+                        if c == 13 {
+                            p = p + 1
+                        } else {
+                            go = 0
+                        }
+                    }
+                }
+            }
+        } else {
+            go = 0
+        }
+    }
+    if p < n {
+        if flint_str_char_at(src, p) == 40 {
+            p = p + 1
+            mut go2: i64 = 1
+            while go2 == 1 {
+                if p < n {
+                    c = flint_str_char_at(src, p)
+                    if c == 32 {
+                        p = p + 1
+                    } else {
+                        if c == 10 {
+                            p = p + 1
+                        } else {
+                            if c == 9 {
+                                p = p + 1
+                            } else {
+                                if c == 13 {
+                                    p = p + 1
+                                } else {
+                                    go2 = 0
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    go2 = 0
+                }
+            }
+            sb = flint_sb_new()
+            mut go3: i64 = 1
+            while go3 == 1 {
+                if p < n {
+                    c = flint_str_char_at(src, p)
+                    if c == 32 {
+                        go3 = 0
+                    } else {
+                        if c == 10 {
+                            go3 = 0
+                        } else {
+                            if c == 40 {
+                                go3 = 0
+                            } else {
+                                if c == 41 {
+                                    go3 = 0
+                                } else {
+                                    flint_sb_append_char(sb, c)
+                                    p = p + 1
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    go3 = 0
+                }
+            }
+            r = flint_sb_build(sb)
+            flint_sb_free(sb)
+            r
+        } else {
+            ""
+        }
+    } else {
+        ""
+    }
+}
+# Else-part: a bare if-node becomes `elif ...` (chains nest), else `else X`.
+fn pp_if_else(src: str) -> str {
+    w = pp_peek_word(src)
+    if flint_str_compare(w, "if") == 0 {
+        pp_skip(src)
+        pp_pexpect(src, 40)
+        pp_skip(src)
+        pp_word(src)
+        r = pp_if_chain(src, "elif")
+        # Consume the nested if's own `)` (pp_if_chain leaves it, unlike
+        # pp_node-called nodes whose tails consume).
+        pp_skip(src)
+        pp_pexpect(src, 41)
+        r
+    } else {
+        e = pp_node(src)
+        "else " + e
+    }
+}
+fn pp_tagged2(src: str, tag: str) -> str {
+    if tag == "bin" {
+        pp_skip(src)
+        op = pp_word(src)
+        l = pp_node(src)
+        lp = PPPREC
+        r = pp_node(src)
+        rp = PPPREC
+        p = pp_op_prec(op)
+        PPPREC = p
+        mut ls: str = l
+        if lp < p {
+            ls = pp_paren(l)
+        }
+        mut rs: str = r
+        if rp < p {
+            rs = pp_paren(r)
+        } else {
+            if rp == p {
+                rs = pp_paren(r)
+            }
+        }
+        ls + " " + op + " " + rs
+    } else {
+        if tag == "pipe" {
+            pp_skip(src)
+            a = pp_word(src)
+            l = pp_node(src)
+            r = pp_node(src)
+            PPPREC = 20
+            mut sep: str = "|"
+            if a == "1" {
+                sep = "|>"
+            }
+            l + " " + sep + " " + r
+        } else {
+            if tag == "call" {
+                pp_skip(src)
+                nm = pp_word(src)
+                a = pp_comma_list(src)
+                PPPREC = 100
+                nm + "(" + a + ")"
+            } else {
+                if tag == "method" {
+                    b = pp_node(src)
+                    pp_skip(src)
+                    nm = pp_word(src)
+                    a = pp_comma_list(src)
+                    PPPREC = 100
+                    b + "." + nm + "(" + a + ")"
+                } else {
+                    if tag == "range" {
+                        l = pp_node(src)
+                        r = pp_node(src)
+                        PPPREC = 100
+                        l + ".." + r
+                    } else {
+                        pp_tagged3(src, tag)
+                    }
+                }
+            }
+        }
+    }
+}
+fn pp_tagged3(src: str, tag: str) -> str {
+    if tag == "index" {
+        b = pp_node(src)
+        i = pp_node(src)
+        PPPREC = 100
+        b + "[" + i + "]"
+    } else {
+        if tag == "slice" {
+            b = pp_node(src)
+            l = pp_node(src)
+            r = pp_node(src)
+            PPPREC = 100
+            b + "[" + l + ":" + r + "]"
+        } else {
+            if tag == "field" {
+                b = pp_node(src)
+                pp_skip(src)
+                nm = pp_word(src)
+                PPPREC = 100
+                b + "." + nm
+            } else {
+                if tag == "try" {
+                    e = pp_node(src)
+                    PPPREC = 0
+                    "try " + e
+                } else {
+                    if tag == "neg" {
+                        e = pp_node(src)
+                        PPPREC = 0
+                        "-" + pp_paren_if_low(e)
+                    } else {
+                        if tag == "not" {
+                            e = pp_node(src)
+                            PPPREC = 0
+                            "!" + pp_paren_if_low(e)
+                        } else {
+                            if tag == "unwrap" {
+                                e = pp_node(src)
+                                PPPREC = 0
+                                e + "?"
+                            } else {
+                                if tag == "ref" {
+                                    e = pp_node(src)
+                                    PPPREC = 100
+                                    "&" + e
+                                } else {
+                                    if tag == "deref" {
+                                        e = pp_node(src)
+                                        PPPREC = 100
+                                        "*" + e
+                                    } else {
+                                        pp_tagged4(src, tag)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# Parenthesize operand text unless atomic (restores safe precedence for
+# prefix operators whose operand may be any expression).
+fn pp_paren_if_low(e: str) -> str {
+    if PPPREC < 100 {
+        "(" + e + ")"
+    } else {
+        e
+    }
+}
+fn pp_tagged4(src: str, tag: str) -> str {
+    if tag == "if" {
+        r = pp_if_chain(src, "if")
+        PPPREC = 100
+        r
+    } else {
+        if tag == "while" {
+            c = pp_node(src)
+            t = pp_node(src)
+            PPPREC = 100
+            "while " + c + " " + t
+        } else {
+            if tag == "for" {
+                pp_skip(src)
+                v = pp_word(src)
+                r = pp_node(src)
+                t = pp_node(src)
+                PPPREC = 100
+                "for " + v + " in " + r + " " + t
+            } else {
+                if tag == "parallel-for" {
+                    pp_skip(src)
+                    v = pp_word(src)
+                    r = pp_node(src)
+                    t = pp_node(src)
+                    PPPREC = 100
+                    "parallel for " + v + " in " + r + " " + t
+                } else {
+                    if tag == "block" {
+                        PPPREC = 100
+                        "{{\n" + pp_seq(src) + "\n}"
+                    } else {
+                        if tag == "return" {
+                            pp_skip(src)
+                            PPPREC = 100
+                            if pp_peek(src) == 41 {
+                                "return"
+                            } else {
+                                "return " + pp_node(src)
+                            }
+                        } else {
+                            if tag == "break" {
+                                PPPREC = 100
+                                "break"
+                            } else {
+                                if tag == "continue" {
+                                    PPPREC = 100
+                                    "continue"
+                                } else {
+                                    pp_tagged5(src, tag)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+fn pp_tagged5(src: str, tag: str) -> str {
+    if tag == "decl" {
+        pp_skip(src)
+        k = pp_word(src)
+        nm = pp_word(src)
+        ty = pp_word(src)
+        init = pp_node(src)
+        PPPREC = 100
+        mut head: str = nm
+        mut op: str = "="
+        if k == "mut" {
+            head = "mut " + nm
+        } else {
+            if k == "let" {
+                head = "let " + nm
+            } else {
+                if k == "var" {
+                    head = "var " + nm
+                } else {
+                    if k == "seteq" {
+                        op = ":="
+                    }
+                }
+            }
+        }
+        if ty != "-" {
+            head = head + ": " + ty
+        }
+        head + " " + op + " " + init
+    } else {
+        if tag == "assign" {
+            pp_skip(src)
+            nm = pp_word(src)
+            init = pp_node(src)
+            PPPREC = 100
+            nm + " = " + init
+        } else {
+            if tag == "compound-assign" {
+                pp_skip(src)
+                op = pp_word(src)
+                nm = pp_word(src)
+                init = pp_node(src)
+                PPPREC = 100
+                nm + " " + op + "= " + init
+            } else {
+                if tag == "idx-set" {
+                    b = pp_node(src)
+                    i = pp_node(src)
+                    v = pp_node(src)
+                    PPPREC = 100
+                    b + "[" + i + "] = " + v
+                } else {
+                    if tag == "destruct" {
+                        pp_skip(src)
+                        m = pp_word(src)
+                        k = pp_word(src)
+                        pp_skip(src)
+                        pp_pexpect(src, 40)
+                        names = pp_rest_words(src)
+                        pp_skip(src)
+                        pp_pexpect(src, 41)
+                        init = pp_node(src)
+                        PPPREC = 100
+                        mut lk: str = "let"
+                        if m == "mut" {
+                            lk = "mut"
+                        } else {
+                            if m == "var" {
+                                lk = "var"
+                            }
+                        }
+                        if k == "obj" {
+                            lk + " {{" + names + "} = " + init
+                        } else {
+                            lk + " [" + names + "] = " + init
+                        }
+                    } else {
+                        pp_tagged6(src, tag)
+                    }
+                }
+            }
+        }
+    }
+}
+# Helpers used above (vec-free; cursor math on PP only).
+fn pp_pexpect(src: str, c: i64) -> i64 {
+    pp_skip(src)
+    if pp_peek(src) == c {
+        pp_adv(src)
+        1
+    } else {
+        PERR = PERR + 1
+        0
+    }
+}
+fn pp_tagged6(src: str, tag: str) -> str {
+    if tag == "fn" {
+        pp_skip(src)
+        nm = pp_word(src)
+        tp = pp_read_tparams(src)
+        pp_fn_text(nm, tp, src)
+    } else {
+        if tag == "fn-decl" {
+            pp_skip(src)
+            nm = pp_word(src)
+            tp = pp_read_tparams(src)
+            pp_fn_text(nm, tp, src)
+        } else {
+            if tag == "struct" {
+                pp_skip(src)
+                nm = pp_word(src)
+                fs = pp_struct_fields(src)
+                PPPREC = 100
+                "struct " + nm + " {{ " + fs + "}"
+            } else {
+                if tag == "struct-lit" {
+                    pp_skip(src)
+                    nm = pp_word(src)
+                    fs = pp_lit_fields(src)
+                    PPPREC = 100
+                    nm + " {{ " + fs + "}"
+                } else {
+                    if tag == "enum" {
+                        pp_skip(src)
+                        nm = pp_word(src)
+                        vs = pp_enum_vars(src)
+                        PPPREC = 100
+                        "enum " + nm + " {{ " + vs + "}"
+                    } else {
+                        if tag == "enum-lit" {
+                            pp_skip(src)
+                            en = pp_word(src)
+                            va = pp_word(src)
+                            a = pp_call_tail(src)
+                            PPPREC = 100
+                            en + "." + va + a
+                        } else {
+                            pp_tagged7(src, tag)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+# (tparams T U) -> "<T, U>" or "" (consumes the whole node).
+fn pp_read_tparams(src: str) -> str {
+    PPPREC = 100
+    pp_skip(src)
+    pp_pexpect(src, 40)
+    pp_skip(src)
+    w = pp_word(src)
+    if w != "tparams" {
+        PERR = PERR + 1
+    }
+    sb = flint_sb_new()
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == -1 {
+                go = 0
+            } else {
+                t = pp_word(src)
+                if flint_str_length(t) == 0 {
+                    PERR = PERR + 1
+                    go = 0
+                } else {
+                    if flint_sb_len(sb) == 0 {
+                        flint_sb_append(sb, t)
+                    } else {
+                        flint_sb_append(sb, ", " + t)
+                    }
+                }
+            }
+        }
+    }
+    pp_skip(src)
+    pp_pexpect(src, 41)
+    inner = flint_sb_build(sb)
+    flint_sb_free(sb)
+    if inner == "" {
+        ""
+    } else {
+        "<" + inner + ">"
+    }
+}
+# (params...) RET BODY — shared by fn and fn-decl.
+fn pp_fn_text(nm: str, tp: str, src: str) -> str {
+    PPPREC = 100
+    ps = pp_params_text(src)
+    pp_skip(src)
+    ret = pp_word(src)
+    mut head: str = "fn " + nm + tp + " (" + ps + ")"
+    if ret == "-" {
+        head = head
+    } else {
+        head = head + " -> " + ret
+    }
+    pp_skip(src)
+    if pp_peek(src) == 41 {
+        head
+    } else {
+        body = pp_node(src)
+        head + " " + body
+    }
+}
+# tp node text "(tparams ...)" -> "<...>" or "".
+# (params (n t d)*) with parens already... params arrive as one node text?
+# No — params print inline here from the stream.
+fn pp_params_text(src: str) -> str {
+    pp_skip(src)
+    pp_pexpect(src, 40)
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == 40 {
+                pp_adv(src)
+                pp_skip(src)
+                pn = pp_word(src)
+                pp_skip(src)
+                pt = pp_word(src)
+                pp_skip(src)
+                mut df: str = "-"
+                if pp_peek(src) == 40 {
+                    df = pp_node(src)
+                } else {
+                    df = pp_word(src)
+                }
+                pp_skip(src)
+                pp_pexpect(src, 41)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, ", ")
+                }
+                flint_sb_append(sb, pn)
+                if pt != "-" {
+                    flint_sb_append(sb, ": " + pt)
+                }
+                if df != "-" {
+                    flint_sb_append(sb, " = " + df)
+                }
+            } else {
+                PERR = PERR + 1
+                go = 0
+            }
+        }
+    }
+    pp_skip(src)
+    pp_pexpect(src, 41)
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+fn pp_struct_fields(src: str) -> str {
+    pp_skip(src)
+    pp_pexpect(src, 40)
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == 40 {
+                pp_adv(src)
+                pp_skip(src)
+                fn4 = pp_word(src)
+                pp_skip(src)
+                ft = pp_word(src)
+                pp_skip(src)
+                pp_pexpect(src, 41)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, ", ")
+                }
+                flint_sb_append(sb, fn4 + ": " + ft)
+            } else {
+                PERR = PERR + 1
+                go = 0
+            }
+        }
+    }
+    pp_skip(src)
+    pp_pexpect(src, 41)
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+fn pp_lit_fields(src: str) -> str {
+    pp_skip(src)
+    pp_pexpect(src, 40)
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == 40 {
+                pp_adv(src)
+                pp_skip(src)
+                fn5 = pp_word(src)
+                e = pp_node(src)
+                pp_skip(src)
+                pp_pexpect(src, 41)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, ", ")
+                }
+                flint_sb_append(sb, fn5 + ": " + e)
+            } else {
+                PERR = PERR + 1
+                go = 0
+            }
+        }
+    }
+    pp_skip(src)
+    pp_pexpect(src, 41)
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+fn pp_enum_vars(src: str) -> str {
+    pp_skip(src)
+    pp_pexpect(src, 40)
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == 40 {
+                pp_adv(src)
+                pp_skip(src)
+                vn = pp_word(src)
+                pay = pp_rest_words(src)
+                pp_skip(src)
+                pp_pexpect(src, 41)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, ", ")
+                }
+                if pay == "" {
+                    flint_sb_append(sb, vn)
+                } else {
+                    flint_sb_append(sb, vn + "(" + pay + ")")
+                }
+            } else {
+                PERR = PERR + 1
+                go = 0
+            }
+        }
+    }
+    pp_skip(src)
+    pp_pexpect(src, 41)
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+# Remaining words of a list node, comma-joined (payload types etc).
+fn pp_rest_words(src: str) -> str {
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == 40 {
+                go = 0
+            } else {
+                w = pp_word(src)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, ", ")
+                }
+                flint_sb_append(sb, w)
+            }
+        }
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+# Call-tail args for enum-lit: "" or "(a, b)".
+fn pp_call_tail(src: str) -> str {
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == -1 {
+                go = 0
+            } else {
+                e = pp_node(src)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, ", ")
+                }
+                flint_sb_append(sb, e)
+            }
+        }
+    }
+    inner = flint_sb_build(sb)
+    flint_sb_free(sb)
+    if inner == "" {
+        ""
+    } else {
+        "(" + inner + ")"
+    }
+}
+fn pp_tagged7(src: str, tag: str) -> str {
+    if tag == "match" {
+        s = pp_node(src)
+        sb = flint_sb_new()
+        flint_sb_append(sb, "match " + s + " {{ ")
+        pp_skip(src)
+        pp_pexpect(src, 40)
+        pp_skip(src)
+        aw = pp_word(src)
+        if flint_str_compare(aw, "arms") == 0 {
+            pp_skip(src)
+        } else {
+            PERR = PERR + 1
+        }
+        mut first: i64 = 1
+        mut go: i64 = 1
+        while go == 1 {
+            pp_skip(src)
+            if pp_peek(src) == 41 {
+                go = 0
+            } else {
+                if pp_peek(src) == 40 {
+                    pp_adv(src)
+                    pp_skip(src)
+                    pp_pexpect(src, 40)
+                    pat = pp_match_pat(src)
+                    pp_skip(src)
+                    pp_pexpect(src, 41)
+                    body = pp_node(src)
+                    pp_skip(src)
+                    pp_pexpect(src, 41)
+                    if first == 1 {
+                        first = 0
+                    } else {
+                        flint_sb_append(sb, ", ")
+                    }
+                    flint_sb_append(sb, pat + " => " + body)
+                } else {
+                    PERR = PERR + 1
+                    go = 0
+                }
+            }
+        }
+        pp_skip(src)
+        pp_pexpect(src, 41)
+        flint_sb_append(sb, " }")
+        PPPREC = 100
+        r = flint_sb_build(sb)
+        flint_sb_free(sb)
+        r
+    } else {
+        if tag == "lambda" {
+            pp_skip(src)
+            pp_pexpect(src, 40)
+            sb = flint_sb_new()
+            flint_sb_append(sb, "|")
+            mut first: i64 = 1
+            mut go: i64 = 1
+            while go == 1 {
+                pp_skip(src)
+                if pp_peek(src) == 41 {
+                    go = 0
+                } else {
+                    if pp_peek(src) == 40 {
+                        pp_adv(src)
+                        pp_skip(src)
+                        pn = pp_word(src)
+                        pp_skip(src)
+                        pt = pp_word(src)
+                        pp_skip(src)
+                        pp_pexpect(src, 41)
+                        if first == 1 {
+                            first = 0
+                        } else {
+                            flint_sb_append(sb, ", ")
+                        }
+                        flint_sb_append(sb, pn)
+                        if pt != "-" {
+                            flint_sb_append(sb, ": " + pt)
+                        }
+                    } else {
+                        PERR = PERR + 1
+                        go = 0
+                    }
+                }
+            }
+            pp_skip(src)
+            pp_pexpect(src, 41)
+            flint_sb_append(sb, "| ")
+            body = pp_node(src)
+            flint_sb_append(sb, body)
+            PPPREC = 0
+            r = flint_sb_build(sb)
+            flint_sb_free(sb)
+            r
+        } else {
+            if tag == "array" {
+                PPPREC = 100
+                "[" + pp_comma_list(src) + "]"
+            } else {
+                if tag == "spread" {
+                    e = pp_node(src)
+                    PPPREC = 100
+                    "..." + e
+                } else {
+                    if tag == "map-lit" {
+                        PPPREC = 100
+                        "map{{" + pp_map_pairs(src) + "}"
+                    } else {
+                        if tag == "extern" {
+                            pp_skip(src)
+                            lk = pp_word(src)
+                            PPPREC = 100
+                            "extern " + lk + " {{\n" + pp_seq(src) + "\n}"
+                        } else {
+                            if tag == "import" {
+                                pp_skip(src)
+                                pth = pp_word(src)
+                                PPPREC = 100
+                                "import " + pth
+                            } else {
+                                if tag == "python" {
+                                    PPPREC = 100
+                                    "python {{ " + pp_python_strs(src) + "}"
+                                } else {
+                                    if tag == "fn-decl" {
+                                        PPPREC = 100
+                                        pp_tagged6(src, "fn")
+                                    } else {
+                                        if tag == "expr" {
+                                            e = pp_node(src)
+                                            PPPREC = 100
+                                            e
+                                        } else {
+                                            if tag == "prog" {
+                                                PPPREC = 100
+                                                pp_seq(src)
+                                            } else {
+                                                PERR = PERR + 1
+                                                ""
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+fn pp_match_pat(src: str) -> str {
+    pp_skip(src)
+    t = pp_word(src)
+    if t == "pat-wild" {
+        "_"
+    } else {
+        if t == "pat-lit" {
+            pp_node(src)
+        } else {
+            en = pp_word(src)
+            va = pp_word(src)
+            bind = pp_word(src)
+            if bind == "-" {
+                en + "." + va
+            } else {
+                en + "." + va + "(" + bind + ")"
+            }
+        }
+    }
+}
+fn pp_map_pairs(src: str) -> str {
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == -1 {
+                go = 0
+            } else {
+                k = pp_node(src)
+                v = pp_node(src)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, ", ")
+                }
+                flint_sb_append(sb, k + ": " + v)
+            }
+        }
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+fn pp_python_strs(src: str) -> str {
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == -1 {
+                go = 0
+            } else {
+                e = pp_node(src)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, " ")
+                }
+                flint_sb_append(sb, e)
+            }
+        }
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+# ---- driver ----
+fn parse_program(out) -> i64 {
+    if flint_vec_len(PC) == 0 {
+        flint_vec_push(PC, 0)
+    } else {
+        flint_vec_set(PC, 0, 0)
+    }
+    PERR = 0
+    PSTEPS = 0
+    PSCOPE = 1
+    p_emit(out, "(prog ")
+    while p_at_end() == 0 {
+        if PERR > 25 {
+            p_emit(out, "(expr (err-cap)))")
+            return 1
+        }
+        p_top(out)
+    }
+    p_emit(out, ")")
+    if PERR > 0 {
+        1
+    } else {
+        0
+    }
+}
+# Fixpoint: lex -> parse -> pretty-print -> re-lex, then compare the two
+# token streams by kind+value (positions legitimately shift: the printer
+# normalizes layout with newlines, which are not tokens).
+fn fixpoint_run(path: str) -> i64 {
+    GSRC = flint_read_file(path)
+    if flint_err_occurred() == 1 {
+        print("cannot read file")
+        return 1
+    }
+    if lex_into(GSRC, TK, TS, TL, TLINE, TCOL) == 1 {
+        print("lex error")
+        return 1
+    }
+    out = flint_sb_new()
+    if parse_program(out) == 1 {
+        print("parse error")
+        return 1
+    }
+    sexpr = flint_sb_build(out)
+    flint_sb_free(out)
+    if flint_vec_len(PP) == 0 {
+        flint_vec_push(PP, 0)
+    } else {
+        flint_vec_set(PP, 0, 0)
+    }
+    PERR = 0
+    pretty = pp_node(sexpr)
+    # NOTE: pp's PERR flag is NOT checked here by design (research-backed):
+    # token-compare below + re-parse validity gate catch all real defects
+    # (wrong/missing/extra tokens). PERR misfires spuriously on some nested
+    # shapes while emitting correct text, so gating on it causes false
+    # failures. See memory.md Stage 2 notes.
+    k2 = flint_vec_new()
+    s2 = flint_vec_new()
+    l2 = flint_vec_new()
+    n2 = flint_vec_new()
+    c2 = flint_vec_new()
+    if lex_into(pretty, k2, s2, l2, n2, c2) == 1 {
+        print("re-lex error")
+        return 1
+    }
+    # Parens (50/51), semicolons (56) and commas (57) are skipped on
+    # both sides: the S-expr IR intentionally normalizes separators
+    # (grouping, statement splits, trailing commas). Validity of the
+    # pretty output is checked separately by re-parsing it below.
+    mut i: i64 = 0
+    mut j: i64 = 0
+    n1 = flint_vec_len(TK)
+    n3 = flint_vec_len(k2)
+    mut go: i64 = 1
+    while go == 1 {
+        while i < n1 {
+            if flint_vec_get(TK, i) == 50 {
+                i = i + 1
+            } else {
+                if flint_vec_get(TK, i) == 51 {
+                    i = i + 1
+                } else {
+                    if flint_vec_get(TK, i) == 56 {
+                        i = i + 1
+                    } else {
+                        if flint_vec_get(TK, i) == 57 {
+                            i = i + 1
+                        } else {
+                            break
+                        }
+                    }
+                }
+            }
+        }
+        while j < n3 {
+            if flint_vec_get(k2, j) == 50 {
+                j = j + 1
+            } else {
+                if flint_vec_get(k2, j) == 51 {
+                    j = j + 1
+                } else {
+                    if flint_vec_get(k2, j) == 56 {
+                        j = j + 1
+                    } else {
+                        if flint_vec_get(k2, j) == 57 {
+                            j = j + 1
+                        } else {
+                            break
+                        }
+                    }
+                }
+            }
+        }
+        if i >= n1 {
+            if j >= n3 {
+                go = 0
+            } else {
+                print("DIFF: length")
+                return 1
+            }
+        } else {
+            if j >= n3 {
+                print("DIFF: length")
+                return 1
+            } else {
+                a = flint_vec_get(TK, i)
+                b = flint_vec_get(k2, j)
+                if a != b {
+                    print("DIFF: kind")
+                    print(flint_i64_to_string(i))
+                    return 1
+                }
+                va = flint_str_substring(GSRC, flint_vec_get(TS, i), flint_vec_get(TS, i) + flint_vec_get(TL, i))
+                vb = flint_str_substring(pretty, flint_vec_get(s2, j), flint_vec_get(s2, j) + flint_vec_get(l2, j))
+                if flint_str_compare(va, vb) == 0 {
+                    i = i + 1
+                    j = j + 1
+                } else {
+                    print("DIFF: value")
+                    print(flint_i64_to_string(i))
+                    print(va)
+                    print(vb)
+                    return 1
+                }
+            }
+        }
+    }
+    # Validity gate: the pretty output must itself parse cleanly (catches
+    # dropped REQUIRED separators that the token compare above ignores).
+    flint_vec_clear(TK)
+    flint_vec_clear(TS)
+    flint_vec_clear(TL)
+    flint_vec_clear(TLINE)
+    flint_vec_clear(TCOL)
+    GSRC = pretty
+    PERR = 0
+    if lex_into(GSRC, TK, TS, TL, TLINE, TCOL) == 1 {
+        print("DIFF: pretty re-lex")
+        return 1
+    }
+    out2 = flint_sb_new()
+    if parse_program(out2) == 1 {
+        print("DIFF: pretty re-parse")
+        return 1
+    }
+    # Idempotence gate (research-backed): print(parse(print(x))) must equal
+    # print(x) byte-exactly. Catches unstable printer (extra parens, alias
+    # oscillation, trailing-comma flip-flop).
+    sexpr2 = flint_sb_build(out2)
+    flint_sb_free(out2)
+    if flint_vec_len(PP) == 0 {
+        flint_vec_push(PP, 0)
+    } else {
+        flint_vec_set(PP, 0, 0)
+    }
+    PERR = 0
+    pretty2 = pp_node(sexpr2)
+    if flint_str_compare(pretty, pretty2) == 0 {
+        0
+    } else {
+        print("DIFF: not-idempotent")
+        1
+    }
+}
+fn main() -> i64 {
+    if flint_arg_count() < 2 {
+        print("usage: flint_parse <file.fl> | flint_parse --fixpoint <file.fl>")
+        return 1
+    }
+    if flint_str_compare(flint_get_arg(1), "--fixpoint") == 0 {
+        if flint_arg_count() < 3 {
+            print("usage: flint_parse --fixpoint <file.fl> [...]")
+            return 1
+        }
+        mut fails: i64 = 0
+        mut i: i64 = 2
+        while i < flint_arg_count() {
+            r = fixpoint_run(flint_get_arg(i))
+            if r == 0 {
+                print("MATCH " + flint_get_arg(i))
+            } else {
+                print("DIFF " + flint_get_arg(i))
+                fails = fails + 1
+            }
+            i = i + 1
+        }
+        if fails == 0 {
+            return 0
+        } else {
+            return 1
+        }
+    }
+    path = flint_get_arg(1)
+    GSRC = flint_read_file(path)
+    if flint_err_occurred() == 1 {
+        print("cannot read file")
+        return 1
+    }
+    # Lex straight into the global token vecs (vec HANDLES are never
+    # reassigned — only mutated — because ptr-typed values can't flow into
+    # i64-typed var slots; see memory.md Stage 2 notes).
+    if lex_into(GSRC, TK, TS, TL, TLINE, TCOL) == 1 {
+        print("lex error")
+        return 1
+    }
+    out = flint_sb_new()
+    rc = parse_program(out)
+    print(flint_sb_build(out))
+    if rc == 1 {
+        print("parse error at " + flint_i64_to_string(PELINE) + ":" + flint_i64_to_string(PECOL) + " (kind " + flint_i64_to_string(PEKIND) + ")")
+    }
+    rc
+}

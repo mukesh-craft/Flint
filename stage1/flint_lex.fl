@@ -1,0 +1,795 @@
+# stage1/flint_lex.fl — Flint lexer (Stage 1 of self-hosting).
+#
+# Contract: byte-identical token stream to `flintc --dump-tokens`:
+#   kinds: 1 IDENT, 2 NUMBER, 3 STRING, 10-36 keywords, 50-88 punctuation
+#   (full table in memory.md STAGE 1 section);
+#   per-token line:col = position AFTER the token's last byte;
+#   string values processed exactly like the C++ lexer (escapes, \x, \u);
+#   no NEWLINE tokens; `#` and `//` comments skipped like the C++ lexer.
+#
+# Token stream: parallel i64 vecs kinds/starts/lens/lines/cols over src.
+# Strings: starts/lens cover the RAW INNER bytes (no quotes); values are
+# re-processed on demand via lex_proc_string (escapes live in ONE place).
+#
+# Only Stage-0 primitives are used (vecs, maps, sb, char_at, substring).
+# No short-circuit `and` is relied on anywhere (Flint evaluates both sides,
+# so every bounds check is a nested if). Dispatch is inline in lex_into so
+# pos/line/col stay plain locals (Flint has no out-params).
+# Keyword table: word -> kind code (mirrors --dump-tokens).
+KW = map {
+    "mut": 10, "var": 11, "let": 12, "def": 13, "fn": 14, "if": 15, "elif": 16, "else": 17, "while": 18, "break": 19, "continue": 20, "return": 21, "extern": 22, "i64": 23, "f64": 24, "str": 25, "bool": 26, "ptr": 27, "python": 28, "struct": 29, "enum": 30, "match": 31, "import": 32, "for": 33, "in": 34, "parallel": 35, "try": 36, "and": 60, "or": 88, "not": 77
+}
+fn lex_is_digit(c: i64) -> i64 {
+    if c >= 48 {
+        if c <= 57 {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+fn lex_is_alpha(c: i64) -> i64 {
+    if c == 95 {
+        1
+    } else {
+        if c >= 65 {
+            if c <= 90 {
+                1
+            } else {
+                if c >= 97 {
+                    if c <= 122 {
+                        1
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            }
+        } else {
+            0
+        }
+    }
+}
+fn lex_is_alnum(c: i64) -> i64 {
+    if lex_is_digit(c) == 1 {
+        1
+    } else {
+        lex_is_alpha(c)
+    }
+}
+fn lex_hex(c: i64) -> i64 {
+    if c >= 48 {
+        if c <= 57 {
+            c - 48
+        } else {
+            if c >= 65 {
+                if c <= 70 {
+                    c - 65 + 10
+                } else {
+                    if c >= 97 {
+                        if c <= 102 {
+                            c - 97 + 10
+                        } else {
+                            -1
+                        }
+                    } else {
+                        -1
+                    }
+                }
+            } else {
+                -1
+            }
+        }
+    } else {
+        -1
+    }
+}
+# UTF-8 encode of one BMP code point (mirrors the C++ lexer: surrogates
+# become U+FFFD; 3-byte max — \uXXXX is BMP-only by construction).
+fn lex_append_utf8(sb, cp: i64) -> i64 {
+    mut v: i64 = cp
+    if v >= 55296 {
+        if v <= 57343 {
+            v = 65533
+        }
+    }
+    if v < 128 {
+        flint_sb_append_char(sb, v)
+    } else {
+        if v < 2048 {
+            flint_sb_append_char(sb, 192 + v / 64)
+            flint_sb_append_char(sb, 128 + v % 64)
+        } else {
+            flint_sb_append_char(sb, 224 + v / 4096)
+            flint_sb_append_char(sb, 128 +(v / 64) % 64)
+            flint_sb_append_char(sb, 128 + v % 64)
+        }
+    }
+    0
+}
+# Bad \x tail: literal `\x` (mirrors C++ fallback).
+fn lex_bad_x(sb) -> i64 {
+    flint_sb_append_char(sb, 92)
+    flint_sb_append_char(sb, 120)
+    0
+}
+# Bad \u tail: literal `\u` (mirrors C++ fallback).
+fn lex_bad_u(sb) -> i64 {
+    flint_sb_append_char(sb, 92)
+    flint_sb_append_char(sb, 117)
+    0
+}
+# Process one raw string inner (no quotes) into its value. Mirrors the C++
+# readString escape rules exactly, including the fallbacks.
+fn lex_proc_string(raw: str) -> str {
+    sb = flint_sb_new()
+    n = flint_str_length(raw)
+    mut i: i64 = 0
+    while i < n {
+        c = flint_str_char_at(raw, i)
+        if c == 92 {
+            i = i + 1
+            if i < n {
+                e = flint_str_char_at(raw, i)
+                if e == 110 {
+                    flint_sb_append_char(sb, 10)
+                } else {
+                    if e == 116 {
+                        flint_sb_append_char(sb, 9)
+                    } else {
+                        if e == 114 {
+                            flint_sb_append_char(sb, 13)
+                        } else {
+                            if e == 92 {
+                                flint_sb_append_char(sb, 92)
+                            } else {
+                                if e == 34 {
+                                    flint_sb_append_char(sb, 34)
+                                } else {
+                                    if e == 120 {
+                                        if i + 2 < n {
+                                            hi = lex_hex(flint_str_char_at(raw, i + 1))
+                                            if hi >= 0 {
+                                                lo = lex_hex(flint_str_char_at(raw, i + 2))
+                                                if lo >= 0 {
+                                                    flint_sb_append_char(sb, hi * 16 + lo)
+                                                    i = i + 2
+                                                } else {
+                                                    lex_bad_x(sb)
+                                                }
+                                            } else {
+                                                lex_bad_x(sb)
+                                            }
+                                        } else {
+                                            lex_bad_x(sb)
+                                        }
+                                    } else {
+                                        if e == 117 {
+                                            if i + 4 < n {
+                                                d0 = lex_hex(flint_str_char_at(raw, i + 1))
+                                                d1 = lex_hex(flint_str_char_at(raw, i + 2))
+                                                d2 = lex_hex(flint_str_char_at(raw, i + 3))
+                                                d3 = lex_hex(flint_str_char_at(raw, i + 4))
+                                                if d0 >= 0 {
+                                                    if d1 >= 0 {
+                                                        if d2 >= 0 {
+                                                            if d3 >= 0 {
+                                                                lex_append_utf8(sb, d0 * 4096 + d1 * 256 + d2 * 16 + d3)
+                                                                i = i + 4
+                                                            } else {
+                                                                lex_bad_u(sb)
+                                                            }
+                                                        } else {
+                                                            lex_bad_u(sb)
+                                                        }
+                                                    } else {
+                                                        lex_bad_u(sb)
+                                                    }
+                                                } else {
+                                                    lex_bad_u(sb)
+                                                }
+                                            } else {
+                                                lex_bad_u(sb)
+                                            }
+                                        } else {
+                                            flint_sb_append_char(sb, 92)
+                                            flint_sb_append_char(sb, e)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                # Trailing backslash at end of input: C++ reads OOB (its bug
+                # on invalid input); we keep just the backslash. Diverges only
+                # on already-unterminated strings — documented, v1 scope.
+                flint_sb_append_char(sb, 92)
+            }
+            i = i + 1
+        } else {
+            flint_sb_append_char(sb, c)
+            i = i + 1
+        }
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+fn lex_emit(kinds, starts, lens, lines, cols, k: i64, st: i64, ln: i64, li: i64, co: i64) -> i64 {
+    flint_vec_push(kinds, k)
+    flint_vec_push(starts, st)
+    flint_vec_push(lens, ln)
+    flint_vec_push(lines, li)
+    flint_vec_push(cols, co)
+    0
+}
+# Next char equals want (bounds-safe: false past end).
+fn lex_peek_is(src: str, n: i64, pos: i64, want: i64) -> i64 {
+    if pos < n {
+        if flint_str_char_at(src, pos) == want {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+# Lex src into the five parallel vecs. Returns 0 clean, 1 on bad char or
+# unterminated string (tokens still emitted, mirroring the C++ lexer which
+# skips bad chars and keeps going).
+fn lex_into(src: str, kinds, starts, lens, lines, cols) -> i64 {
+    n = flint_str_length(src)
+    mut pos: i64 = 0
+    mut line: i64 = 1
+    mut col: i64 = 1
+    mut hadErr: i64 = 0
+    while pos < n {
+        # skipWhitespace: space, tab, CR, //-to-newline (mirrors C++).
+        mut moved: i64 = 1
+        while moved == 1 {
+            moved = 0
+            if pos < n {
+                c = flint_str_char_at(src, pos)
+                if c == 32 {
+                    pos = pos + 1
+                    col = col + 1
+                    moved = 1
+                } else {
+                    if c == 9 {
+                        pos = pos + 1
+                        col = col + 1
+                        moved = 1
+                    } else {
+                        if c == 13 {
+                            pos = pos + 1
+                            col = col + 1
+                            moved = 1
+                        } else {
+                            if c == 47 {
+                                if lex_peek_is(src, n, pos + 1, 47) == 1 {
+                                    pos = pos + 2
+                                    col = col + 2
+                                    mut done: i64 = 0
+                                    while done == 0 {
+                                        if pos < n {
+                                            if flint_str_char_at(src, pos) == 10 {
+                                                done = 1
+                                            } else {
+                                                pos = pos + 1
+                                                col = col + 1
+                                            }
+                                        } else {
+                                            done = 1
+                                        }
+                                    }
+                                    moved = 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if pos < n {
+            c = flint_str_char_at(src, pos)
+            if c == 10 {
+                pos = pos + 1
+                line = line + 1
+                col = 1
+            } else {
+                if c == 35 {
+                    # '#': comment through newline (newline consumed too).
+                    mut done: i64 = 0
+                    while done == 0 {
+                        if pos < n {
+                            if flint_str_char_at(src, pos) == 10 {
+                                done = 1
+                            } else {
+                                pos = pos + 1
+                                col = col + 1
+                            }
+                        } else {
+                            done = 1
+                        }
+                    }
+                    if pos < n {
+                        pos = pos + 1
+                        line = line + 1
+                        col = 1
+                    }
+                } else {
+                    if c == 40 {
+                        lex_emit(kinds, starts, lens, lines, cols, 50, pos, 1, line, col + 1)
+                        pos = pos + 1
+                        col = col + 1
+                    } else {
+                        if c == 41 {
+                            lex_emit(kinds, starts, lens, lines, cols, 51, pos, 1, line, col + 1)
+                            pos = pos + 1
+                            col = col + 1
+                        } else {
+                            if c == 123 {
+                                lex_emit(kinds, starts, lens, lines, cols, 52, pos, 1, line, col + 1)
+                                pos = pos + 1
+                                col = col + 1
+                            } else {
+                                if c == 125 {
+                                    lex_emit(kinds, starts, lens, lines, cols, 53, pos, 1, line, col + 1)
+                                    pos = pos + 1
+                                    col = col + 1
+                                } else {
+                                    if c == 91 {
+                                        lex_emit(kinds, starts, lens, lines, cols, 54, pos, 1, line, col + 1)
+                                        pos = pos + 1
+                                        col = col + 1
+                                    } else {
+                                        if c == 93 {
+                                            lex_emit(kinds, starts, lens, lines, cols, 55, pos, 1, line, col + 1)
+                                            pos = pos + 1
+                                            col = col + 1
+                                        } else {
+                                            if c == 59 {
+                                                lex_emit(kinds, starts, lens, lines, cols, 56, pos, 1, line, col + 1)
+                                                pos = pos + 1
+                                                col = col + 1
+                                            } else {
+                                                if c == 44 {
+                                                    lex_emit(kinds, starts, lens, lines, cols, 57, pos, 1, line, col + 1)
+                                                    pos = pos + 1
+                                                    col = col + 1
+                                                } else {
+                                                    if c == 58 {
+                                                        if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                            lex_emit(kinds, starts, lens, lines, cols, 59, pos, 2, line, col + 2)
+                                                            pos = pos + 2
+                                                            col = col + 2
+                                                        } else {
+                                                            lex_emit(kinds, starts, lens, lines, cols, 58, pos, 1, line, col + 1)
+                                                            pos = pos + 1
+                                                            col = col + 1
+                                                        }
+                                                    } else {
+                                                        if c == 38 {
+                                                            if lex_peek_is(src, n, pos + 1, 38) == 1 {
+                                                                lex_emit(kinds, starts, lens, lines, cols, 60, pos, 2, line, col + 2)
+                                                                pos = pos + 2
+                                                                col = col + 2
+                                                            } else {
+                                                                lex_emit(kinds, starts, lens, lines, cols, 61, pos, 1, line, col + 1)
+                                                                pos = pos + 1
+                                                                col = col + 1
+                                                            }
+                                                        } else {
+                                                            if c == 43 {
+                                                                if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                                    lex_emit(kinds, starts, lens, lines, cols, 63, pos, 2, line, col + 2)
+                                                                    pos = pos + 2
+                                                                    col = col + 2
+                                                                } else {
+                                                                    lex_emit(kinds, starts, lens, lines, cols, 62, pos, 1, line, col + 1)
+                                                                    pos = pos + 1
+                                                                    col = col + 1
+                                                                }
+                                                            } else {
+                                                                if c == 45 {
+                                                                    if lex_peek_is(src, n, pos + 1, 62) == 1 {
+                                                                        lex_emit(kinds, starts, lens, lines, cols, 64, pos, 2, line, col + 2)
+                                                                        pos = pos + 2
+                                                                        col = col + 2
+                                                                    } else {
+                                                                        if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                                            lex_emit(kinds, starts, lens, lines, cols, 66, pos, 2, line, col + 2)
+                                                                            pos = pos + 2
+                                                                            col = col + 2
+                                                                        } else {
+                                                                            lex_emit(kinds, starts, lens, lines, cols, 65, pos, 1, line, col + 1)
+                                                                            pos = pos + 1
+                                                                            col = col + 1
+                                                                        }
+                                                                    }
+                                                                } else {
+                                                                    if c == 42 {
+                                                                        if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                                            lex_emit(kinds, starts, lens, lines, cols, 68, pos, 2, line, col + 2)
+                                                                            pos = pos + 2
+                                                                            col = col + 2
+                                                                        } else {
+                                                                            lex_emit(kinds, starts, lens, lines, cols, 67, pos, 1, line, col + 1)
+                                                                            pos = pos + 1
+                                                                            col = col + 1
+                                                                        }
+                                                                    } else {
+                                                                        if c == 47 {
+                                                                            if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                                                lex_emit(kinds, starts, lens, lines, cols, 70, pos, 2, line, col + 2)
+                                                                                pos = pos + 2
+                                                                                col = col + 2
+                                                                            } else {
+                                                                                lex_emit(kinds, starts, lens, lines, cols, 69, pos, 1, line, col + 1)
+                                                                                pos = pos + 1
+                                                                                col = col + 1
+                                                                            }
+                                                                        } else {
+                                                                            if c == 37 {
+                                                                                if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                                                    lex_emit(kinds, starts, lens, lines, cols, 72, pos, 2, line, col + 2)
+                                                                                    pos = pos + 2
+                                                                                    col = col + 2
+                                                                                } else {
+                                                                                    lex_emit(kinds, starts, lens, lines, cols, 71, pos, 1, line, col + 1)
+                                                                                    pos = pos + 1
+                                                                                    col = col + 1
+                                                                                }
+                                                                            } else {
+                                                                                if c == 61 {
+                                                                                    if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                                                        lex_emit(kinds, starts, lens, lines, cols, 74, pos, 2, line, col + 2)
+                                                                                        pos = pos + 2
+                                                                                        col = col + 2
+                                                                                    } else {
+                                                                                        if lex_peek_is(src, n, pos + 1, 62) == 1 {
+                                                                                            lex_emit(kinds, starts, lens, lines, cols, 75, pos, 2, line, col + 2)
+                                                                                            pos = pos + 2
+                                                                                            col = col + 2
+                                                                                        } else {
+                                                                                            lex_emit(kinds, starts, lens, lines, cols, 73, pos, 1, line, col + 1)
+                                                                                            pos = pos + 1
+                                                                                            col = col + 1
+                                                                                        }
+                                                                                    }
+                                                                                } else {
+                                                                                    if c == 33 {
+                                                                                        if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                                                            lex_emit(kinds, starts, lens, lines, cols, 76, pos, 2, line, col + 2)
+                                                                                            pos = pos + 2
+                                                                                            col = col + 2
+                                                                                        } else {
+                                                                                            lex_emit(kinds, starts, lens, lines, cols, 77, pos, 1, line, col + 1)
+                                                                                            pos = pos + 1
+                                                                                            col = col + 1
+                                                                                        }
+                                                                                    } else {
+                                                                                        if c == 60 {
+                                                                                            if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                                                                lex_emit(kinds, starts, lens, lines, cols, 79, pos, 2, line, col + 2)
+                                                                                                pos = pos + 2
+                                                                                                col = col + 2
+                                                                                            } else {
+                                                                                                lex_emit(kinds, starts, lens, lines, cols, 78, pos, 1, line, col + 1)
+                                                                                                pos = pos + 1
+                                                                                                col = col + 1
+                                                                                            }
+                                                                                        } else {
+                                                                                            if c == 62 {
+                                                                                                if lex_peek_is(src, n, pos + 1, 61) == 1 {
+                                                                                                    lex_emit(kinds, starts, lens, lines, cols, 81, pos, 2, line, col + 2)
+                                                                                                    pos = pos + 2
+                                                                                                    col = col + 2
+                                                                                                } else {
+                                                                                                    lex_emit(kinds, starts, lens, lines, cols, 80, pos, 1, line, col + 1)
+                                                                                                    pos = pos + 1
+                                                                                                    col = col + 1
+                                                                                                }
+                                                                                            } else {
+                                                                                                if c == 46 {
+                                                                                                    if lex_peek_is(src, n, pos + 1, 46) == 1 {
+                                                                                                        if lex_peek_is(src, n, pos + 2, 46) == 1 {
+                                                                                                            lex_emit(kinds, starts, lens, lines, cols, 84, pos, 3, line, col + 3)
+                                                                                                            pos = pos + 3
+                                                                                                            col = col + 3
+                                                                                                        } else {
+                                                                                                            lex_emit(kinds, starts, lens, lines, cols, 83, pos, 2, line, col + 2)
+                                                                                                            pos = pos + 2
+                                                                                                            col = col + 2
+                                                                                                        }
+                                                                                                    } else {
+                                                                                                        lex_emit(kinds, starts, lens, lines, cols, 82, pos, 1, line, col + 1)
+                                                                                                        pos = pos + 1
+                                                                                                        col = col + 1
+                                                                                                    }
+                                                                                                } else {
+                                                                                                    if c == 64 {
+                                                                                                        lex_emit(kinds, starts, lens, lines, cols, 85, pos, 1, line, col + 1)
+                                                                                                        pos = pos + 1
+                                                                                                        col = col + 1
+                                                                                                    } else {
+                                                                                                        if c == 63 {
+                                                                                                            lex_emit(kinds, starts, lens, lines, cols, 86, pos, 1, line, col + 1)
+                                                                                                            pos = pos + 1
+                                                                                                            col = col + 1
+                                                                                                        } else {
+                                                                                                            if c == 124 {
+                                                                                                                if lex_peek_is(src, n, pos + 1, 124) == 1 {
+                                                                                                                    lex_emit(kinds, starts, lens, lines, cols, 88, pos, 2, line, col + 2)
+                                                                                                                    pos = pos + 2
+                                                                                                                    col = col + 2
+                                                                                                                } else {
+                                                                                                                    if lex_peek_is(src, n, pos + 1, 62) == 1 {
+                                                                                                                        lex_emit(kinds, starts, lens, lines, cols, 87, pos, 2, line, col + 2)
+                                                                                                                        pos = pos + 2
+                                                                                                                        col = col + 2
+                                                                                                                    } else {
+                                                                                                                        lex_emit(kinds, starts, lens, lines, cols, 87, pos, 1, line, col + 1)
+                                                                                                                        pos = pos + 1
+                                                                                                                        col = col + 1
+                                                                                                                    }
+                                                                                                                }
+                                                                                                            } else {
+                                                                                                                # Tail: numbers, words, strings, bad chars.
+                                                                                                                c2 = flint_str_char_at(src, pos)
+                                                                                                                if lex_is_digit(c2) == 1 {
+                                                                                                                    # Number: digits, optional .digits (mirrors C++).
+                                                                                                                    st = pos
+                                                                                                                    mut dd: i64 = 0
+                                                                                                                    while dd == 0 {
+                                                                                                                        if pos < n {
+                                                                                                                            if lex_is_digit(flint_str_char_at(src, pos)) == 1 {
+                                                                                                                                pos = pos + 1
+                                                                                                                                col = col + 1
+                                                                                                                            } else {
+                                                                                                                                dd = 1
+                                                                                                                            }
+                                                                                                                        } else {
+                                                                                                                            dd = 1
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                    if pos < n {
+                                                                                                                        if flint_str_char_at(src, pos) == 46 {
+                                                                                                                            # Consume '.' only if the char after
+                                                                                                                            # it is a digit (mirrors C++).
+                                                                                                                            if pos + 1 < n {
+                                                                                                                                if lex_is_digit(flint_str_char_at(src, pos + 1)) == 1 {
+                                                                                                                                    pos = pos + 1
+                                                                                                                                    col = col + 1
+                                                                                                                                    mut df: i64 = 0
+                                                                                                                                    while df == 0 {
+                                                                                                                                        if pos < n {
+                                                                                                                                            if lex_is_digit(flint_str_char_at(src, pos)) == 1 {
+                                                                                                                                                pos = pos + 1
+                                                                                                                                                col = col + 1
+                                                                                                                                            } else {
+                                                                                                                                                df = 1
+                                                                                                                                            }
+                                                                                                                                        } else {
+                                                                                                                                            df = 1
+                                                                                                                                        }
+                                                                                                                                    }
+                                                                                                                                }
+                                                                                                                            }
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                    lex_emit(kinds, starts, lens, lines, cols, 2, st, pos - st, line, col)
+                                                                                                                } else {
+                                                                                                                    if lex_is_alpha(c2) == 1 {
+                                                                                                                        # Word: [alnum_]*, then keyword table.
+                                                                                                                        st = pos
+                                                                                                                        mut dw: i64 = 0
+                                                                                                                        while dw == 0 {
+                                                                                                                            if pos < n {
+                                                                                                                                if lex_is_alnum(flint_str_char_at(src, pos)) == 1 {
+                                                                                                                                    pos = pos + 1
+                                                                                                                                    col = col + 1
+                                                                                                                                } else {
+                                                                                                                                    dw = 1
+                                                                                                                                }
+                                                                                                                            } else {
+                                                                                                                                dw = 1
+                                                                                                                            }
+                                                                                                                        }
+                                                                                                                        w = flint_str_substring(src, st, pos)
+                                                                                                                        mut k: i64 = 1
+                                                                                                                        if KW.has(w) == 1 {
+                                                                                                                            k = KW.get(w)
+                                                                                                                        }
+                                                                                                                        lex_emit(kinds, starts, lens, lines, cols, k, st, pos - st, line, col)
+                                                                                                                    } else {
+                                                                                                                        if c2 == 34 {
+                                                                                                                            # String: raw inner recorded; closing
+                                                                                                                            # quote consumed; counters track RAW bytes.
+                                                                                                                            pos = pos + 1
+                                                                                                                            col = col + 1
+                                                                                                                            st = pos
+                                                                                                                            mut closed: i64 = 0
+                                                                                                                            mut ds: i64 = 0
+                                                                                                                            while ds == 0 {
+                                                                                                                                if pos < n {
+                                                                                                                                    ch = flint_str_char_at(src, pos)
+                                                                                                                                    if ch == 34 {
+                                                                                                                                        closed = 1
+                                                                                                                                        ds = 1
+                                                                                                                                    } else {
+                                                                                                                                        if ch == 92 {
+                                                                                                                                            pos = pos + 1
+                                                                                                                                            col = col + 1
+                                                                                                                                            if pos < n {
+                                                                                                                                                e2 = flint_str_char_at(src, pos)
+                                                                                                                                                if e2 == 10 {
+                                                                                                                                                    line = line + 1
+                                                                                                                                                    col = 1
+                                                                                                                                                } else {
+                                                                                                                                                    col = col + 1
+                                                                                                                                                }
+                                                                                                                                                pos = pos + 1
+                                                                                                                                            }
+                                                                                                                                        } else {
+                                                                                                                                            if ch == 10 {
+                                                                                                                                                line = line + 1
+                                                                                                                                                col = 1
+                                                                                                                                            } else {
+                                                                                                                                                col = col + 1
+                                                                                                                                            }
+                                                                                                                                            pos = pos + 1
+                                                                                                                                        }
+                                                                                                                                    }
+                                                                                                                                } else {
+                                                                                                                                    ds = 1
+                                                                                                                                }
+                                                                                                                            }
+                                                                                                                            ln = pos - st
+                                                                                                                            if closed == 1 {
+                                                                                                                                pos = pos + 1
+                                                                                                                                col = col + 1
+                                                                                                                            } else {
+                                                                                                                                hadErr = 1
+                                                                                                                            }
+                                                                                                                            lex_emit(kinds, starts, lens, lines, cols, 3, st, ln, line, col)
+                                                                                                                        } else {
+                                                                                                                            # Bad char: C++ prints an error and skips
+                                                                                                                            # it; we set hadErr and skip it (token
+                                                                                                                            # streams stay aligned on valid files).
+                                                                                                                            hadErr = 1
+                                                                                                                            pos = pos + 1
+                                                                                                                            col = col + 1
+                                                                                                                        }
+                                                                                                                    }
+                                                                                                                }
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    hadErr
+}
+# Driver helpers (dump side only; not part of the lexer contract).
+fn lex_has_dot(s: str) -> i64 {
+    n = flint_str_length(s)
+    mut i: i64 = 0
+    mut found: i64 = 0
+    while i < n {
+        if flint_str_char_at(s, i) == 46 {
+            found = 1
+            i = n
+        } else {
+            i = i + 1
+        }
+    }
+    found
+}
+# Dump escaping (mirrors C++ stage1Escape): backslash, LF, CR.
+fn lex_esc_dump(s: str) -> str {
+    sb = flint_sb_new()
+    n = flint_str_length(s)
+    mut i: i64 = 0
+    while i < n {
+        c = flint_str_char_at(s, i)
+        if c == 92 {
+            flint_sb_append(sb, "\\\\")
+        } else {
+            if c == 10 {
+                flint_sb_append(sb, "\\n")
+            } else {
+                if c == 13 {
+                    flint_sb_append(sb, "\\r")
+                } else {
+                    flint_sb_append_char(sb, c)
+                }
+            }
+        }
+        i = i + 1
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+# Dump driver: `flintc run stage1/flint_lex.fl -- <file.fl>` prints
+# kind:lexeme:line:col per line, same shape as `flintc --dump-tokens`.
+# Exit: lexer hadErr (0 clean, 1 on bad char / unterminated string).
+fn main() -> i64 {
+    if flint_arg_count() < 2 {
+        print("usage: flint_lex <file.fl>")
+        return 1
+    }
+    path = flint_get_arg(1)
+    src = flint_read_file(path)
+    if flint_err_occurred() == 1 {
+        print("cannot read file")
+        return 1
+    }
+    kinds = flint_vec_new()
+    starts = flint_vec_new()
+    lens = flint_vec_new()
+    lines = flint_vec_new()
+    cols = flint_vec_new()
+    rc = lex_into(src, kinds, starts, lens, lines, cols)
+    n = flint_vec_len(kinds)
+    mut i: i64 = 0
+    mut k: i64 = 0
+    mut st: i64 = 0
+    mut ln: i64 = 0
+    mut li: i64 = 0
+    mut co: i64 = 0
+    mut val: str = ""
+    while i < n {
+        k = flint_vec_get(kinds, i)
+        st = flint_vec_get(starts, i)
+        ln = flint_vec_get(lens, i)
+        li = flint_vec_get(lines, i)
+        co = flint_vec_get(cols, i)
+        val = flint_str_substring(src, st, st + ln)
+        if k == 3 {
+            val = lex_proc_string(val)
+        } else {
+            if k == 2 {
+                if lex_has_dot(val) == 1 {
+                    val = val + "d"
+                }
+            }
+        }
+        print(flint_i64_to_string(k) + ":" + lex_esc_dump(val) + ":" + flint_i64_to_string(li) + ":" + flint_i64_to_string(co))
+        i = i + 1
+    }
+    flint_vec_free(kinds)
+    flint_vec_free(starts)
+    flint_vec_free(lens)
+    flint_vec_free(lines)
+    flint_vec_free(cols)
+    rc
+}

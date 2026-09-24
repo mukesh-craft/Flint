@@ -1,17 +1,48 @@
 # Flint Compiler — Requirements & Setup
 
-## Platform
+## Platform Support (v0.17: any device)
 
-- **Primary:** Termux on Android (AArch64 / arm64-v8a)
-- **Also works:** Linux AArch64 (ARM64)
-- **LLVM version:** LLVM 18+ (tested with LLVM 18 on Termux)
-- **Clang version:** Matching LLVM version
+| Tier | Platform | Status |
+|------|----------|--------|
+| 1 | Android ARM64 (Termux) | ✅ primary dev platform |
+| 1 | Linux x86_64 | ✅ CI-tested |
+| 1 | Linux ARM64 | ✅ CI-tested |
+| 2 | macOS (Apple silicon + Intel) | 🟡 builds via Xcode CLT + brew LLVM (CI) |
+| 3 | Windows (MinGW/LLVM-MinGW) | 🟡 v0.20: all runtime + OS layer compile for x86_64; real `hello.exe` cross-linked from ARM; native CI runs tests |
+| 3 | Windows (MSVC) | 📋 needs native threads + full-toolchain CI run |
+
+Windows notes: link programs with `-lws2_32 -lpthread` (added automatically by
+`flintc` for Windows targets); `flint_regex_*` return err-flagged stubs
+(no POSIX engine); MSVC needs the remaining thread shim (PORT notes in code).
+
+Cross-compilation: `./flintc --target <triple> program.fl -o program.o`
+(e.g. `--target x86_64-unknown-linux-gnu` on ARM). JIT always runs host code.
+
+## Requirements
+
+- **LLVM version:** LLVM 18+ (`llvm-config` on PATH)
+- **Clang version:** matching LLVM (`clang`/`clang++` on PATH)
+- **Python 3.x** (headers for `pyruntime.o`, else skipped)
+- **make**, **bash**
 
 ## Required Packages (Termux)
 
 ```bash
 pkg update && pkg upgrade
 pkg install clang llvm python make bash
+```
+
+## Required Packages (Debian/Ubuntu)
+
+```bash
+sudo apt-get update && sudo apt-get install -y clang llvm python3 make
+```
+
+## Required Packages (macOS)
+
+```bash
+brew install llvm python make
+export PATH="$(brew --prefix llvm)/bin:$PATH"
 ```
 
 Verify:

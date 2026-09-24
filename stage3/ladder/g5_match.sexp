@@ -1,0 +1,1 @@
+(prog (enum Color ( (Red) (Green) (Blue))) (fn main (tparams) () i64 (block (decl implicit c - (enum-lit Color Red)) (decl implicit m - (match (var c) (arms ((pat-var Color Red -) (expr (num 1)) ) ((pat-var Color Green -) (expr (num 2)) ) ((pat-var Color Blue -) (expr (num 3)) )))) (expr (call print (var m))) (expr (num 0)) )) )

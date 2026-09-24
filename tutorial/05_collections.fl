@@ -1,0 +1,28 @@
+// Lesson 05 — strings, arrays, maps. Strings are UTF-8; lengths count
+// bytes. Array indexing panics out of bounds. Maps: string keys, i64 values.
+// Run: flintc run tutorial/05_collections.fl
+fn main() -> i64 {
+    s = "hello"
+    print(s.len())
+    print(s.upper())
+    print(s.startswith("he"))
+    greeting = "hi {s}!"
+    print(greeting)
+    a = [10, 20, 30]
+    print(a[0] + a[2])
+    m = map{"alice": 10, "bob": 20}
+    print(m.get("alice"))
+    m.set("carol", 30)
+    print(m.len())
+    print(m.has("bob"))
+    0
+}
+// EXPECT:
+// 5
+// HELLO
+// 1
+// hi hello!
+// 40
+// 10
+// 3
+// 1

@@ -1,0 +1,43 @@
+// Stage 0 lexer-prerequisite kit: every primitive the Stage 1 lexer will
+// rely on, locked in with exact-output markers (see tests/run.sh).
+// Run: flintc run tests/t_lexkit.fl
+fn main() -> i64 {
+    // 1. String builder: mixed appends, freeze, length
+    sb = flint_sb_new()
+    flint_sb_append(sb, "hello")
+    flint_sb_append_char(sb, 32)
+    flint_sb_append(sb, "world")
+    flint_sb_append_char(sb, 32)
+    flint_sb_append_i64(sb, 42)
+    s = flint_sb_build(sb)
+    print(s)
+    print(flint_sb_len(sb))
+    flint_sb_free(sb)
+
+    // 2. Char access, slice, compare (byte semantics)
+    print(flint_str_char_at("hello", 1))
+    print(flint_str_substring("hello world", 6, 11))
+    print(flint_str_compare("fn", "fn"))
+    print(flint_str_compare("a", "b"))
+
+    // 3. Keyword table pattern: map string->i64 + has() guard
+    kw = map{"fn": 1, "let": 2, "mut": 3}
+    print(kw.get("let"))
+    print(kw.has("zzz"))
+    mut hit: i64 = 0
+    if kw.has("mut") { hit = kw.get("mut") }
+    print(hit)
+
+    // 4. Vec as parallel-array store: 1000 pushes, indexed read, len
+    v = flint_vec_new()
+    mut i: i64 = 0
+    while i < 1000 {
+        flint_vec_push(v, i * 2)
+        i = i + 1
+    }
+    print(flint_vec_len(v))
+    print(flint_vec_get(v, 0))
+    print(flint_vec_get(v, 999))
+    flint_vec_free(v)
+    0
+}

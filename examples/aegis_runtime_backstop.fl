@@ -1,0 +1,15 @@
+// AEGIS runtime backstop demo: the lease is laundered through arithmetic
+// (id + 0), so the static pass cannot track it — the generational runtime
+// table must still panic instead of allowing use-after-free. This is the
+// class of bug (FFI escapes, integer-laundered handles, dynamic frees) that
+// a pure compile-time borrow checker can never catch.
+// EXPECTED: compiles clean, then PANICs at runtime.
+fn main() -> i64 {
+    lease = flint_aegis_alloc(16)
+    flint_aegis_write_i64(lease, 0, 123)
+    raw = lease + 0
+    flint_aegis_free(lease)
+    v = flint_aegis_read_i64(raw, 0)
+    print(v)
+    0
+}

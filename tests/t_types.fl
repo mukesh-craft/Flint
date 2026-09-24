@@ -1,0 +1,23 @@
+struct Pt { x: i64, y: i64 }
+
+enum Opt { None, Some(i64) }
+
+fn main() -> i64 {
+    s = "hello"
+    print(s.len())
+    print(s.upper())
+    a = [10, 20, 30]
+    print(a[1])
+    p = Pt { x: 3, y: 4 }
+    print(p.x + p.y)
+    v = Opt.Some(7)
+    r = match v {
+        Opt.None => 0,
+        Opt.Some(x) => x,
+    }
+    print(r)
+    m = map{"k": 41}
+    print(m.get("k") + 1)
+    print(m.len())
+    0
+}

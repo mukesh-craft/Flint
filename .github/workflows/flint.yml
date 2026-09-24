@@ -1,0 +1,128 @@
+name: flint
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Tier 1: Linux x86_64
+          - os: ubuntu-24.04
+            install: sudo apt-get update && sudo apt-get install -y clang llvm python3 make
+          # Tier 1: Linux ARM64
+          - os: ubuntu-24.04-arm
+            install: sudo apt-get update && sudo apt-get install -y clang llvm python3 make
+          # Tier 2: macOS (Apple silicon) — brew LLVM keeps clang/llvm-config in sync
+          - os: macos-15
+            install: brew install llvm python make && echo "$(brew --prefix llvm)/bin" >> $GITHUB_PATH
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: ${{ matrix.install }}
+      - name: Build
+        run: bash build.sh
+      - name: Smoke tests
+        run: bash tests/run.sh ./flintc
+      - name: Tutorial tests
+        run: bash tests/run_tutorial.sh ./flintc
+      - name: Stage 1 lexer differential tests
+        run: bash tests/test_lexdiff.sh ./flintc
+      - name: Stage 2 parser golden tests
+        run: bash tests/test_parse.sh ./flintc
+      - name: Stage 2 parse gate (all valid .fl must parse)
+        run: bash tests/test_parse_gate.sh ./flintc
+      - name: Stage 2 pretty-print fixpoint tests
+        run: bash tests/test_fixpoint.sh ./flintc
+      - name: Stage 3 canonical IR gate (llvm-as + verify + clang + run)
+        run: bash tests/test_emit.sh
+      - name: Stage 3 Flint emitter golden ladder
+        run: bash tests/test_emit_stage3.sh ./flintc
+      - name: Registry tests (no network: file:// + local git)
+        run: bash tests/test_registry.sh ./flintc
+      - name: Differential parity gate (C++ vs self-hosted, D1-D4 logged)
+        run: bash tests/test_differential.sh ./flintc
+      - name: S-expr merger gate
+        run: bash tests/test_merge.sh ./flintc
+      - name: Pipeline driver gate
+        run: bash tests/test_driver.sh ./flintc
+      - name: Declaration-order tracker gate
+        run: python3 tests/test_decl_order.py stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl driver/flintc.fl tools/merge_sexp.fl
+      - name: Formatter gate (check + idempotency + parse-stability)
+        run: bash tests/test_fmt.sh ./flintc
+      - name: Error-catalog sync gate
+        run: bash tests/test_errors.sh
+      - name: Opt-identity gate (O0/O2/O3/fast/unsafe agree)
+        run: bash tests/test_opt_identity.sh ./flintc
+      - name: Fuzz corpus replay gate
+        run: bash tests/test_fuzz_corpus.sh ./flintc
+
+  # Nightly: selfhost build + perf-ratio gate + differential fuzz + SBOM.
+  # Schedule runs on ubuntu-24.04 (Tier 1); perf uses self-vs-C++ RATIO so
+  # runner speed cancels out (absolute ms varies ±2x on shared runners).
+  nightly:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 120
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang llvm python3 make
+      - name: Build
+        run: bash build.sh
+      - name: Self-host bootstrap Phase A (parse.0/emit.0)
+        run: bash tests/test_selfhost.sh A
+      - name: Compile-time benchmarks
+        run: bash bench/compile_time/bench.sh ./flintc 3 | tee bench_result.csv
+      - name: Perf-ratio gate (<= +10% vs BASELINE.md ratios)
+        run: python3 bench/compile_time/perf_gate.py bench_result.csv
+      - name: Differential fuzz (100 seeds)
+        run: bash fuzz/run.sh 1 100 ./flintc
+      - name: Sanitizer gate (ASan+UBSan over benchmarks)
+        run: bash tests/test_sanitizers.sh ./flintc
+      - name: Generate SBOM
+        run: python3 tools/sbom.py > sbom.json
+      - name: Upload fuzz failures
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failures
+          path: fuzz/failures/
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+  # Tier 3: Windows via MinGW (MSYS2). v0.20 verifies the POSIX/MinGW path;
+  # MSVC-native remains a later work item (see memory.md PORT notes).
+  windows-mingw:
+    timeout-minutes: 60
+    runs-on: windows-2025
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: mingw-w64-x86_64-clang mingw-w64-x86_64-llvm mingw-w64-x86_64-python mingw-w64-x86_64-make git
+      - name: Build
+        run: bash build.sh
+      - name: Smoke tests
+        run: bash tests/run.sh ./flintc.exe
+      - name: Tutorial tests
+        run: bash tests/run_tutorial.sh ./flintc.exe
+      - name: Stage 1 lexer differential tests
+        run: bash tests/test_lexdiff.sh ./flintc.exe
+      - name: Registry tests (no network: file:// + local git)
+        run: bash tests/test_registry.sh ./flintc.exe

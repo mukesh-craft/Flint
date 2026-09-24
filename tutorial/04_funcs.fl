@@ -1,0 +1,26 @@
+// Lesson 04 — functions, recursion, lambdas.
+// Lambdas bind with `name = |params| body` and capture by value.
+// Run: flintc run tutorial/04_funcs.fl
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+
+fn fib(n: i64) -> i64 {
+    if n <= 1 { n } else { fib(n - 1) + fib(n - 2) }
+}
+
+fn main() -> i64 {
+    print(add(20, 22))
+    print(fib(10))
+    dbl = |x| x + x
+    print(dbl(21))
+    base = 100
+    addb = |x| x + base
+    print(addb(5))
+    0
+}
+// EXPECT:
+// 42
+// 55
+// 42
+// 105

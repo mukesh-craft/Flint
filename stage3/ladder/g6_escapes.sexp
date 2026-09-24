@@ -1,0 +1,1 @@
+(prog (fn main (tparams) () i64 (block (expr (call print (str 6 {{hi}}))) (expr (call print (str 6 A\x41B))) (expr (call print (str 9 caf\u00e9))) (expr (call print (str 4 x\\y))) (expr (call print (str 4 q\"q))) (expr (call print (str 6 bad\qx))) (expr (num 0)) )) )

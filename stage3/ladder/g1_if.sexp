@@ -1,0 +1,1 @@
+(prog (fn main (tparams) () i64 (block (decl implicit x - (num 5)) (if (bin > (var x) (num 3)) (block (expr (call print (num 1))) ) (block (expr (call print (num 0))) )) (decl implicit r - (if (bin > (var x) (num 10)) (block (expr (num 100)) ) (block (expr (num 200)) ))) (expr (call print (var r))) (expr (num 0)) )) )

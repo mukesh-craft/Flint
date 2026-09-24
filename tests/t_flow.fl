@@ -1,0 +1,43 @@
+fn main() -> i64 {
+    mut s: i64 = 0
+    for i in range(10) {
+        if i % 2 == 0 {
+            continue
+        }
+        s += i
+    }
+    print(s)
+    values = [1, 2, 3, 4, 5]
+    mut collection_total: i64 = 0
+    for value in values {
+        if value % 2 == 0 {
+            continue
+        }
+        collection_total += value
+    }
+    print(collection_total)
+    mut t: i64 = 0
+    mut k: i64 = 0
+    while k < 5 {
+        k += 1
+        if k == 3 {
+            break
+        }
+        t += k
+    }
+    print(t)
+    r = if s > 20 { 1 } elif s > 10 { 2 } else { 3 }
+    print(r)
+    c = 1 && 1
+    d = !c
+    print(c)
+    print(d)
+    // Stage 0: index assignment desugars to the checked array store
+    a = flint_array_alloc(4)
+    a[0] = 40
+    a[3] = a[0] + 2
+    print(flint_array_get(a, 0))
+    print(flint_array_get(a, 3))
+    flint_array_free(a)
+    0
+}

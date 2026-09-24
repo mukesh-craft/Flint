@@ -1,0 +1,22 @@
+// Lesson 02 — arithmetic is checked. Integers are i64, decimals are f64.
+// Overflow panics instead of wrapping (run with --unsafe to skip checks).
+// Run: flintc run tutorial/02_arith.fl
+fn main() -> i64 {
+    print(2 + 3 * 4)
+    print(17 / 5)
+    print(17 % 5)
+    print(-7 % 3)
+    a = 1.5
+    b = 2.0
+    print(a + b)
+    big = 9007199254740993
+    print(big)
+    0
+}
+// EXPECT:
+// 14
+// 3
+// 2
+// -1
+// 3.5
+// 9007199254740993

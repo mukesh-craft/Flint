@@ -1,0 +1,8 @@
+# Differential manifest: "<file> <exit> <expected-stdout|-> <allowance>"
+# allowance: same | cpp_may_differ (D1/D2/D4) | both_may_reject (D3).
+# See COMPATIBILITY.md. Harness fails on any UNLISTED divergence.
+for_array.fl 0 for_array.txt cpp_may_differ
+bare_len.fl 0 bare_len.txt cpp_may_differ
+method_len.fl 0 - both_may_reject
+str_index.fl 0 str_index.txt cpp_may_differ
+common.fl 0 common.txt same

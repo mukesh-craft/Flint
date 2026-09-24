@@ -1,0 +1,24 @@
+# Stage 3 golden ladder manifest: "<pass|fail> <name>.sexp <expected-exit>"
+# Each entry: Flint emitter (.sexp -> .ll) -> diff golden -> llvm-as ->
+# opt verify -> clang+runtime link -> run, exit must match.
+pass g0_hello.sexp 0
+pass g0_vars.sexp 0
+pass g1_arith.sexp 0
+pass g1_if.sexp 0
+pass g1_while.sexp 0
+pass g2_calls.sexp 0
+pass g2_extern.sexp 0
+pass g3_arrays.sexp 0
+pass g3_stridx.sexp 0
+pass g4_for.sexp 0
+pass g5_struct.sexp 0
+pass g5_match.sexp 0
+pass g6_globals.sexp 0
+pass g6_maps.sexp 0
+pass g6_escapes.sexp 0
+pass g7a_compound.sexp 0
+pass g7b_methods.sexp 0
+pass g7c_slice.sexp 0
+pass g7d_payload.sexp 0
+pass g7e_lambda.sexp 0
+pass g7e_recursion.sexp 0

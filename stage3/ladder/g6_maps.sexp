@@ -1,0 +1,1 @@
+(prog (fn main (tparams) () i64 (block (decl implicit m - (map-lit (str 1 a) (num 1))) (expr (method (var m) set (str 1 b) (num 2))) (expr (call print (method (var m) get (str 1 b)))) (expr (call print (method (var m) has (str 1 a)))) (expr (call print (call len (var m)))) (expr (num 0)) )) )

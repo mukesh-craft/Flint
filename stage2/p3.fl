@@ -1,0 +1,25 @@
+mut y: i64 = 10
+y = y + 1
+y += 2
+fn add(a: i64, b: i64) -> i64 {
+    a + b
+}
+struct Pt { x: i64, y: i64 }
+enum Opt { None, Some(i64) }
+fn main() -> i64 {
+    r = if y > 3 { 42 } else { 0 }
+    while y > 100 {
+        y = y - 1
+    }
+    for i in 0..3 {
+        print(i)
+    }
+    m = match Opt.Some(1) { Opt.None => 0, Opt.Some(n) => n, }
+    p = Pt { x: 1, y: 2 }
+    print(p.x)
+    dbl = |x| x + x
+    print(dbl(21))
+    v = try Opt.Some(5)
+    let [a, b] = p
+    0
+}

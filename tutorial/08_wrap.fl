@@ -1,0 +1,29 @@
+// Lesson 08 — putting it together: generics, testing, and safety.
+// Functions starting with test_ run under `flintc test`. Integer math is
+// checked, indexing is bounds-trapped, leases die loudly when misused.
+// Run: flintc run tutorial/08_wrap.fl   then: flintc test tutorial/08_wrap.fl
+fn square(x: i64) -> i64 {
+    x * x
+}
+
+fn test_square() -> i64 {
+    r = square(9)
+    print(r)
+    if r == 81 { 0 } else { 1 }
+}
+
+fn main() -> i64 {
+    print(square(6))
+    lease = flint_aegis_alloc(16)
+    flint_aegis_write_i64(lease, 0, 7)
+    print(flint_aegis_read_i64(lease, 0))
+    print(flint_aegis_check(lease))
+    flint_aegis_free(lease)
+    print(flint_aegis_check(lease))
+    0
+}
+// EXPECT:
+// 36
+// 7
+// 1
+// 0

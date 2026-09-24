@@ -1,0 +1,32 @@
+// Lesson 03 — control flow: if/elif/else, while, for, range, continue.
+// Run: flintc run tutorial/03_flow.fl
+fn main() -> i64 {
+    x = 7
+    if x > 10 {
+        print("big")
+    } elif x > 5 {
+        print("medium")
+    } else {
+        print("small")
+    }
+    mut total: i64 = 0
+    for i in range(10) {
+        if i % 2 == 0 {
+            continue
+        }
+        total += i
+    }
+    print(total)
+    mut n: i64 = 0
+    mut k: i64 = 0
+    while k < 100 {
+        k += 1
+        n += k
+    }
+    print(n)
+    0
+}
+// EXPECT:
+// medium
+// 25
+// 5050

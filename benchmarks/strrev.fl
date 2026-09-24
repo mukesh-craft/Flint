@@ -1,12 +1,16 @@
 fn build_string(n: i64) -> str {
-    mut s = ""
+    # Linear builder path (R5): loop `+` concat is O(n^2) and leaks every
+    # intermediate; the builder amortizes growth and frees once.
+    sb = flint_sb_new()
     mut i: i64 = 0
     while i < n {
         ch = flint_i64_to_string(97 + (i % 26))
-        s = flint_str_concat(s, ch)
+        flint_sb_append(sb, ch)
         flint_str_free(ch)
         i = i + 1
     }
+    s = flint_sb_build(sb)
+    flint_sb_free(sb)
     s
 }
 

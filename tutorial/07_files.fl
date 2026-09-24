@@ -1,0 +1,19 @@
+// Lesson 07 — files and errors. File functions report problems through an
+// error flag (check it!) instead of crashing. Paths come from flint_temp_dir
+// so lessons work on every device. Run: flintc run tutorial/07_files.fl
+fn main() -> i64 {
+    path = flint_temp_dir() + "/flint_tut.txt"
+    flint_write_file(path, "line1\nline2\n")
+    c = flint_read_file(path)
+    print(c)
+    missing = flint_read_file("/tmp/flint_nope_xyz.txt")
+    print(flint_err_occurred())
+    print(flint_str_length(missing))
+    0
+}
+// EXPECT:
+// line1
+// line2
+//
+// 1
+// 0

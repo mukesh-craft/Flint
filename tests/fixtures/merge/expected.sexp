@@ -1,0 +1,1 @@
+(prog (fn main (tparams) () i64 (block (expr (call print (call helper (str 3 a(b)))) (return (num 0))) ) (fn helper (tparams) ( (s str -)) i64 (block (expr (call print (var s))) (return (num 1))) ) (fn main (tparams) () i64 (block (return (num 9))) ))

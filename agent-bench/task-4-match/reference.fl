@@ -1,0 +1,15 @@
+enum Opt { None, Some(i64) }
+
+fn main() -> i64 {
+    a = Opt.Some(40)
+    print(match a {
+        Opt.None => 0,
+        Opt.Some(x) => x + 2,
+    })
+    b = Opt.None
+    print(match b {
+        Opt.None => 99,
+        Opt.Some(x) => x,
+    })
+    0
+}

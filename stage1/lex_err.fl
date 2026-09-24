@@ -1,0 +1,5 @@
+x = "ok"
+fn main() -> i64 {
+    y = 5 $ 3
+    z = "unterminated
+}

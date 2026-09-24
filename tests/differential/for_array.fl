@@ -1,0 +1,9 @@
+fn main() -> i64 {
+    a = [1, 2, 3]
+    mut s: i64 = 0
+    for v in a {
+        s = s + v
+    }
+    print(s)
+    0
+}

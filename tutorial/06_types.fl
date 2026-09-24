@@ -1,0 +1,26 @@
+// Lesson 06 — structs, enums, match. Matches must cover every variant.
+// Run: flintc run tutorial/06_types.fl
+struct Pt { x: i64, y: i64 }
+
+enum Opt { None, Some(i64) }
+
+fn main() -> i64 {
+    p = Pt { x: 3, y: 4 }
+    print(p.x + p.y)
+    v = Opt.Some(40)
+    r = match v {
+        Opt.None => 0,
+        Opt.Some(x) => x + 2,
+    }
+    print(r)
+    w = Opt.None
+    print(match w {
+        Opt.None => 99,
+        Opt.Some(x) => x,
+    })
+    0
+}
+// EXPECT:
+// 7
+// 42
+// 99

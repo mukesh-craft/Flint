@@ -1,0 +1,23 @@
+// AEGIS LEASES demo: valid lifecycle — alloc, checked R/W, len, liveness
+// query, borrow/unborrow, move (old id dies), free. Prints:
+//   42, 3 (slots), 1 (alive), 7 (via moved lease), 0 (old id dead)
+fn main() -> i64 {
+    lease = flint_aegis_alloc(24)
+    flint_aegis_write_i64(lease, 0, 42)
+    flint_aegis_write_i64(lease, 1, 7)
+    v = flint_aegis_read_i64(lease, 0)
+    print(v)
+    n = flint_aegis_len(lease)
+    print(n)
+    alive = flint_aegis_check(lease)
+    print(alive)
+    flint_aegis_borrow(lease)
+    flint_aegis_unborrow(lease)
+    lease2 = flint_aegis_move(lease)
+    v2 = flint_aegis_read_i64(lease2, 1)
+    print(v2)
+    dead = flint_aegis_check(lease)
+    print(dead)
+    flint_aegis_free(lease2)
+    0
+}

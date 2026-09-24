@@ -1,0 +1,251 @@
+# tools/merge_sexp.fl — merge S-expr programs for multi-file builds.
+#
+# Usage: merge_sexp main.sexp out.sexp [dep.sexp ...]
+# Concatenates top-level forms (main file first, so its `main` wins the
+# emitter's first-main rule), dropping `(import ...)` nodes (resolved by
+# the caller, e.g. driver/flintc.fl). Output is byte-compatible with the
+# reference merger in tests/test_selfhost.sh: `(prog f1 f2 ...)\n`.
+# String-aware splitter: parens inside `(str LEN RAW)` never count.
+#
+# Exit codes: 0 ok, 1 usage/IO/parse error (message on stdout).
+fn mg_is_space(c: i64) -> i64 {
+    if c == 32 {
+        1
+    } else {
+        if c == 10 {
+            1
+        } else {
+            if c == 9 {
+                1
+            } else {
+                if c == 13 {
+                    1
+                } else {
+                    0
+                }
+            }
+        }
+    }
+}
+fn mg_is_digit(c: i64) -> i64 {
+    if c < 48 {
+        0
+    } else {
+        if c > 57 {
+            0
+        } else {
+            1
+        }
+    }
+}
+# True if `text` has `want` at byte offset `pos`.
+fn mg_has_at(text: str, pos: i64, want: str) -> i64 {
+    n = flint_str_length(text)
+    m = flint_str_length(want)
+    if pos + m > n {
+        0
+    } else {
+        part = flint_str_substring(text, pos, pos + m)
+        if part == want {
+            1
+        } else {
+            0
+        }
+    }
+}
+# Skip whitespace from pos; returns new pos (pure).
+fn mg_skip_ws(text: str, n: i64, pos: i64) -> i64 {
+    mut p: i64 = pos
+    mut go: i64 = 1
+    while go == 1 {
+        if p < n {
+            if mg_is_space(flint_str_char_at(text, p)) == 1 {
+                p = p + 1
+            } else {
+                go = 0
+            }
+        } else {
+            go = 0
+        }
+    }
+    p
+}
+# End offset (after matching `)`) of the form at pos, or -1. String-aware:
+# `(str LEN RAW)` counts as one balanced unit (RAW bytes never scanned).
+# Limitation (shared with tests/test_selfhost.sh merger): a RAW containing
+# `(str ` at a scanned position confuses it. No stage output does this.
+fn mg_form_end(text: str, n: i64, pos: i64) -> i64 {
+    mut depth: i64 = 0
+    mut i: i64 = pos
+    mut go: i64 = 1
+    mut j: i64 = 0
+    mut len: i64 = 0
+    mut gd: i64 = 1
+    while go == 1 {
+        if i < n {
+            if mg_has_at(text, i, "(str ") == 1 {
+                j = i + 5
+                len = 0
+                gd = 1
+                while gd == 1 {
+                    if j < n {
+                        c = flint_str_char_at(text, j)
+                        if mg_is_digit(c) == 1 {
+                            len = len * 10 + c - 48
+                            j = j + 1
+                        } else {
+                            gd = 0
+                        }
+                    } else {
+                        gd = 0
+                    }
+                }
+                j = j + 1
+                j = j + len
+                i = j + 1
+            } else {
+                c = flint_str_char_at(text, i)
+                if c == 40 {
+                    depth = depth + 1
+                    i = i + 1
+                } else {
+                    if c == 41 {
+                        depth = depth - 1
+                        i = i + 1
+                        if depth == 0 {
+                            go = 0
+                        }
+                    } else {
+                        i = i + 1
+                    }
+                }
+            }
+        } else {
+            go = 0
+        }
+    }
+    if depth == 0 {
+        i
+    } else {
+        -1
+    }
+}
+# Head tag word of the form at pos (text[pos] == '(').
+fn mg_tag(text: str, pos: i64) -> str {
+    n = flint_str_length(text)
+    sb = flint_sb_new()
+    mut i: i64 = pos + 1
+    mut go: i64 = 1
+    while go == 1 {
+        if i < n {
+            c = flint_str_char_at(text, i)
+            if c == 32 {
+                go = 0
+            } else {
+                if c == 41 {
+                    go = 0
+                } else {
+                    flint_sb_append_char(sb, c)
+                    i = i + 1
+                }
+            }
+        } else {
+            go = 0
+        }
+    }
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
+fn main() -> i64 {
+    if flint_arg_count() < 3 {
+        print("usage: merge_sexp main.sexp out.sexp [dep.sexp ...]")
+        return 1
+    }
+    outp = flint_get_arg(2)
+    out = flint_sb_new()
+    flint_sb_append(out, "(prog ")
+    mut first: i64 = 1
+    mut ai: i64 = 1
+    mut ok: i64 = 1
+    mut i: i64 = 6
+    mut go: i64 = 1
+    while ai < flint_arg_count() {
+        if ai == 2 {
+            ai = ai + 1
+        } else {
+            path = flint_get_arg(ai)
+            src = flint_read_file(path)
+            if flint_err_occurred() == 1 {
+                print("merge error: cannot read file")
+                print(path)
+                ok = 0
+                ai = flint_arg_count()
+            } else {
+                n = flint_str_length(src)
+                if mg_has_at(src, 0, "(prog ") == 0 {
+                    print("merge error: not a prog sexp")
+                    print(path)
+                    ok = 0
+                    ai = flint_arg_count()
+                } else {
+                    i = 6
+                    go = 1
+                    while go == 1 {
+                        i = mg_skip_ws(src, n, i)
+                        if i < n {
+                            c = flint_str_char_at(src, i)
+                            if c == 41 {
+                                go = 0
+                            } else {
+                                if c == 40 {
+                                    tag = mg_tag(src, i)
+                                    fe = mg_form_end(src, n, i)
+                                    if fe == -1 {
+                                        print("merge error: unbalanced form")
+                                        print(path)
+                                        ok = 0
+                                        go = 0
+                                        ai = flint_arg_count()
+                                    } else {
+                                        if tag != "import" {
+                                            if first == 0 {
+                                                flint_sb_append(out, " ")
+                                            }
+                                            flint_sb_append(out, flint_str_substring(src, i, fe))
+                                            first = 0
+                                        }
+                                        i = fe
+                                    }
+                                } else {
+                                    print("merge error: expected form")
+                                    print(path)
+                                    ok = 0
+                                    go = 0
+                                    ai = flint_arg_count()
+                                }
+                            }
+                        } else {
+                            go = 0
+                        }
+                    }
+                    ai = ai + 1
+                }
+            }
+        }
+    }
+    if ok == 0 {
+        flint_sb_free(out)
+        return 1
+    }
+    flint_sb_append(out, ")\n")
+    txt = flint_sb_build(out)
+    flint_sb_free(out)
+    r = flint_write_file(outp, txt)
+    if r == 0 {
+        0
+    } else {
+        print("merge error: cannot write file")
+        1
+    }
+}

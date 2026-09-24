@@ -1,0 +1,17 @@
+// AEGIS negative test: branch-sensitive use-after-free. The lease is freed
+// on one path of the if and used after the join — the static MAY-analysis
+// must reject this (a path-sensitive bug the scope-based borrow checker
+// cannot see).
+fn main() -> i64 {
+    lease = flint_aegis_alloc(16)
+    flint_aegis_write_i64(lease, 0, 9)
+    mut flag = 1
+    if flag == 1 {
+        flint_aegis_free(lease)
+    } else {
+        print(flint_aegis_read_i64(lease, 0))
+    }
+    v = flint_aegis_read_i64(lease, 0)
+    print(v)
+    0
+}

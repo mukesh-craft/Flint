@@ -1,0 +1,1 @@
+(prog (extern "C" (fn-decl puts (tparams) ( (s str -)) i64) (fn-decl printf (tparams) ( (fmt str -) (... - -)) i64)) (fn main (tparams) () i64 (block (expr (call puts (str 12 hello extern))) (expr (call printf (str 6 n=%d\n) (num 42))) (expr (call print (str 7 a\nb\tc))) (expr (num 0)) )) )

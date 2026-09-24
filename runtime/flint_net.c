@@ -4,14 +4,60 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdbool.h>
+// v0.20 PORT: POSIX sockets vs Winsock2. MinGW provides the BSD headers, so
+// this branch only triggers for MSVC-style toolchains (_WIN32 without the
+// POSIX socket headers). Link Windows programs with -lws2_32.
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <errno.h> // EINVAL/ENOMEM/etc. (socket errors use WSAGetLastError)
+#else
 #include <unistd.h>
 #include <errno.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>
-#include <fcntl.h>
-#include <sys/select.h>
+#endif
+
+// Socket compat layer: SOCKET handles are 64-bit on Win64 but int-like on// POSIX. The Flint API carries them as int64_t with -1 = invalid on both
+// (INVALID_SOCKET is (SOCKET)~0, which reads back as -1).
+#ifdef _WIN32
+typedef SOCKET flint_sock_t;
+#define FLINT_SOCK_INVALID INVALID_SOCKET
+#define FLINT_SOCK_CLOSE closesocket
+#define FLINT_SEND_FLAGS 0
+#define FLINT_SOCK_ERR() WSAGetLastError()
+#define FLINT_SOCK_EINTR WSAEINTR
+static int flint_sock_init(void) {
+    static LONG done = 0;
+    if (InterlockedCompareExchange(&done, 1, 0) == 0) {
+        WSADATA w;
+        if (WSAStartup(MAKEWORD(2, 2), &w) != 0) return -1;
+    }
+    return 0;
+}
+#else
+typedef int flint_sock_t;
+#define FLINT_SOCK_INVALID (-1)
+#define FLINT_SOCK_CLOSE close
+#define FLINT_SEND_FLAGS MSG_NOSIGNAL
+#define FLINT_SOCK_ERR() errno
+#define FLINT_SOCK_EINTR EINTR
+static int flint_sock_init(void) { return 0; }
+#endif
+
+// MSVC's errno.h lacks some POSIX codes MinGW provides; map to Winsock's.
+#ifdef _WIN32
+#ifndef ECONNREFUSED
+#define ECONNREFUSED WSAECONNREFUSED
+#endif
+#ifndef EPROTO
+#define EPROTO WSAEPROTONOSUPPORT
+#endif
+#endif
 
 extern void flint_panic(const char* msg);
 extern int64_t flint_g_err;
@@ -38,6 +84,10 @@ int64_t flint_tcp_connect(const char* host, int64_t port)
         flint_set_err(EINVAL);
         return -1;
     }
+    if (flint_sock_init() != 0) {
+        flint_set_err(EIO); // init failure; EIO exists on every platform
+        return -1;
+    }
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -55,22 +105,23 @@ int64_t flint_tcp_connect(const char* host, int64_t port)
         return -1;
     }
 
-    int fd = -1;
+    flint_sock_t fd = FLINT_SOCK_INVALID;
     struct addrinfo* rp;
     for (rp = result; rp; rp = rp->ai_next) {
         fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (fd < 0) continue;
+        if (fd == FLINT_SOCK_INVALID) continue;
 
-        if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
+        if (connect(fd, rp->ai_addr, (int)rp->ai_addrlen) == 0) break;
 
-        close(fd);
-        fd = -1;
+        FLINT_SOCK_CLOSE(fd);
+        fd = FLINT_SOCK_INVALID;
     }
 
     freeaddrinfo(result);
 
-    if (fd < 0) {
-        flint_set_err(errno ? errno : ECONNREFUSED);
+    if (fd == FLINT_SOCK_INVALID) {
+        int e = FLINT_SOCK_ERR();
+        flint_set_err(e ? e : ECONNREFUSED);
         return -1;
     }
 
@@ -83,20 +134,24 @@ int64_t flint_tcp_listen(int64_t port)
         flint_set_err(EINVAL);
         return -1;
     }
+    if (flint_sock_init() != 0) {
+        flint_set_err(EIO);
+        return -1;
+    }
 
-    int fd = socket(AF_INET6, SOCK_STREAM, 0);
-    if (fd < 0) {
+    flint_sock_t fd = socket(AF_INET6, SOCK_STREAM, 0);
+    if (fd == FLINT_SOCK_INVALID) {
         fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (fd < 0) {
-            flint_set_err(errno);
+        if (fd == FLINT_SOCK_INVALID) {
+            flint_set_err(FLINT_SOCK_ERR());
             return -1;
         }
     }
 
     int opt = 1;
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        close(fd);
-        flint_set_err(errno);
+    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt)) < 0) {
+        FLINT_SOCK_CLOSE(fd);
+        flint_set_err(FLINT_SOCK_ERR());
         return -1;
     }
 
@@ -114,15 +169,15 @@ int64_t flint_tcp_listen(int64_t port)
         addr4.sin_addr.s_addr = INADDR_ANY;
 
         if (bind(fd, (struct sockaddr*)&addr4, sizeof(addr4)) < 0) {
-            close(fd);
-            flint_set_err(errno);
+            FLINT_SOCK_CLOSE(fd);
+            flint_set_err(FLINT_SOCK_ERR());
             return -1;
         }
     }
 
     if (listen(fd, SOMAXCONN) < 0) {
-        close(fd);
-        flint_set_err(errno);
+        FLINT_SOCK_CLOSE(fd);
+        flint_set_err(FLINT_SOCK_ERR());
         return -1;
     }
 
@@ -131,17 +186,21 @@ int64_t flint_tcp_listen(int64_t port)
 
 int64_t flint_tcp_accept(int64_t server_fd)
 {
-    int sfd = (int)server_fd;
-    if (sfd < 0) {
+    flint_sock_t sfd = (flint_sock_t)server_fd;
+    if (server_fd < 0) {
         flint_set_err(EINVAL);
         return -1;
     }
 
     struct sockaddr_storage addr;
+#ifdef _WIN32
+    int addrlen = sizeof(addr);
+#else
     socklen_t addrlen = sizeof(addr);
-    int client_fd = accept(sfd, (struct sockaddr*)&addr, &addrlen);
-    if (client_fd < 0) {
-        flint_set_err(errno);
+#endif
+    flint_sock_t client_fd = accept(sfd, (struct sockaddr*)&addr, &addrlen);
+    if (client_fd == FLINT_SOCK_INVALID) {
+        flint_set_err(FLINT_SOCK_ERR());
         return -1;
     }
 
@@ -150,8 +209,8 @@ int64_t flint_tcp_accept(int64_t server_fd)
 
 int64_t flint_tcp_send(int64_t fd, const char* data, int64_t len)
 {
-    int sfd = (int)fd;
-    if (sfd < 0 || !data || len < 0) {
+    flint_sock_t sfd = (flint_sock_t)fd;
+    if (fd < 0 || !data || len < 0) {
         flint_set_err(EINVAL);
         return -1;
     }
@@ -159,14 +218,18 @@ int64_t flint_tcp_send(int64_t fd, const char* data, int64_t len)
     int64_t total_sent = 0;
     while (total_sent < len) {
         const char* buf = data + total_sent;
+        // Winsock takes int lengths; chunk for both APIs (also avoids
+        // size_t->int truncation on huge sends).
         size_t remain = (size_t)(len - total_sent);
-        ssize_t n = send(sfd, buf, remain, MSG_NOSIGNAL);
+        if (remain > (size_t)INT_MAX) remain = (size_t)INT_MAX;
+        int64_t n = (int64_t)send(sfd, buf, (int)remain, FLINT_SEND_FLAGS);
         if (n < 0) {
-            if (errno == EINTR) continue;
-            flint_set_err(errno);
+            int e = FLINT_SOCK_ERR();
+            if (e == FLINT_SOCK_EINTR) continue;
+            flint_set_err(e);
             return -1;
         }
-        total_sent += (int64_t)n;
+        total_sent += n;
     }
 
     return total_sent;
@@ -174,8 +237,8 @@ int64_t flint_tcp_send(int64_t fd, const char* data, int64_t len)
 
 char* flint_tcp_recv(int64_t fd, int64_t max_len)
 {
-    int sfd = (int)fd;
-    if (sfd < 0 || max_len < 0) {
+    flint_sock_t sfd = (flint_sock_t)fd;
+    if (fd < 0 || max_len < 0) {
         flint_set_err(EINVAL);
         return NULL;
     }
@@ -196,9 +259,9 @@ char* flint_tcp_recv(int64_t fd, int64_t max_len)
         return NULL;
     }
 
-    ssize_t n = recv(sfd, buf, cap, MSG_NOSIGNAL);
+    int64_t n = (int64_t)recv(sfd, buf, cap > (size_t)INT_MAX ? INT_MAX : (int)cap, FLINT_SEND_FLAGS);
     if (n < 0) {
-        flint_set_err(errno);
+        flint_set_err(FLINT_SOCK_ERR());
         free(buf);
         return NULL;
     }
@@ -235,15 +298,17 @@ char* flint_tcp_recv_all(int64_t fd, int64_t max_len)
     while (total < (int64_t)cap) {
         char* ptr = buf + total;
         size_t remain = cap - (size_t)total;
-        ssize_t n = recv(sfd, ptr, remain, MSG_NOSIGNAL);
+        if (remain > (size_t)INT_MAX) remain = (size_t)INT_MAX;
+        int64_t n = (int64_t)recv(sfd, ptr, (int)remain, FLINT_SEND_FLAGS);
         if (n < 0) {
-            if (errno == EINTR) continue;
-            flint_set_err(errno);
+            int e = FLINT_SOCK_ERR();
+            if (e == FLINT_SOCK_EINTR) continue;
+            flint_set_err(e);
             free(buf);
             return NULL;
         }
         if (n == 0) break;
-        total += (int64_t)n;
+        total += n;
     }
 
     buf[total] = '\0';
@@ -252,20 +317,28 @@ char* flint_tcp_recv_all(int64_t fd, int64_t max_len)
 
 void flint_tcp_close(int64_t fd)
 {
-    int sfd = (int)fd;
-    if (sfd >= 0) {
-        close(sfd);
+    flint_sock_t sfd = (flint_sock_t)fd;
+    if (fd >= 0 && sfd != FLINT_SOCK_INVALID) {
+        FLINT_SOCK_CLOSE(sfd);
     }
 }
 
 int64_t flint_tcp_set_timeout(int64_t fd, int64_t timeout_ms)
 {
-    int sfd = (int)fd;
-    if (sfd < 0 || timeout_ms < 0) {
+    flint_sock_t sfd = (flint_sock_t)fd;
+    if (fd < 0 || timeout_ms < 0) {
         flint_set_err(EINVAL);
         return -1;
     }
 
+#ifdef _WIN32
+    // Winsock takes milliseconds as a DWORD, not struct timeval.
+    DWORD ms = timeout_ms > (int64_t)INFINITE ? INFINITE : (DWORD)timeout_ms;
+    if (setsockopt(sfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&ms, sizeof(ms)) < 0) {
+        flint_set_err(FLINT_SOCK_ERR());
+        return -1;
+    }
+#else
     struct timeval tv;
     tv.tv_sec = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
@@ -274,6 +347,7 @@ int64_t flint_tcp_set_timeout(int64_t fd, int64_t timeout_ms)
         flint_set_err(errno);
         return -1;
     }
+#endif
 
     return 0;
 }
@@ -282,6 +356,11 @@ char* flint_dns_resolve(const char* hostname)
 {
     if (!hostname) {
         flint_set_err(EINVAL);
+        return NULL;
+    }
+    // Winsock requires WSAStartup even for name resolution.
+    if (flint_sock_init() != 0) {
+        flint_set_err(EIO);
         return NULL;
     }
 
@@ -402,7 +481,7 @@ static char* recv_http_response(int64_t fd, int64_t timeout_ms)
         return NULL;
     }
 
-    int sfd = (int)fd;
+    flint_sock_t sock = (flint_sock_t)fd;
     while (true) {
         if (len + 1 >= cap) {
             cap *= 2;
@@ -415,10 +494,13 @@ static char* recv_http_response(int64_t fd, int64_t timeout_ms)
             raw = tmp;
         }
 
-        ssize_t n = recv(sfd, raw + len, cap - len - 1, MSG_NOSIGNAL);
+        size_t want = cap - len - 1;
+        if (want > (size_t)INT_MAX) want = (size_t)INT_MAX;
+        int64_t n = (int64_t)recv(sock, raw + len, (int)want, FLINT_SEND_FLAGS);
         if (n < 0) {
-            if (errno == EINTR) continue;
-            flint_set_err(errno);
+            int e = FLINT_SOCK_ERR();
+            if (e == FLINT_SOCK_EINTR) continue;
+            flint_set_err(e);
             free(raw);
             return NULL;
         }

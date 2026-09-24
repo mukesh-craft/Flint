@@ -1,0 +1,7 @@
+// AEGIS negative test: double-free must be rejected AT COMPILE TIME.
+fn main() -> i64 {
+    lease = flint_aegis_alloc(16)
+    flint_aegis_free(lease)
+    flint_aegis_free(lease)
+    0
+}
