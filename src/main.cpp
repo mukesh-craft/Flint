@@ -487,6 +487,30 @@ static uint64_t fnv1a(llvm::StringRef s) {
 // changed import must never reuse a cached module. Every import read
 // records (path, content-hash) here; the cache writes/verifies a sidecar.
 static std::vector<std::pair<std::string, uint64_t>> g_importHashes;
+static std::mutex g_importMutex; // parallel imports append concurrently
+static void recordImportHash(const std::string& absPath, llvm::StringRef bytes) {
+    std::lock_guard<std::mutex> lock(g_importMutex);
+    g_importHashes.emplace_back(absPath, fnv1a(bytes));
+}
+
+// A1: compiler identity baked by build.sh (-DFLINT_VERSION="...").
+#ifndef FLINT_VERSION
+#define FLINT_VERSION "dev"
+#endif
+static const char* kFlintVersion = FLINT_VERSION;
+
+// A1: salt the content-addressed cache key with compiler identity +
+// codegen-affecting flags. Previously the key was main-file bytes only,
+// so a rebuilt/upgraded flintc (or different --unsafe/--opt-level/
+// --backend) silently reused stale modules/binaries.
+static std::string cacheSalt(llvm::CodeGenOptLevel ol, bool releaseMode,
+                             const std::string& backend, const char* argv0) {
+    struct stat st;
+    uint64_t mt = 0;
+    if (argv0 && stat(argv0, &st) == 0) mt = (uint64_t)st.st_mtime;
+    return "flintc-v" + std::string(kFlintVersion) + "-o" + std::to_string((int)ol)
+         + (releaseMode ? "-unsafe" : "-safe") + "-" + backend + "-m" + std::to_string(mt);
+}
 
 // ============================================================================
 // MODULE CACHE — content-addressed LLVM bitcode cache
@@ -498,7 +522,10 @@ public:
     ModuleCache() {
         const char* home = getenv("HOME");
         cacheDir = std::string(home ? home : ".") + "/.cache/flintc";
-        mkdir(cacheDir.c_str(), 0755);
+        // create_directories (not single mkdir): a fresh HOME without
+        // .cache/ must still cache instead of failing every write silently.
+        std::error_code ec = llvm::sys::fs::create_directories(cacheDir);
+        if (ec) std::cerr << "cache dir error: " << ec.message() << "\n";
     }
 
     std::string bitcodePath(uint64_t hash) const {
@@ -509,14 +536,54 @@ public:
         return cacheDir + "/" + std::to_string(hash) + ".bin";
     }
 
+    std::string sidecarPath(uint64_t hash) const {
+        return cacheDir + "/" + std::to_string(hash) + ".imports";
+    }
+
+    // A1: import sidecar — `<hash> <abspath>` per import, one per line.
+    // Written on every save; a load without a matching sidecar is a miss.
+    // (The g_importHashes header comment always promised this; it is now real.)
+    void saveSidecar(uint64_t hash) {
+        std::ofstream out(sidecarPath(hash), std::ios::trunc);
+        if (!out) return;
+        std::lock_guard<std::mutex> lock(g_importMutex);
+        for (auto& kv : g_importHashes) out << kv.second << " " << kv.first << "\n";
+    }
+
+    // Re-hash every recorded import from disk; any change/missing file
+    // invalidates the entry. No sidecar (pre-A1 entry) also misses —
+    // safe because the A1 salt already retires all legacy hashes.
+    bool verifySidecar(uint64_t hash) const {
+        std::ifstream in(sidecarPath(hash));
+        if (!in) return false;
+        std::string line;
+        while (std::getline(in, line)) {
+            auto sp = line.find(' ');
+            if (sp == std::string::npos) return false;
+            errno = 0;
+            char* end = nullptr;
+            unsigned long long want =
+                ::strtoull(line.c_str(), &end, 10);
+            if (errno != 0 || !end || end != line.c_str() + (ptrdiff_t)sp) return false;
+            std::string path = line.substr(sp + 1);
+            if (path.empty()) return false;
+            auto buf = llvm::MemoryBuffer::getFile(path);
+            if (!buf) return false;
+            if (fnv1a(buf.get()->getBuffer()) != (uint64_t)want) return false;
+        }
+        return true;
+    }
+
     bool has(uint64_t hash) const {
         struct stat st;
-        return stat(bitcodePath(hash).c_str(), &st) == 0;
+        if (stat(bitcodePath(hash).c_str(), &st) != 0) return false;
+        return verifySidecar(hash);
     }
 
     bool hasBinary(uint64_t hash) const {
         struct stat st;
-        return stat(binaryPath(hash).c_str(), &st) == 0;
+        if (stat(binaryPath(hash).c_str(), &st) != 0) return false;
+        return verifySidecar(hash);
     }
 
     void save(llvm::Module* mod, uint64_t hash) {
@@ -526,11 +593,13 @@ public:
         if (ec) { std::cerr << "cache write error: " << ec.message() << "\n"; return; }
         llvm::WriteBitcodeToFile(*mod, out);
         out.close();
+        saveSidecar(hash);
     }
 
     void saveBinary(uint64_t hash, const std::string& binPath) {
         auto dest = binaryPath(hash);
         llvm::sys::fs::copy_file(binPath, dest);
+        saveSidecar(hash);
     }
 
     bool loadBinary(uint64_t hash, const std::string& outputPath) {
@@ -7542,6 +7611,7 @@ static void processFile(const std::string& path, std::unique_ptr<ProgramAST>& co
     auto fileBuf = llvm::MemoryBuffer::getFile(path);
     if (!fileBuf) { firstError = "error: cannot open '" + path + "'"; return; }
     llvm::StringRef sourceRef = fileBuf.get()->getBuffer();
+    recordImportHash(absPath, sourceRef);
 
     Lexer lexer(sourceRef);
     Parser parser(lexer);
@@ -8458,8 +8528,11 @@ int main(int argc, char* argv[]) {
     if (emitObj) objectPath = outputPath;
     else objectPath = outputPath + ".flint.o";
 
-    // Check content-addressed cache
-    uint64_t sourceHash = fnv1a(sourceRef);
+    // Check content-addressed cache.
+    // A1: the key mixes compiler identity + codegen flags with the source
+    // (see cacheSalt) so rebuilds/upgrades/flag changes bust stale entries.
+    uint64_t sourceHash =
+        fnv1a(cacheSalt(optLevel, releaseMode, backend, argv[0]) + std::string(1, '\0') + sourceRef.str());
     ModuleCache cache;
 
     // For binary output, check if cached binary exists (skip lex/parse/codegen/link entirely)

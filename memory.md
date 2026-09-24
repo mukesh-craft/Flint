@@ -2036,6 +2036,31 @@ after the emitter change (fixed point still byte-identical).
 Landmine: driver `TMPD` paths are shared — never run driver/opt-identity
 gates concurrently (cross-contamination mimics miscompiles).
 
+### SESSION 2026-09-24c — roadmap Phase J/A1: version-salted cache + docs check
+
+- **Salt** (`src/main.cpp` `cacheSalt`, `build.sh` `-DFLINT_VERSION`):
+  key = `flintc-v<version>-o<opt>-safe|unsafe-<backend>-m<binary mtime>`
+  + NUL + source bytes. Rebuilds, upgrades, and flag changes bust stale
+  `.bc`/`.bin` entries (previously key was main-file bytes only).
+- **Import sidecars** (`<hash>.imports`, `<rev> <abspath>` per line):
+  the `g_importHashes` header comment always promised this — implemented
+  now. `processFile` records (mutex-guarded for parallel imports);
+  `save`/`saveBinary` write, `has`/`hasBinary` verify (missing sidecar
+  = miss, so legacy entries never hit under the new salt anyway).
+- **Fragility found while testing**: `ModuleCache` ctor used single
+  `mkdir` — fresh `$HOME` without `.cache/` silently disabled ALL
+  caching. Now `create_directories` (had to fix the call: LLVM returns
+  the error code, no out-param overload).
+- **Harnesses**: `tests/test_cache.sh` (safe/unsafe entry separation +
+  edited-import rebuild, isolated `$HOME`, 6/6) and
+  `tools/docs_check.sh` (README Testing-table counts + tutorial 8/198 +
+  ladder 21 goldens; deterministic only, no timings), both wired into
+  `.github/workflows/flint.yml` (v1 gate stays 17).
+- Verified solo: build clean, test_cache 6/6, docs_check 0 fails (+
+  negative test on bad root fails as designed), smoke 14/14, registry
+  0 fails, opt-identity 11/11 (the AOT-correctness gate for this change).
+- ROADMAP Phase J A1 flipped ✅. Next: A2 for-in-collection P0 crash.
+
 1. Read `REQUIREMENTS.md` for setup
 2. Read `ROADMAP.md` for phase status
 3. Test with `./flintc examples/hello.fl` (JIT run) or `./flintc examples/hello.fl output.ll && clang output.ll runtime.o -o hello && ./hello` (AOT)

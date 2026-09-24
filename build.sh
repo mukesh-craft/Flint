@@ -23,6 +23,10 @@ CC=${CC:-clang}
 # linker extras apply on Linux and are skipped elsewhere.)
 OPT="-O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security -fPIE"
 CXXFLAGS="$(llvm-config --cxxflags | sed 's/-Werror//g') $OPT"
+# A1: bake VERSION into the binary so the module cache can salt its keys
+# (a rebuilt/upgraded flintc must never reuse stale cached artifacts).
+FLINT_VERSION="$(cat VERSION 2>/dev/null || echo dev)"
+CXXFLAGS="$CXXFLAGS -DFLINT_VERSION=\"$FLINT_VERSION\""
 LDFLAGS="$(llvm-config --ldflags) $(llvm-config --libs) $STDLIB_FLAG -pie"
 case "$OS" in
     Linux*) LDFLAGS="$LDFLAGS -Wl,-z,relro,-z,now,-z,noexecstack" ;;

@@ -541,7 +541,7 @@ done), hygiene/docs (commit + push done, auto-docs open).
 
 | Task | Goal | Locations | Acceptance gate | Effort |
 |------|------|-----------|-----------------|--------|
-| A1 version-salt cache + self-updating docs | stop stale-cache false-greens; CI regenerates README tables, fails on drift | `.github/workflows`, `docs/` (DOCS/CI-ONLY) | cache-bust verified on version change; 17/17 stays green | S |
+| A1 version-salt cache + self-updating docs | ✅ done 2026-09-24: version+flags+binary-mtime salt, import sidecars, `tools/docs_check.sh` + `tests/test_cache.sh` in CI | `.github/workflows`, `docs/` (DOCS/CI-ONLY) | cache-bust verified on version change; 17/17 stays green | S |
 | A2 for-in-collection desugar crash (P0) | kind-aware desugar, no new syntax: array → len-extract + direct GEP; str → `str_length` + byte load | `src/main.cpp` `parseForStmt`/`buildRangeLoop`/collection path + `parseForStmtEmit` (CPP-ONLY) | former crash repro passes; smoke + differential + emit gates green | S |
 | A3 flamegraph + check-bce diagnostic | cheap measurement first; prove bounds-check cost before removing any; zero codegen change by default | `Timer` profiler + new script only (CPP-ONLY; flamegraph renderer currently absent) | on-demand flamegraph artifact; diagnostic prints eliminated-check count | S |
 

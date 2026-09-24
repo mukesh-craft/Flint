@@ -59,6 +59,10 @@ jobs:
         run: bash tests/test_fmt.sh ./flintc
       - name: Error-catalog sync gate
         run: bash tests/test_errors.sh
+      - name: Docs-table sync gate (README counts match tree)
+        run: bash tools/docs_check.sh .
+      - name: Cache-salt gate (flags/imports bust cache)
+        run: bash tests/test_cache.sh ./flintc
       - name: Opt-identity gate (O0/O2/O3/fast/unsafe agree)
         run: bash tests/test_opt_identity.sh ./flintc
       - name: Fuzz corpus replay gate

@@ -166,8 +166,8 @@ flint/
 
 ## Known Limitations
 
-1. **String concat is O(n²):** `flint_str_concat` allocates + copies full string each call. Avoid in tight loops.
-2. **No `true`/`false` literals:** Use `1`/`0` for booleans.
-3. **strrev at n=100K:** May panic due to memory exhaustion from O(n²) concat. n=10K works fine.
+1. **String concat is O(n²):** `flint_str_concat` allocates + copies full string each call. Avoid in tight loops (use the `flint_sb_*` builder path instead).
+2. **`true`/`false` literals exist:** they evaluate to `1`/`0` (verified: `print(true)` → `1`). Older docs saying otherwise are stale.
+3. **strrev at n=100K: fixed 2026-09-13 (R5).** Rebuilt on the linear `flint_sb_*` builder; now passes with correct checksum (5044012, verified 2026-09-24).
 4. **LLVM ISEL edge cases:** Mixed i64/f64 arithmetic is mostly fixed but may still crash in rare unsupported cases on AArch64.
-5. **No self-hosting yet:** The compiler is written in C++, not Flint.
+5. **Self-hosting: done.** Lexer/parser/emitter are Flint programs (`stage1-3/*.fl`); bootstrap A/B/C + stable promotion green, V1 gate 17/17 (2026-09-24).
