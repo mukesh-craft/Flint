@@ -54,6 +54,21 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 - **Packages** — `flint.toml` + `flintc fetch` + pinned `flint.lock`
 - **Developer tools** — `flintc run/build/test/fmt/doc/lsp/new/api/help`, `flint test`, `flint fmt --check`
 
+## Status (2026-09-24, verified on Termux AArch64)
+
+- **V1 gate 17/17 green** (`bash tests/v1_gate_check.sh ./flintc --full`):
+  self-host bootstrap A/B/C + stable promotion (fixed point
+  byte-identical), stage-3 ladder 21/21, tutorial 8/8, differential,
+  sanitizers, opt-identity, registry, driver — see `memory.md`
+- **Self-hosted** — lexer/parser/emitter are Flint programs
+  (`stage1-3/*.fl`); C++ `flintc` bootstraps them, then they compile
+  themselves
+- **Known gap (P0):** `for x in <array/str>` collection iteration
+  miscompiles on the C++ path (ranges and `range()` are fine) —
+  tracked as ROADMAP Phase J/A2
+- Next work is ordered in **[ROADMAP.md](ROADMAP.md) Phase J** (post-V1
+  plan: lock-in + P0 crash → measure + safety wins → bigger bets)
+
 ## Syntax
 
 ```flint
@@ -394,6 +409,7 @@ This repo uses `memory.md` to track project context, bug fixes, and decisions fo
 
 | Version | Date | Description |
 |---------|------|-------------|
+| Unreleased | 2026-09-24 | V1 gate 17/17 (self-host A/B/C+stable, ladder 21/21, tutorial 8/8, registry, driver); exact i64 literals; lambda captures; AEGIS/chan runtime wiring; `flint.toml` fetch/cache/offline; pushed to `mukesh-craft/Flint` |
 | 0.22.0 | 2026-09-06 | Concurrency: channels, parallel-for fix, --emit-header, WASM objects |
 | 0.21.0 | 2026-09-06 | Tutorial track (8 runnable lessons) + match-value/print-f64 fixes |
 | 0.20.0 | 2026-09-06 | Windows port: Winsock, MinGW-verified runtime, cross-linked hello.exe |

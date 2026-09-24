@@ -119,7 +119,7 @@
 | Pattern matching | ✅ | ~200 (paired with enums) |
 | Generics / type parameters | ✅ | ~250 |
 | Module system (multi-file compilation) | ✅ | ~100 |
-| Self-hosting: Flint compiler written in Flint | 📋 | 800-1200 Flint + 100 C |
+| Self-hosting: Flint compiler written in Flint | ✅ (bootstrap A/B/C + stable promotion green 2026-09-24; see `memory.md`) | 800-1200 Flint + 100 C |
 
 ---
 
@@ -515,6 +515,57 @@ clang output.ll runtime.o -o hello
 | `flint fmt` (auto-formatter script) | ✅ |
 | `flint doc` (documentation generator script) | ✅ |
 | `flint-lsp` (basic LSP server with completion/hover) | ✅ |
+
+## Phase J: Post-V1 Improvement Plan (compiled 2026-09-24)
+
+**State:** V1 gate 17/17 green, self-host bootstrap A/B/C + stable
+promotion green (fixed point byte-identical), pushed to
+`mukesh-craft/Flint`. Plan produced by a 5-agent review pipeline
+(ideas → fact-check → project-fit scoring → code-location mapping →
+compiled plan) and verified against the tree before writing.
+**Standing constraints:** Termux 3.6GB RAM, all gates run solo (never
+parallel — shared `$TMPD` paths cross-contaminate); no new external
+libraries; keep diffs small; every change re-greened end-to-end.
+
+Fact-check verdicts: CONFIRMED open — for-in-collection desugar crash,
+G7 tail, allocator/PGO work, loop vectorizer story, stage-2 LSP +
+DWARF, flamegraph/check-bce diagnostics, WASI/`$TMPDIR`/tiers.
+PARTIAL (done half skipped, open half planned) — interface caching
+(C1 done), CGU tune (cache-split done; CGU code has zero hits in
+`src/main.cpp`, likely lost in the 09-14 wipe — needs data before
+re-implementation), self-emitter parity (attrs landed + goldens
+re-blessed, check-drop open), cold panics/UB audit (checked-by-default
+done), hygiene/docs (commit + push done, auto-docs open).
+
+### J-A: Lock in + P0 crash (do first)
+
+| Task | Goal | Locations | Acceptance gate | Effort |
+|------|------|-----------|-----------------|--------|
+| A1 version-salt cache + self-updating docs | stop stale-cache false-greens; CI regenerates README tables, fails on drift | `.github/workflows`, `docs/` (DOCS/CI-ONLY) | cache-bust verified on version change; 17/17 stays green | S |
+| A2 for-in-collection desugar crash (P0) | kind-aware desugar, no new syntax: array → len-extract + direct GEP; str → `str_length` + byte load | `src/main.cpp` `parseForStmt`/`buildRangeLoop`/collection path + `parseForStmtEmit` (CPP-ONLY) | former crash repro passes; smoke + differential + emit gates green | S |
+| A3 flamegraph + check-bce diagnostic | cheap measurement first; prove bounds-check cost before removing any; zero codegen change by default | `Timer` profiler + new script only (CPP-ONLY; flamegraph renderer currently absent) | on-demand flamegraph artifact; diagnostic prints eliminated-check count | S |
+
+### J-B: Measure + cheap safety wins
+
+| Task | Goal | Locations | Acceptance gate | Effort |
+|------|------|-----------|-----------------|--------|
+| B1 cold panics + UB audit | mark panic/overflow/bounds paths cold; audit `runtime.c` casts under UBSan (checked-by-default already done — not redone) | `runtime/runtime.c` `flint_panic`, `flint_bounds_check` (CPP-ONLY) | no perf regression on 17/17; sanitizers clean | S/M |
+| B2 redundant-check drop | drop provably-redundant checks only (emitter attrs already done — not redone). EDIT-FLINT, HIGH fixpoint risk | `stage3/flint_emit.fl` `e_rt_sig`, `e_bounds_inline` | falsifier: self-host fixpoint byte-identical + 17/17; abort on any differential mismatch | M |
+| B3 interface-cache remainder + init timing | finish only the open cache paths; measure process-init share to decide if a daemon is ever justified (C1 done — not redone) | `src/main.cpp` `emitInterface`/`loadInterface` (CPP-ONLY) | hit-rate + init-time logged; no cold-build slowdown; 17/17 green | M |
+
+### J-C: Bigger bets (only if A+B green)
+
+| Task | Goal | Locations | Acceptance gate | Effort |
+|------|------|-----------|-----------------|--------|
+| C1 loop codegen / vectorizer | narrow loop-opt pass, off by default (checks are NOT the bottleneck today: `--unsafe` ≈ checked, zero `vector.body` in IR) | `src/main.cpp` `runLLVMOptimizations`/loop emission (CPP-ONLY) | flag-gated; bit-identical when off; measured speedup when on | M |
+| C2 WASI hello + `$TMPDIR` hermetic + tiers | hermetic tmp paths; hello-only WASI probe (objects emit today, nothing executes); tier matrix | `runtime` temp-dir helper (CPP-ONLY + CI; WASI linkage currently absent) | hermetic build passes; tiers documented; no default-behavior change | M |
+| C3 allocator A/B + PGO/ThinLTO/BOLT | A/B `ArenaAllocator` + build-flag experiments, kill if <5%, never vendor, no default switch | `ArenaAllocator`, `build.sh` (CPP-ONLY; none of mimalloc/PGO/ThinLTO/BOLT present today) | opt-in flags only; peak RSS < 3.6 GB on Termux; measured win or revert | M |
+
+### J Non-goals (deferred with reason)
+
+- CGU auto-tune: cache-split done; CGU code absent + low fit — defer until A3/B3 data justifies re-implementation.
+- LSP on stage-2 + DWARF: largest effort, EDIT-FLINT fixpoint risk, DWARF infra absent — defer.
+- G7 tail (slices/payload enums/non-i64 maps/float arrays): broad scope, EDIT-FLINT fixpoint risk at `e_slice`/`e_enum_lit_payload`/`e_map_lit` + `SliceExprAST`/`emitSliceAccess` — defer.
 
 ---
 
