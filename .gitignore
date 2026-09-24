@@ -21,3 +21,15 @@ profile_data.csv
 flint-build
 flintc.fl
 flint-test
+# Debug/ASan compiler binary (rebuildable, 16MB — never commit)
+/flintc_asan
+# Bisection/scratch leftovers (root only — stage*/agent-bench files unaffected)
+/tmpcheck/
+/ov.fl
+/ov.txt
+/b[0-9]*.fl
+/b[0-9]*.txt
+/p[0-9]*.fl
+/p[0-9]*.txt
+/c_*.fl
+/c_*.txt

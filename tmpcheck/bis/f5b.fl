@@ -1,6 +1,0 @@
-fn main() -> i64 {
- c = 1
- d = !c
- print(d)
- 0
-}

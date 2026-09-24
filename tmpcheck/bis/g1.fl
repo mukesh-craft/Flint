@@ -1,7 +1,0 @@
-fn main() -> i64 {
- a = flint_array_alloc(4)
- a[0] = 40
- print(flint_array_get(a, 0))
- flint_array_free(a)
- 0
-}
