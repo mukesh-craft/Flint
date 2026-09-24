@@ -237,12 +237,17 @@ flags plus standalone Python scripts:
 ./flintc --lib-path DIR main.fl      # extra library search path
 ./flintc --link "ffi_helper.o" main.fl  # extra linker objects/flags
 ./flintc --offline main.fl           # registry: cache only, fail if missing
+./flintc --check-bce main.fl         # diagnostic: safety checks emitted
+                                     # vs surviving O2 (changes nothing)
 ./flintc --emit-interface a.fl b.flint.bc  # declarations only
 ./flintc --use-interface b.flint.bc main.fl -o app  # build against them
 ./flintc --dump-tokens main.fl       # stable token dump (matches stage1)
 python3 flint-fmt main.fl [--check]  # format (--check fails if unformatted)
 python3 flint-doc main.fl            # docs to stdout
 python3 flint-lsp                    # basic LSP server over stdio
+./flintc_prof main.fl -o app         # profiled build, writes profile_report.json
+python3 tools/flamegraph.py profile_report.json flame.svg  # tree SVG view
+python3 tools/flamegraph.py profile_report.json --folded   # folded stacks
 ```
 
 Known tooling gaps (do not rely on these):

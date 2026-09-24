@@ -543,7 +543,7 @@ done), hygiene/docs (commit + push done, auto-docs open).
 |------|------|-----------|-----------------|--------|
 | A1 version-salt cache + self-updating docs | ✅ done 2026-09-24: version+flags+binary-mtime salt, import sidecars, `tools/docs_check.sh` + `tests/test_cache.sh` in CI | `.github/workflows`, `docs/` (DOCS/CI-ONLY) | cache-bust verified on version change; 17/17 stays green | S |
 | A2 for-in-collection desugar crash (P0) | ✅ done 2026-09-24: array/str paths were already kind-aware; non-iterables (int/map/void) fell to vec-runtime/bitcast → JIT segfault or silent skip. Now loud `for-in needs an array or str collection` in AST + emit paths (matches stage3 e_for); dead vec fallbacks removed; `tests/t_for_bad.fl` + `check_fail` in smoke | `src/main.cpp` `parseForStmt`/collection path + `parseForStmtEmit` (CPP-ONLY) | repro segfault→clean error; smoke 15/15 + differential + ladder + tutorial + parse-gate/fixpoint/lexdiff green | S |
-| A3 flamegraph + check-bce diagnostic | cheap measurement first; prove bounds-check cost before removing any; zero codegen change by default | `Timer` profiler + new script only (CPP-ONLY; flamegraph renderer currently absent) | on-demand flamegraph artifact; diagnostic prints eliminated-check count | S |
+| A3 flamegraph + check-bce diagnostic | ✅ done 2026-09-24: profiler records stack parents; `tools/flamegraph.py` renders folded/SVG (stdlib only); `--check-bce` prints emitted vs O2-surviving checks, changes nothing | `Timer` profiler + new script only (CPP-ONLY; flamegraph renderer currently absent) | on-demand flamegraph artifact; diagnostic prints eliminated-check count | S |
 
 ### J-B: Measure + cheap safety wins
 

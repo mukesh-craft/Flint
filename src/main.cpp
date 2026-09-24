@@ -76,14 +76,17 @@ static bool parseI64Exact(const std::string& lit, int64_t& out) {
 
 class Timer {
     using Clock = std::chrono::high_resolution_clock;
-    struct Record { const char* phase; Clock::time_point start; Clock::duration wall; };
+    struct Record { const char* phase; Clock::time_point start; Clock::duration wall; int parent; };
     std::vector<Record> records;
     std::vector<size_t> stack;
     Clock::time_point programStart;
 public:
     Timer() { programStart = Clock::now(); }
     void begin(const char* phase) {
-        records.push_back({phase, Clock::now(), {}});
+        // A3: record the stack parent so tools/flamegraph.py can rebuild
+        // the tree (flat wall times alone cannot nest phases).
+        int parent = stack.empty() ? -1 : (int)stack.back();
+        records.push_back({phase, Clock::now(), {}, parent});
         stack.push_back(records.size() - 1);
     }
     void end() {
@@ -99,7 +102,8 @@ public:
         for (auto& r : records) {
             if (!first) out << ",\n";
             first = false;
-            out << "    {\"phase\":\"" << r.phase << "\",\"wall_ns\":" << r.wall.count() << "}";
+            out << "    {\"phase\":\"" << r.phase << "\",\"wall_ns\":" << r.wall.count()
+                << ",\"parent\":" << r.parent << "}";
         }
         out << "\n  ]\n}\n";
         out.close();
@@ -182,6 +186,27 @@ static bool isSafePath(const std::string& p) {
         if (c == '\0' || c == '\n' || c == '\r') return false;
     }
     return true;
+}
+
+// A3: count explicit safety checks in a module: bounds/null runtime calls
+// + integer overflow intrinsics. Counting only — never changes codegen.
+// Used by --check-bce to show how many checks O2 already eliminates.
+static long countChecks(llvm::Module* mod) {
+    long n = 0;
+    for (auto& f : *mod) {
+        for (auto& bb : f) {
+            for (auto& inst : bb) {
+                auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
+                if (!call) continue;
+                llvm::Function* callee = call->getCalledFunction();
+                if (!callee) continue;
+                llvm::StringRef name = callee->getName();
+                if (name == "flint_bounds_check" || name == "flint_null_check") { n++; continue; }
+                if (name.contains(".with.overflow")) n++;
+            }
+        }
+    }
+    return n;
 }
 
 // Split a flag string (e.g. from python3-config) on whitespace into argv tokens.
@@ -8386,6 +8411,7 @@ int main(int argc, char* argv[]) {
     bool releaseMode = false; // default: safe mode with overflow checks
     bool safeMode = true;     // --safe is now the default
     bool offlineMode = false; // --offline: registry uses cache only, no fetch
+    bool checkBce = false;    // --check-bce: report emitted vs O2-surviving checks
     std::vector<std::string> libPaths;
     // Default library path: compiler's parent dir / std
     {
@@ -8468,6 +8494,8 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--test") {
             // Will be handled after JIT compilation: run all test_ functions
             runMode = false;
+        } else if (arg == "--check-bce") {
+            checkBce = true; // diagnostic only: report check counts, change nothing
         } else if (arg == "--run") {
             runMode = true; // explicit no-op (it's the default)
         } else if (arg == "--dump-tokens" && i + 1 < argc) {
@@ -8833,12 +8861,20 @@ int main(int argc, char* argv[]) {
     }
 
     // Run LLVM IR optimization passes — O2 by default with overflow checks for safety
+    long checksBeforeOpt = -1;
+    if (checkBce) checksBeforeOpt = countChecks(codegen.mod.get());
     {
         PROFILE_BEGIN("llvm_opt");
         llvm::OptimizationLevel ol = llvm::OptimizationLevel::O2;
         if (!releaseMode) { /* safe mode: overflow checks added at codegen level */ }
         if (!getenv("FLINT_NO_OPT")) runLLVMOptimizations(codegen.mod.get(), ol);
         PROFILE_END(); // llvm_opt
+    }
+    if (checkBce) {
+        long checksAfterOpt = countChecks(codegen.mod.get());
+        std::cout << "bce: " << checksBeforeOpt << " checks emitted, "
+                  << checksAfterOpt << " survive O2 ("
+                  << (checksBeforeOpt - checksAfterOpt) << " elided)\n";
     }
 
     // --test mode: compile & run all test_ functions via JIT, report results

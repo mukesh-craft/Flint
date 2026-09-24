@@ -33,3 +33,5 @@ flint-test
 /p[0-9]*.txt
 /c_*.fl
 /c_*.txt
+# Profiler output (generated in CWD by flintc_prof runs)
+profile_report.json

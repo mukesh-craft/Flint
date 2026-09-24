@@ -2087,6 +2087,33 @@ gates concurrently (cross-contamination mimics miscompiles).
   errors 116/116, merge 6/6, emit 3/3. ROADMAP A2 flipped ✅.
   Next: A3 flamegraph + check-bce diagnostic.
 
+### SESSION 2026-09-24e — roadmap Phase J/A3: measurement diagnostics
+
+- **Profiler nesting** (`Timer::Record.parent`, flintc_prof-only ifdef):
+  flat wall times couldn't nest phases, so `begin()` now records the
+  stack parent and the JSON carries `"parent":N` (old JSON without it
+  degrades to a flat list, not an error).
+- **`tools/flamegraph.py`** (stdlib only): rebuilds the tree, emits
+  folded stacks (`--folded`) or a self-contained SVG (validated with
+  xml parser, 18 rects on sum_array profile). Usage: `flintc_prof
+  prog.fl -o prog` then render. Verified nesting
+  (`total;codegen;codegen_init`) and `--help` exit path.
+- **`--check-bce` flag** (`countChecks` + hook around the O2 block):
+  counts `flint_bounds_check`/`flint_null_check` calls + `.with.overflow`
+  intrinsics before/after opt, prints `bce: N emitted, M survive O2
+  (K elided)`. Measured: sum_array 7→4, pi 2→1; default off (zero
+  output without the flag, zero codegen change always).
+- Incidents fixed en route: a no-op edit accidentally joined two lines
+  in `isSafePath` (caught by immediate re-read, restored + helper added
+  cleanly); `profile_report.json` (generated artifact) added to
+  `.gitignore`; README Tooling gained `--check-bce`/flamegraph lines.
+- Verified solo: build clean, smoke 15/15, registry 0 fails, tutorial
+  8/8, differential 5/5. ROADMAP A3 flipped ✅.
+  Push note: remote rejected the A2+A1 push — classic PAT lacks
+  `workflow` scope and A1 touched `.github/workflows/flint.yml`.
+  Needs a token with workflow scope (or Workflows read+write) to push.
+  Next: Phase J/B (B1 cold panics + UB audit).
+
 1. Read `REQUIREMENTS.md` for setup
 2. Read `ROADMAP.md` for phase status
 3. Test with `./flintc examples/hello.fl` (JIT run) or `./flintc examples/hello.fl output.ll && clang output.ll runtime.o -o hello && ./hello` (AOT)
