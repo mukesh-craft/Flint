@@ -1,0 +1,7 @@
+FAIL tests/t_funcs.fl (exit 1)
+codegen: undefined function 'x'
+function body emission failed
+FAIL tests/t_funcs.fl (exit 1)
+codegen: undefined function 'x'
+function body emission failed
+smoke: 11 passed, 2 failed

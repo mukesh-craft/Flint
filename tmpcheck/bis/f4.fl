@@ -1,0 +1,6 @@
+fn main() -> i64 {
+ s = 25
+ r = if s > 20 { 1 } elif s > 10 { 2 } else { 3 }
+ print(r)
+ 0
+}

@@ -1,0 +1,6 @@
+fn main() -> i64 {
+ a = flint_array_alloc(4)
+ print(flint_array_len(a))
+ flint_array_free(a)
+ 0
+}

@@ -1,0 +1,8 @@
+fn main() -> i64 {
+ mut s: i64 = 0
+ for i in range(10) {
+ s += i
+ }
+ print(s)
+ 0
+}

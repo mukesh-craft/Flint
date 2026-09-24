@@ -1,0 +1,7 @@
+fn main() -> i64 {
+ c = 1 && 1
+ d = !c
+ print(c)
+ print(d)
+ 0
+}
