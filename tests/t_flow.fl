@@ -39,5 +39,10 @@ fn main() -> i64 {
     print(flint_array_get(a, 0))
     print(flint_array_get(a, 3))
     flint_array_free(a)
+    // A2b: parallel-for worker hoisting (was: undefined var '__pfor_0').
+    // Values print in nondeterministic order; run.sh greps per line.
+    parallel for i in 0..5 {
+        print(100 + i)
+    }
     0
 }

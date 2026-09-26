@@ -2114,6 +2114,108 @@ gates concurrently (cross-contamination mimics miscompiles).
   Needs a token with workflow scope (or Workflows read+write) to push.
   Next: Phase J/B (B1 cold panics + UB audit).
 
+### SESSION 2026-09-26 — bug cleanup: match/if void-PHI abort + if predecessor
+
+- **enums.fl aborted the compiler** (LLVM PHI assertion) on match arms
+  written as `{ ... }` blocks. Root cause: `print` yields a *void-typed*
+  LLVM value, and all three PHI sites (`emitMatch`, `emitIfExpr`,
+  emit-mode match) fed void (or mismatched) values into PHIs —
+  `ConstantInt::get(non-int)` / `addIncoming` mismatch → abort, never a
+  clean error. Fixed with one discipline: void-typed arms can never join
+  a PHI; all-void/null = statement context (return 0, existing
+  convention); mixed or mismatched = loud `codegenError`/`parseError`
+  (`match/if arms/branches must yield the same type`); null arms coerce
+  via `Constant::getNullValue` (old `ConstantInt::get(phiTy,0)` aborted
+  for non-int phi types). Verified: block arms work (enums.fl → 42/99),
+  mixed arms error rc=1, value arms unchanged.
+- **Pre-existing tree corruption found via ASan**: `for x in <int>` still
+  segfaulted after the void fix; ASan trace showed SEGV in
+  `SimplifyCFG::GetIfCondition` on a PHI whose incoming block (`%else`)
+  was not a predecessor (actual: `%arith_ok9`). The line read
+  `elseLastBB ? elseBB : mergeBB` but HEAD has `elseLastBB` — a stray
+  pre-session edit (same class as the `y + = 5` tutorial damage).
+  Lesson re-learned: `git status`/`git diff` at session start, always.
+  One-word fix; verified nestcall/fib → correct.
+- **Cache-restored binaries lost +x**: `llvm::sys::fs::copy_file` drops
+  mode bits → every `loadBinary` hit failed with 126 (broke fixpoint
+  wholesale: 0/91 with identical rc=126). `loadBinary` now chmods 0700
+  after copy; added a rebuild-twice assertion to `tests/test_cache.sh`.
+- Verified solo: smoke 15/15, differential 5/5 (after Phase A rebuild —
+  slipstream wipe had removed self binaries), ladder 21/21, tutorial
+  8/8, parse-gate/fixpoint 91, lexdiff 90, errors/merge/emit green,
+  cache 8/8. Uncommitted: src/main.cpp (PHI discipline + chmod),
+  tests/test_cache.sh, memory.md.
+- Still open from the audit: `parallel for` (`undefined var
+  '__pfor_0'`), `--test` dead (skips tests / JIT failure), Python JIT
+  symbols (AOT works).
+
+### SESSION 2026-09-26b — bug cleanup 2: parallel-for hoisting + stage2 skip
+
+- **Bug 2 fixed**: `parallel for i in 0..5 { print(i) }` died with
+  `undefined var '__pfor_0'`. Root cause: `parseParallelForStmt`
+  desugars to a worker `FunctionAST` + `flint_parallel_for` call, but
+  nested the worker *inside the enclosing block* — codegen only walks
+  `prog->functions`, so the worker was never declared/emitted and
+  `&__pfor_0` failed lookup. (Emit path + pthread runtime were already
+  complete.) Fix: `pendingFns` on Parser; workers hoist there and
+  `parseProgram` drains them into `prog->functions` (per-file: each
+  import gets a fresh Parser). Verified: values 0–4 exactly once
+  (order varies — true parallelism), non-main-fn + empty range + AOT
+  all correct; runtime joins threads before return.
+- **Stage2 twin bug found via parse-gate**: `tests/t_flow.fl` (with the
+  new parallel regression) failed `parse-gate` — the Flint `p_stmt`
+  dispatch called `p_for_stmt` (which skips exactly one keyword) while
+  current token was still `parallel`, erroring on the `for`. Fix: skip
+  `parallel` first, then require `for`. No other corpus file uses
+  `parallel for`, so no golden churn.
+- **Regression**: parallel loop (100+i, i in 0..5) appended to
+  `tests/t_flow.fl` + 5 order-free grep checks in `run.sh` (smoke
+  20/20); `docs_check.sh`/README counts updated by the checker itself
+  (t_flow 48, run.sh 45, totals 108/106).
+- Verified solo: Phase A/B/C + stable re-greened (fixpoint
+  byte-identical despite the stage2 change), smoke 20/20, differential
+  5/5, ladder 21/21, tutorial 8/8, parse-gate/fixpoint 91, lexdiff 90,
+  errors/merge/emit/fmt/decl-order/registry/docs/cache green.
+  Uncommitted: src/main.cpp, stage2/flint_parse.fl, tests/t_flow.fl,
+  tests/run.sh, tools/docs_check.sh, README.md, memory.md.
+- Still open: `--test` dead, Python JIT symbols.
+
+### SESSION 2026-09-26c — bug cleanup 2-4: parallel-for, --test, Python JIT
+
+- **Bug 2 (parallel-for `undefined var '__pfor_0'`)**: desugar built
+  the worker `FunctionAST` nested *inside the enclosing block*, but
+  codegen only walks `prog->functions` — worker never declared/emitted,
+  `&__pfor_0` unresolvable. Emit path + pthread runtime were already
+  complete. Fix: `pendingFns` on Parser, drained into `prog->functions`
+  at end of `parseProgram` (per-file: fresh Parser per import).
+  Verified: 0–4 exactly once (order varies), non-main-fn, empty range,
+  nested-safe, AOT; runtime joins threads. Regression: parallel loop
+  in `tests/t_flow.fl` + 5 order-free checks (smoke 20/20).
+- **Stage2 twin**: `t_flow.fl` then failed parse-gate — Flint `p_stmt`
+  called `p_for_stmt` (skips one keyword) while current token was still
+  `parallel`. Fix: skip `parallel`, require `for`, then parse as
+  `parallel-for`. No other corpus file uses it → zero golden churn.
+  Phase A/B/C + stable re-greened, fixpoint byte-identical.
+- **Bug 3 (`--test` dead)**: three defects — (1) cache-hit early paths
+  returned before the test block (cached runs silently skipped tests);
+  fixed with `testModeFlag` bypass; (2) bare `LLJITBuilder().create()`
+  with no target init → always "JIT creation failed"; fixed with proper
+  init + shared setup; (3) no runtime objects loaded. Fix: extracted
+  `loadJITObjects` verbatim from `runWithJIT` (single source of truth,
+  normal JIT path verified unchanged via smoke/tutorial). Verified:
+  `test_square` PASS, mixed pass/fail reports + rc=1, reruns work.
+- **Bug 4 (Python JIT)**: `dlopen("libpython3.13.so")` hardcoded — dead
+  on 3.14 systems, return unchecked (silent). Fix: `preloadPython()`
+  tries unversioned → 3.14 → ... → 3.9, warns only when the module
+  actually calls Python (keeps tutorial/differential output clean);
+  reused by `--test` mode. Verified: python_demo JIT prints 9.
+- Verified solo, full battery: smoke 20/20, differential 5/5, ladder
+  21/21, tutorial 8/8, parse-gate/fixpoint 91, lexdiff 90,
+  errors/merge/emit/fmt/decl-order/registry/docs/cache green, driver
+  6/6, opt-identity 11/11, sanitizers 10/10.
+  Uncommitted: src/main.cpp, stage2/flint_parse.fl, tests/t_flow.fl,
+  tests/run.sh, tools/docs_check.sh, README.md, memory.md.
+
 1. Read `REQUIREMENTS.md` for setup
 2. Read `ROADMAP.md` for phase status
 3. Test with `./flintc examples/hello.fl` (JIT run) or `./flintc examples/hello.fl output.ll && clang output.ll runtime.o -o hello && ./hello` (AOT)

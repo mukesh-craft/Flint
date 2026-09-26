@@ -1585,7 +1585,17 @@ fn p_stmt(out, top: i64) -> i64 {
                             p_for_stmt(out, "for")
                         } else {
                             if k == 35 {
-                                p_for_stmt(out, "parallel-for")
+                                # `parallel for` is two keywords; p_for_stmt
+                                # skips exactly one, so drop `parallel` here
+                                # (it used to choke on the `for`, killing
+                                # any file with a parallel loop).
+                                p_next()
+                                if p_kind() == 33 {
+                                    p_for_stmt(out, "parallel-for")
+                                } else {
+                                    p_note_err()
+                                    0
+                                }
                             } else {
                                 if k == 12 {
                                     p_letdecl(out, top)

@@ -367,14 +367,90 @@ static void runLLVMOptimizations(llvm::Module* mod, llvm::OptimizationLevel leve
 // Takes ownership of mod and ctx (mod must be in ctx).
 // progArgs are the args to pass to the JIT'd program (argv[0] + user args).
 // extraObjs is a list of .o files to load (from --link flags).
+// Shared JIT object loading: runtime + AI + stdlib + python + FFI helper
+// + --link extras. Moved verbatim out of runWithJIT so --test mode uses
+// the identical setup (its bare JIT resolved nothing). Returns false + msg.
+static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>& extraObjs) {
+    using namespace llvm;
+    using namespace llvm::orc;
+    struct stat st;
+    auto loadOne = [&](const std::string& objName, bool required) -> bool {
+        auto buf = MemoryBuffer::getFile(objName);
+        if (!buf) {
+            if (required) std::cerr << "JIT error: cannot open '" << objName << "': " << buf.getError().message() << "\n";
+            return !required;
+        }
+        if (auto err = JIT.addObjectFile(std::move(*buf))) {
+            std::cerr << "JIT error: " << toString(std::move(err)) << "\n";
+            return false;
+        }
+        return true;
+    };
+    if (stat("runtime.o", &st) == 0 && !loadOne("runtime.o", true)) return false;
+    const char* aiObjs[] = {"flint_tensor.o", "flint_ai.o", "flint_ai_opt.o"};
+    for (auto* objName : aiObjs)
+        if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
+    const char* stdObjs[] = {"flint_serial.o", "flint_crypto.o", "flint_net.o",
+                             "flint_aegis.o", "flint_chan.o"};
+    for (auto* objName : stdObjs)
+        if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
+    if (stat("pyruntime.o", &st) == 0 && !loadOne("pyruntime.o", true)) return false;
+    // Auto-load ffi_helper.o if present (unless already listed in extraObjs)
+    bool hasFfiHelper = false;
+    for (auto& obj : extraObjs) if (obj.find("ffi_helper") != std::string::npos) { hasFfiHelper = true; break; }
+    if (!hasFfiHelper && stat("ffi_helper.o", &st) == 0) {
+        auto buf = MemoryBuffer::getFile("ffi_helper.o");
+        if (buf) {
+            if (auto err = JIT.addObjectFile(std::move(*buf))) {
+                std::cerr << "JIT error: " << toString(std::move(err)) << "\n";
+                return false;
+            }
+        }
+    }
+    // Load extra .o files from --link flags
+    for (auto& obj : extraObjs)
+        if (!loadOne(obj, true)) return false;
+    return true;
+}
+
+// Pre-load libpython.so so JIT can resolve Python symbols.
+// Tries unversioned first, then newer-to-older versioned names:
+// the old hardcoded libpython3.13.so broke silently on 3.14 systems.
+// Idempotent; shared by runWithJIT and --test mode. Returns the handle
+// (null when nothing found — callers warn only if Python is used).
+static void* preloadPython() {
+    static bool done = false;
+    static void* handle = nullptr;
+    if (!done) {
+        done = true;
+        const char* pyLibs[] = {"libpython3.so",     "libpython3.14.so",
+                                "libpython3.13.so",  "libpython3.12.so",
+                                "libpython3.11.so",  "libpython3.10.so",
+                                "libpython3.9.so",   "libpython.so"};
+        for (auto* lib : pyLibs) {
+            handle = dlopen(lib, RTLD_LAZY | RTLD_GLOBAL);
+            if (handle) break;
+        }
+    }
+    return handle;
+}
+
 static int runWithJIT(std::unique_ptr<llvm::Module> mod, std::unique_ptr<llvm::LLVMContext> ctx,
                       const std::vector<char*>& progArgs,
                       const std::vector<std::string>& extraObjs = {}) {
     using namespace llvm;
     using namespace llvm::orc;
 
-    // Pre-load libpython3.13.so so JIT can resolve Python symbols
-    dlopen("libpython3.13.so", RTLD_LAZY | RTLD_GLOBAL);
+    void* pythonHandle = preloadPython();
+    if (!pythonHandle) {
+        // Loud only when the program actually calls Python (else every
+        // JIT run would warn and pollute tutorial/differential output).
+        if (auto* pyInit = mod->getFunction("flint_py_init")) {
+            if (!pyInit->use_empty())
+                std::cerr << "JIT warning: libpython not found; "
+                             "Python calls will fail to resolve\n";
+        }
+    }
 
     initTargets();
 
@@ -393,85 +469,7 @@ static int runWithJIT(std::unique_ptr<llvm::Module> mod, std::unique_ptr<llvm::L
     }
     auto JIT = std::move(*createJIT);
 
-    // Load runtime.o if present
-    struct stat st;
-    if (stat("runtime.o", &st) == 0) {
-        auto buf = MemoryBuffer::getFile("runtime.o");
-        if (!buf) {
-            std::cerr << "JIT error: cannot open runtime.o: " << buf.getError().message() << "\n";
-            return 1;
-        }
-        if (auto err = JIT->addObjectFile(std::move(*buf))) {
-            std::cerr << "JIT error: " << toString(std::move(err)) << "\n";
-            return 1;
-        }
-    }
-    // Load AI engine runtime objects
-    const char* aiObjs[] = {"flint_tensor.o", "flint_ai.o", "flint_ai_opt.o"};
-    for (auto* objName : aiObjs) {
-        if (stat(objName, &st) == 0) {
-            auto buf = MemoryBuffer::getFile(objName);
-            if (!buf) {
-                std::cerr << "JIT error: cannot open " << objName << ": " << buf.getError().message() << "\n";
-                return 1;
-            }
-            if (auto err = JIT->addObjectFile(std::move(*buf))) {
-                std::cerr << "JIT error: " << toString(std::move(err)) << "\n";
-                return 1;
-            }
-        }
-    }
-    // Load standard library runtime objects
-    const char* stdObjs[] = {"flint_serial.o", "flint_crypto.o", "flint_net.o",
-                             "flint_aegis.o", "flint_chan.o"};
-    for (auto* objName : stdObjs) {
-        if (stat(objName, &st) == 0) {
-            auto buf = MemoryBuffer::getFile(objName);
-            if (!buf) {
-                std::cerr << "JIT error: cannot open " << objName << ": " << buf.getError().message() << "\n";
-                return 1;
-            }
-            if (auto err = JIT->addObjectFile(std::move(*buf))) {
-                std::cerr << "JIT error: " << toString(std::move(err)) << "\n";
-                return 1;
-            }
-        }
-    }
-    if (stat("pyruntime.o", &st) == 0) {
-        auto buf = MemoryBuffer::getFile("pyruntime.o");
-        if (!buf) {
-            std::cerr << "JIT error: cannot open pyruntime.o: " << buf.getError().message() << "\n";
-            return 1;
-        }
-        if (auto err = JIT->addObjectFile(std::move(*buf))) {
-            std::cerr << "JIT error: " << toString(std::move(err)) << "\n";
-            return 1;
-        }
-    }
-    // Auto-load ffi_helper.o if present (unless already listed in extraObjs)
-    bool hasFfiHelper = false;
-    for (auto& obj : extraObjs) if (obj.find("ffi_helper") != std::string::npos) { hasFfiHelper = true; break; }
-    if (!hasFfiHelper && stat("ffi_helper.o", &st) == 0) {
-        auto buf = MemoryBuffer::getFile("ffi_helper.o");
-        if (buf) {
-            if (auto err = JIT->addObjectFile(std::move(*buf))) {
-                std::cerr << "JIT error: " << toString(std::move(err)) << "\n";
-                return 1;
-            }
-        }
-    }
-    // Load extra .o files from --link flags
-    for (auto& obj : extraObjs) {
-        auto buf = MemoryBuffer::getFile(obj);
-        if (!buf) {
-            std::cerr << "JIT error: cannot open '" << obj << "': " << buf.getError().message() << "\n";
-            return 1;
-        }
-        if (auto err = JIT->addObjectFile(std::move(*buf))) {
-            std::cerr << "JIT error: " << toString(std::move(err)) << "\n";
-            return 1;
-        }
-    }
+    if (!loadJITObjects(*JIT, extraObjs)) return 1;
 
     // Move module + its own context into JIT (they must be paired)
     if (auto err = JIT->addIRModule(ThreadSafeModule(std::move(mod), std::move(ctx)))) {
@@ -631,7 +629,11 @@ public:
         auto src = binaryPath(hash);
         std::error_code ec;
         llvm::sys::fs::copy_file(src, outputPath);
-        return !ec;
+        if (ec) return false;
+        // copy_file creates 0666&~umask (no exec bit); a restored binary
+        // must stay executable or every use fails with 126.
+        ::chmod(outputPath.c_str(), 0700);
+        return true;
     }
 
     std::unique_ptr<llvm::Module> load(uint64_t hash, llvm::LLVMContext& ctx) {
@@ -1852,6 +1854,9 @@ public:
                 }
             }
         }
+        // A2b: hoist `parallel for` workers desugared during the parse.
+        for (auto& w : pendingFns) prog->functions.push_back(std::move(w));
+        pendingFns.clear();
         return prog;
     }
 
@@ -2029,6 +2034,10 @@ private:
     std::unordered_map<std::string, StructDef> structRegistry;
     std::unordered_map<std::string, EnumDef> enumRegistry;
     std::vector<std::string> parserTypeParams;
+    // A2b: worker functions desugared from `parallel for` (parseParallelForStmt).
+    // They cannot live inside the enclosing block (codegen only walks
+    // prog->functions), so they wait here until parseProgram drains them.
+    std::vector<std::unique_ptr<FunctionAST>> pendingFns;
     Codegen* cg = nullptr;
     bool emitMode = false;
     bool skipBodies = false;
@@ -2629,7 +2638,10 @@ private:
 
         auto block = std::make_unique<BlockStmtAST>();
 
-        // Worker function: fn __pfor_N(i: i64) -> i64 { body; return 0 }
+        // Worker function: fn __pfor_N(i: i64) -> i64 { body; return 0 }.
+        // Hoisted to pendingFns (drained into prog->functions by
+        // parseProgram): a nested FunctionAST inside the block would never
+        // be declared or emitted, leaving `&__pfor_N` unresolvable.
         auto workerFn = std::make_unique<FunctionAST>();
         workerFn->name = workerName;
         workerFn->returnType = Type::i64();
@@ -2640,7 +2652,7 @@ private:
         bodyBlock->stmts.push_back(std::move(retStmt));
         workerFn->body = std::move(body);
         workerFn->loc = loopVar.loc;
-        block->stmts.push_back(std::move(workerFn));
+        pendingFns.push_back(std::move(workerFn));
 
         // Build call: flint_parallel_for(count, &workerName, 0)
         // count = end - start (run-time computation)
@@ -4943,11 +4955,33 @@ public:
         }
 
         builder->SetInsertPoint(mergeBB);
-        if (!thenVal && !elseVal) return llvm::ConstantInt::get(i64Ty, 0);
-        llvm::Type* phiTy = thenVal ? thenVal->getType() : elseVal->getType();
+        // Same discipline as match: void-typed branches can never join a
+        // PHI (LLVM aborts the compiler on those), and branches that
+        // disagree on value type fail loudly instead of coercing silently.
+        // A missing/valueless branch still coerces to null (legacy).
+        // NOTE: incoming blocks must be the arm EXIT blocks (thenLastBB /
+        // elseLastBB) — using an entry block here emits a PHI whose
+        // predecessor edge doesn't exist, which segfaults SimplifyCFG.
+        auto valType = [](llvm::Value* v) -> llvm::Type* {
+            return (v && !v->getType()->isVoidTy()) ? v->getType() : nullptr;
+        };
+        llvm::Type* tTy = valType(thenVal);
+        llvm::Type* eTy = valType(elseVal);
+        bool thenVoid = thenVal && thenVal->getType()->isVoidTy();
+        bool elseVoid = elseVal && elseVal->getType()->isVoidTy();
+        if ((thenVoid && eTy) || (elseVoid && tTy)) {
+            return codegenError("if branches must yield the same type");
+        }
+        llvm::Type* phiTy = tTy ? tTy : eTy;
+        if (!phiTy) return llvm::ConstantInt::get(i64Ty, 0);
+        if (tTy && eTy && tTy != eTy) {
+            return codegenError("if branches must yield the same type");
+        }
         auto* phi = builder->CreatePHI(phiTy, 2, "ifval");
-        phi->addIncoming(thenVal ? thenVal : llvm::ConstantInt::get(phiTy, 0), thenLastBB);
-        phi->addIncoming(elseVal ? elseVal : llvm::ConstantInt::get(phiTy, 0), elseLastBB ? elseLastBB : mergeBB);
+        llvm::Value* tIn = tTy ? thenVal : llvm::Constant::getNullValue(phiTy);
+        llvm::Value* eIn = eTy ? elseVal : llvm::Constant::getNullValue(phiTy);
+        phi->addIncoming(tIn, thenLastBB);
+        phi->addIncoming(eIn, elseLastBB ? elseLastBB : mergeBB);
         return phi;
     }
 
@@ -5388,21 +5422,42 @@ public:
         }
 
         builder->SetInsertPoint(mergeBB);
-        // If no arm produced a value, match is statement-context: return 0.
-        bool anyVal = false;
+        // Match is an expression: reaching arms must agree on a value type.
+        // Void-typed arm values (statement arms like print) can never join
+        // a PHI — LLVM aborts the compiler on those. All-void/null means
+        // statement context (return 0, the existing convention); anything
+        // mixed is a source type error → fail loudly, never abort.
         llvm::Type* phiTy = nullptr;
-        for (auto* v : armVals) if (v) { anyVal = true; phiTy = v->getType(); break; }
-        if (!anyVal) return llvm::ConstantInt::get(i64Ty, 0);
+        bool mixed = false;
+        for (size_t i = 0; i < armVals.size(); i++) {
+            if (!armReachesMerge[i]) continue;
+            llvm::Value* v = armVals[i];
+            if (!v) continue; // valueless arm: coerced to null below (legacy)
+            if (v->getType()->isVoidTy()) {
+                // Void-typed arm (statement like print): only OK when no
+                // reaching arm yields a real value, else the arms disagree.
+                for (size_t j = 0; j < armVals.size(); j++) {
+                    if (j == i || !armReachesMerge[j]) continue;
+                    llvm::Value* u = armVals[j];
+                    if (u && !u->getType()->isVoidTy()) { mixed = true; break; }
+                }
+                if (mixed) break;
+                continue;
+            }
+            if (!phiTy) phiTy = v->getType();
+            else if (v->getType() != phiTy) { mixed = true; break; }
+        }
+        if (mixed) { return codegenError("match arms must yield the same type"); }
+        if (!phiTy) return llvm::ConstantInt::get(i64Ty, 0);
         auto* phi = builder->CreatePHI(phiTy, (unsigned)armVals.size() + 1, "matchval");
         for (size_t i = 0; i < armVals.size(); i++) {
             if (!armReachesMerge[i]) continue;
-            llvm::Value* v = armVals[i] ? armVals[i] : llvm::ConstantInt::get(phiTy, 0);
-            // Normalize int/ptr mismatch (null arms)
-            if (v->getType() != phiTy) v = llvm::ConstantInt::get(phiTy, 0);
+            llvm::Value* v = armVals[i];
+            if (!v || v->getType()->isVoidTy()) v = llvm::Constant::getNullValue(phiTy);
             phi->addIncoming(v, armEndBBs[i]);
         }
         // Default edge (unmatched tag falls through to merge): incoming 0.
-        phi->addIncoming(llvm::ConstantInt::get(phiTy, 0), switchBB);
+        phi->addIncoming(llvm::Constant::getNullValue(phiTy), switchBB);
         return phi;
     }
 
@@ -6789,18 +6844,36 @@ llvm::Value* Parser::parseMatchEmit() {
         }
     }
     cg->builder->SetInsertPoint(mergeBB);
-    bool anyValEmit = false;
+    // Same discipline as AST emitMatch: void-typed arms can never join a
+    // PHI (LLVM aborts); mixed/disagreeing arms fail loudly via parseError.
     llvm::Type* phiTyEmit = nullptr;
-    for (auto* v : armValsEmit) if (v) { anyValEmit = true; phiTyEmit = v->getType(); break; }
-    if (!anyValEmit) return llvm::ConstantInt::get(cg->i64Ty, 0);
+    bool mixedEmit = false;
+    for (size_t i = 0; i < armValsEmit.size(); i++) {
+        if (!armReachEmit[i]) continue;
+        llvm::Value* v = armValsEmit[i];
+        if (!v) continue; // valueless arm: coerced to null below (legacy)
+        if (v->getType()->isVoidTy()) {
+            for (size_t j = 0; j < armValsEmit.size(); j++) {
+                if (j == i || !armReachEmit[j]) continue;
+                llvm::Value* u = armValsEmit[j];
+                if (u && !u->getType()->isVoidTy()) { mixedEmit = true; break; }
+            }
+            if (mixedEmit) break;
+            continue;
+        }
+        if (!phiTyEmit) phiTyEmit = v->getType();
+        else if (v->getType() != phiTyEmit) { mixedEmit = true; break; }
+    }
+    if (mixedEmit) { parseError("match arms must yield the same type"); return nullptr; }
+    if (!phiTyEmit) return llvm::ConstantInt::get(cg->i64Ty, 0);
     auto* phiEmit = cg->builder->CreatePHI(phiTyEmit, (unsigned)armValsEmit.size() + 1, "matchval");
     for (size_t i = 0; i < armValsEmit.size(); i++) {
         if (!armReachEmit[i]) continue;
-        llvm::Value* v = armValsEmit[i] ? armValsEmit[i] : llvm::ConstantInt::get(phiTyEmit, 0);
-        if (v->getType() != phiTyEmit) v = llvm::ConstantInt::get(phiTyEmit, 0);
+        llvm::Value* v = armValsEmit[i];
+        if (!v || v->getType()->isVoidTy()) v = llvm::Constant::getNullValue(phiTyEmit);
         phiEmit->addIncoming(v, armEndEmit[i]);
     }
-    phiEmit->addIncoming(llvm::ConstantInt::get(phiTyEmit, 0), switchBB);
+    phiEmit->addIncoming(llvm::Constant::getNullValue(phiTyEmit), switchBB);
     return phiEmit;
 }
 
@@ -8412,6 +8485,7 @@ int main(int argc, char* argv[]) {
     bool safeMode = true;     // --safe is now the default
     bool offlineMode = false; // --offline: registry uses cache only, no fetch
     bool checkBce = false;    // --check-bce: report emitted vs O2-surviving checks
+    bool testModeFlag = false; // --test: run test_ fns (must bypass cache hits)
     std::vector<std::string> libPaths;
     // Default library path: compiler's parent dir / std
     {
@@ -8492,7 +8566,10 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
         } else if (arg == "--test") {
-            // Will be handled after JIT compilation: run all test_ functions
+            // Handled after JIT compilation: run all test_ functions.
+            // (testModeFlag also bypasses the cache-hit shortcuts below:
+            // a cached binary would skip the tests silently.)
+            testModeFlag = true;
             runMode = false;
         } else if (arg == "--check-bce") {
             checkBce = true; // diagnostic only: report check counts, change nothing
@@ -8572,9 +8649,10 @@ int main(int argc, char* argv[]) {
 
     // For binary output, check if cached binary exists (skip lex/parse/codegen/link entirely)
     // But skip cache in --run mode: we always recompile for JIT.
+    // And skip in --test mode: a cached binary would skip the tests silently.
     bool emitBinary = !emitLl && !emitObj && !runMode;
 
-    if (emitBinary && cache.hasBinary(sourceHash)) {
+    if (emitBinary && !testModeFlag && cache.hasBinary(sourceHash)) {
         if (cache.loadBinary(sourceHash, outputPath)) {
             PROFILE_BEGIN("total");
             PROFILE_END(); // total
@@ -8584,7 +8662,7 @@ int main(int argc, char* argv[]) {
     }
 
     PROFILE_BEGIN("cache_check");
-    if (!runMode && cache.has(sourceHash)) {
+    if (!runMode && !testModeFlag && cache.has(sourceHash)) {
         llvm::LLVMContext ctx;
         if (auto cachedMod = cache.load(sourceHash, ctx)) {
             PROFILE_END(); // cache_check
@@ -8879,9 +8957,7 @@ int main(int argc, char* argv[]) {
 
     // --test mode: compile & run all test_ functions via JIT, report results
     {
-        bool testMode = false;
-        for (int i = 1; i < argc; i++) if (std::string(argv[i]) == "--test") { testMode = true; break; }
-        if (testMode) {
+        if (testModeFlag) {
             PROFILE_END(); // codegen
             PROFILE_BEGIN("cache_save");
             cache.save(codegen.mod.get(), sourceHash);
@@ -8896,9 +8972,20 @@ int main(int argc, char* argv[]) {
                 if (tok.size() >= 2 && tok.substr(tok.size() - 2) == ".o")
                     extraObjs.push_back(tok);
             }
-            // Build JIT once with the compiled module
-            auto jit = llvm::orc::LLJITBuilder().create();
+            // Same JIT setup as normal runs (targets + runtime objects):
+            // the old bare LLJITBuilder().create() failed here every time.
+            preloadPython();
+            initTargets();
+            auto JTMB = llvm::orc::JITTargetMachineBuilder::detectHost();
+            if (!JTMB) {
+                std::cerr << "JIT error: " << toString(JTMB.takeError()) << "\n";
+                return 1;
+            }
+            JTMB->setCodeGenOptLevel(llvm::CodeGenOptLevel::Default);
+            auto jit = llvm::orc::LLJITBuilder()
+                .setJITTargetMachineBuilder(std::move(*JTMB)).create();
             if (!jit) { std::cerr << "JIT creation failed\n"; return 1; }
+            if (!loadJITObjects(**jit, extraObjs)) return 1;
             if (auto err = (*jit)->addIRModule(llvm::orc::ThreadSafeModule(
                     llvm::CloneModule(*codegen.mod), std::make_unique<llvm::LLVMContext>()))) {
                 std::cerr << "JIT module error\n"; return 1;

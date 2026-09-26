@@ -28,6 +28,12 @@ expect "safe/unsafe use distinct cache entries" "$((nbin1 + 1))" "$nbin2"
 expect "safe runs" "7" "$("$T/app/safe.bin" 2>/dev/null | tail -n 1)"
 expect "unsafe runs" "7" "$("$T/app/unsafe.bin" 2>/dev/null | tail -n 1)"
 
+# 1b. cache-restored binaries stay executable (copy_file drops +x;
+# loadBinary must re-add it or every cached rebuild fails with 126).
+timeout -s KILL 300 "$FLINTC" "$T/app/main.fl" -o "$T/app/safe2.bin" > /dev/null 2>&1
+[ -x "$T/app/safe2.bin" ] || { echo "FAIL: restored binary not executable"; fail=$((fail+1)); }
+expect "restored binary runs" "7" "$("$T/app/safe2.bin" 2>/dev/null | tail -n 1)"
+
 # 2. import sidecar: editing an import must change the next build's output.
 printf 'fn helper() -> i64 {\n    40\n}\n' > "$T/app/helper.fl"
 printf 'import "./helper.fl"\nfn main() -> i64 {\n    print(helper() + 2)\n    0\n}\n' > "$T/app/use.fl"
