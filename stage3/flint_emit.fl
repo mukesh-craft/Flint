@@ -838,7 +838,7 @@ fn e_unescape(raw: str) -> str {
 }
 # One unescape step at pos (appends to sb): `{`{{`{` `}}` C-escapes
 # \xXX \uXXXX (BMP->UTF8); unknown stays literal. Returns next pos.
-fn e_unescape_step(sb: i64, raw: str, pos: i64, n: i64) -> i64 {
+fn e_unescape_step(sb, raw: str, pos: i64, n: i64) -> i64 {
     c = flint_str_char_at(raw, pos)
     if c == 123 {
         if pos + 1 < n {
@@ -880,7 +880,7 @@ fn e_unescape_step(sb: i64, raw: str, pos: i64, n: i64) -> i64 {
     }
 }
 # Backslash escape at pos (raw[pos] == 92). Returns next pos.
-fn e_unescape_back(sb: i64, raw: str, pos: i64, n: i64) -> i64 {
+fn e_unescape_back(sb, raw: str, pos: i64, n: i64) -> i64 {
     if pos + 1 < n {
         e2 = flint_str_char_at(raw, pos + 1)
         if e2 == 110 {
@@ -987,7 +987,7 @@ fn e_unescape_uni(raw: str, pos: i64, n: i64) -> i64 {
     }
 }
 # Append BMP code point as UTF-8 bytes (mirrors C++ appendUtf8).
-fn e_unescape_emit_utf8(sb: i64, cp: i64) -> i64 {
+fn e_unescape_emit_utf8(sb, cp: i64) -> i64 {
     if cp < 128 {
         flint_sb_append_char(sb, cp)
     } else {
