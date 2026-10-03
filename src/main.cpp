@@ -4295,8 +4295,18 @@ public:
         add("flint_aegis_free", i64Ty, {i64Ty}, false);
         add("flint_aegis_read_i64", i64Ty, {i64Ty, i64Ty}, false);
         add("flint_aegis_write_i64", voidTy, {i64Ty, i64Ty, i64Ty}, false);
-        add("flint_aegis_read_i64_unchecked", i64Ty, {i64Ty, i64Ty}, false);
-        add("flint_aegis_write_i64_unchecked", voidTy, {i64Ty, i64Ty, i64Ty}, false);
+        // Unchecked AEGIS accessors skip the liveness and bounds checks
+        // entirely -- they are a raw dereference, and calling one with a dead
+        // lease or an out-of-range index is undefined behaviour, not a panic.
+        // They stay reachable only under --unsafe: registering them as
+        // ordinary builtins let any Flint program segfault the runtime with
+        // `free(a)` then `read_i64_unchecked(a, 999999)`. releaseMode is true
+        // only for --unsafe (false = safe mode, the default), and it is
+        // assigned before generateDeclarations runs.
+        if (releaseMode) {
+            add("flint_aegis_read_i64_unchecked", i64Ty, {i64Ty, i64Ty}, false);
+            add("flint_aegis_write_i64_unchecked", voidTy, {i64Ty, i64Ty, i64Ty}, false);
+        }
         add("flint_aegis_len", i64Ty, {i64Ty}, false);
         add("flint_aegis_check", i64Ty, {i64Ty}, false);
         add("flint_aegis_move", i64Ty, {i64Ty}, false);
