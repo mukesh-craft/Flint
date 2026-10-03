@@ -1664,6 +1664,11 @@ struct FunctionAST : ExprAST {
     bool isDeclaration = false;
     size_t bodyStart = 0;  // token index of '{' in token stream
     size_t bodyEnd = 0;    // token index past '}'
+    // Indices of params declared without a type annotation. They default to
+    // i64, which is wrong when a pointer (vec/sb/map handle, str) is passed --
+    // the call then mismatches the callee's signature. inferUntypedParams()
+    // retypes them from the actual arguments at every call site.
+    std::vector<size_t> untypedParams;
     FunctionAST() : ExprAST(NodeKind::Function) {}
 };
 
@@ -1783,6 +1788,65 @@ public:
     static void lambdaUses(ExprAST* e, std::unordered_set<std::string>& bound,
                            std::vector<std::string>& uses, std::string* err = nullptr);
 
+    // Single source of truth for what a *builtin call* evaluates to, used by
+    // both parse-time inference (inferType / parseVarDecl) so a `let`/`var`
+    // bound to a builtin call is typed the same way codegen will type it.
+    //
+    // It must stay in step with Codegen::initBuiltins: when the two disagree
+    // (inference says str, codegen's functionMap says i64) the emitted code
+    // loads the wrong type or builds a PHI from mismatched branches --
+    // invalid IR that used to be emitted silently.
+    //
+    // Written as explicit per-name entries, NOT prefix matching: families mix
+    // return kinds (flint_vec_get -> i64 but flint_vec_new -> ptr), so a
+    // `flint_vec_` prefix test types every vec call as a pointer.
+    static Type inferCallType(const std::string& callee) {
+        // Void builtins first: several share a prefix with a value-returning
+        // family (flint_map_free vs flint_map_new).
+        static const std::unordered_set<std::string> kVoid = {
+            "flint_println_i64", "flint_println_str", "flint_println_f64",
+            "flint_panic", "flint_py_init", "flint_py_run", "flint_py_fini",
+            "flint_bounds_check", "flint_str_free", "flint_print", "flint_println",
+            "flint_free", "flint_array_write_i64", "flint_array_free",
+            "flint_null_check", "flint_array_set_ptr", "flint_srand",
+            "flint_vec_free", "flint_vec_set", "flint_vec_push", "flint_vec_clear",
+            "flint_map_free", "flint_map_set", "flint_sb_free", "flint_sb_append",
+            "flint_sb_append_char", "flint_sb_append_i64", "flint_sb_append_f64",
+            "flint_exit", "flint_sleep_ms", "flint_assert", "flint_assert_eq_i64",
+            "flint_assert_eq_f64", "flint_assert_eq_str", "flint_tcp_close",
+            "flint_aegis_write_i64", "flint_aegis_write_i64_unchecked",
+            "flint_aegis_write_u8", "flint_chan_free",
+        };
+        if (kVoid.count(callee)) return Type::void_();
+
+        // Aggregate handles: a map or array is a {ptr, i64} pair value, and
+        // only these three builtins produce one.
+        if (callee == "flint_map_new" || callee == "flint_array_alloc" ||
+            callee == "flint_array_concat")
+            return callee == "flint_map_new" ? Type::map() : Type::array(Type::i64());
+
+        // Opaque handles and strings: bare pointers.
+        static const std::unordered_set<std::string> kPtr = {
+            "flint_vec_new", "flint_array_slice", "flint_sb_new", "flint_sb_build",
+            "flint_map_keys", "flint_array_data", "flint_array_data_ptr",
+            "flint_array_get_ptr",
+            "flint_str_concat", "flint_str_substring", "flint_str_upper",
+            "flint_str_lower", "flint_i64_to_string", "flint_f64_to_string",
+            "flint_str_trim", "flint_str_replace", "flint_str_split",
+            "flint_str_join", "flint_str_from_i64", "flint_str_from_f64",
+            "flint_base64_encode", "flint_base64_decode", "flint_hex_encode",
+            "flint_hex_decode", "flint_json_decode",
+            "flint_tcp_connect", "flint_tcp_listen", "flint_tcp_accept",
+            "flint_tcp_recv", "flint_tcp_recv_all", "flint_dns_resolve",
+            "flint_http_get", "flint_http_post",
+        };
+        if (kPtr.count(callee)) return Type::str();
+
+        // Everything else declared i64 in initBuiltins (vec/sb/map/array
+        // accessors, math, time, aegis leases, chan send, ...).
+        return Type::i64();
+    }
+
     // Reset per-function declared-variable state and seed with the given params.
     // Needed when re-parsing multiple function bodies in sequence (QBE backend),
     // otherwise a variable declared in one function is seen as already-declared
@@ -1790,6 +1854,31 @@ public:
     void resetDeclaredVars(const std::vector<std::pair<std::string, Type>>& params) {
         declaredVars.clear();
         for (auto& p : params) declaredVars.insert(p.first);
+    }
+
+    // Statements that can be an implicit function return value.
+    //
+    // This must be an ALLOWLIST of value-producing kinds, not a blocklist of
+    // statement kinds: a blocklist silently admits Assign (`m = f()` as the
+    // last line), which then typed the function's return as the assigned type
+    // and emitted `ret ptr` from a void function -- invalid IR. Anything not
+    // listed here has no value and must never become a return.
+    static bool isValueExpr(NodeKind k) {
+        switch (k) {
+            case NodeKind::Number: case NodeKind::String: case NodeKind::Variable:
+            case NodeKind::Binary: case NodeKind::Compare: case NodeKind::Call:
+            case NodeKind::Array: case NodeKind::Index: case NodeKind::Slice:
+            case NodeKind::Ref: case NodeKind::Deref: case NodeKind::StructLiteral:
+            case NodeKind::EnumConstruct: case NodeKind::FieldAccess:
+            case NodeKind::Lambda: case NodeKind::Unwrap: case NodeKind::MapLiteral:
+            // An `if` used in expression position is a value (`fn f() -> i64
+            // { if c { 1 } else { 2 } }`). Excluding it broke implicit returns
+            // of if-expressions -- fib() silently returned 0.
+            case NodeKind::If:
+                return true;
+            default:
+                return false;
+        }
     }
 
     std::unique_ptr<ProgramAST> parseProgram() {
@@ -1904,18 +1993,21 @@ public:
         Token nameTok = consume(TokenType::IDENTIFIER, "expected function name");
         std::vector<std::pair<std::string, Type>> params;
         std::vector<std::unique_ptr<ExprAST>> defaults;
+        std::vector<size_t> untyped;
         if (match(TokenType::LPAREN)) {
             if (!check(TokenType::RPAREN)) {
                 do {
                     Token pName = consume(TokenType::IDENTIFIER, "expected parameter name");
                     Type pType = Type::i64();
-                    if (match(TokenType::COLON)) pType = parseType();
+                    bool hadType = match(TokenType::COLON);
+                    if (hadType) pType = parseType();
                     if (match(TokenType::ASSIGN)) {
                         defaults.push_back(parseExpression());
                     } else {
                         defaults.push_back(nullptr);
                     }
                     params.emplace_back(pName.lexeme, pType);
+                    if (!hadType) untyped.push_back(params.size() - 1);
                 } while (match(TokenType::COMMA));
             }
             consume(TokenType::RPAREN, "expected ')'");
@@ -1937,6 +2029,7 @@ public:
         auto fn = std::make_unique<FunctionAST>();
         fn->name = nameTok.lexeme;
         fn->params = std::move(params);
+        fn->untypedParams = std::move(untyped);
         fn->defaults = std::move(defaults);
         fn->returnType = retType;
         fn->isDeclaration = false;
@@ -1953,13 +2046,13 @@ public:
             auto* block = static_cast<BlockStmtAST*>(fn->body.get());
             if (!block->stmts.empty()) {
                 auto& last = block->stmts.back();
-                if (last->kind != NodeKind::Return && last->kind != NodeKind::Break &&
-                    last->kind != NodeKind::Continue &&
-                    last->kind != NodeKind::While &&
-                    last->kind != NodeKind::Block && last->kind != NodeKind::PyBlock &&
-                    last->kind != NodeKind::VarDecl) {
-                    retType = inferType(last.get());
-                    fn->returnType = retType;
+                if (Parser::isValueExpr(last->kind)) {
+                    // Void-typed last expression -> the function returns void.
+                    Type t = inferType(last.get());
+                    if (t.kind != TypeKind::Void) {
+                        retType = t;
+                        fn->returnType = retType;
+                    }
                 }
             }
         }
@@ -1968,10 +2061,7 @@ public:
             auto* block = static_cast<BlockStmtAST*>(fn->body.get());
             if (!block->stmts.empty()) {
                 auto& last = block->stmts.back();
-                if (last->kind != NodeKind::Return && last->kind != NodeKind::VarDecl &&
-                    last->kind != NodeKind::Break && last->kind != NodeKind::Continue &&
-                    last->kind != NodeKind::While && last->kind != NodeKind::Block &&
-                    last->kind != NodeKind::PyBlock) {
+                if (Parser::isValueExpr(last->kind)) {
                     auto retStmt = std::make_unique<ReturnStmtAST>(std::move(last));
                     retStmt->loc = nameTok.loc;
                     block->stmts.back() = std::move(retStmt);
@@ -2174,10 +2264,7 @@ private:
             case NodeKind::Call: {
                 auto* c = static_cast<CallExprAST*>(expr);
                 if (c->callee == "print") return Type::void_();
-                if (c->callee == "flint_map_new") return Type::map();
-                if (c->callee == "flint_array_alloc" || c->callee == "flint_array_concat")
-                    return Type::array(Type::i64());
-                return Type::i64();
+                return inferCallType(c->callee);
             }
             case NodeKind::StructLiteral: {
                 auto* sl = static_cast<StructLiteralAST*>(expr);
@@ -2208,11 +2295,13 @@ private:
 
         std::vector<std::pair<std::string, Type>> params;
         std::vector<std::unique_ptr<ExprAST>> defaults;
+        std::vector<size_t> untyped;
         if (!check(TokenType::RPAREN)) {
             do {
                 Token pName = consume(TokenType::IDENTIFIER, "expected parameter name");
                 Type pType = Type::i64();
-                if (match(TokenType::COLON)) {
+                bool hadType = match(TokenType::COLON);
+                if (hadType) {
                     pType = parseType();
                 }
                 if (match(TokenType::ASSIGN)) {
@@ -2221,6 +2310,7 @@ private:
                     defaults.push_back(nullptr);
                 }
                 params.emplace_back(pName.lexeme, pType);
+                if (!hadType) untyped.push_back(params.size() - 1);
             } while (match(TokenType::COMMA));
         }
         consume(TokenType::RPAREN, "expected ')' after parameters");
@@ -2241,6 +2331,7 @@ private:
         fn->name = nameTok.lexeme;
         fn->typeParams = std::move(typeParams);
         fn->params = std::move(params);
+        fn->untypedParams = std::move(untyped);
         fn->defaults = std::move(defaults);
         fn->returnType = retType;
         fn->isDeclaration = isDecl;
@@ -2260,13 +2351,17 @@ private:
                     auto* block = static_cast<BlockStmtAST*>(fn->body.get());
                     if (!block->stmts.empty()) {
                         auto& last = block->stmts.back();
-                        if (last->kind != NodeKind::Return && last->kind != NodeKind::Break &&
-                            last->kind != NodeKind::Continue &&
-                            last->kind != NodeKind::If && last->kind != NodeKind::While &&
-                            last->kind != NodeKind::Block && last->kind != NodeKind::PyBlock &&
-                            last->kind != NodeKind::VarDecl) {
-                            retType = inferType(last.get());
-                            fn->returnType = retType;
+                        if (Parser::isValueExpr(last->kind)) {
+                            // A void-typed last expression cannot be a return
+                            // value: inferring void here would leave the
+                            // function declared void while codegen still wraps
+                            // the call in a `return`, emitting `ret <void call>`
+                            // from a void function. Keep the declared void.
+                            Type t = inferType(last.get());
+                            if (t.kind != TypeKind::Void) {
+                                retType = t;
+                                fn->returnType = retType;
+                            }
                         }
                     }
                 }
@@ -2276,10 +2371,7 @@ private:
                     auto* block = static_cast<BlockStmtAST*>(fn->body.get());
                     if (!block->stmts.empty()) {
                         auto& last = block->stmts.back();
-                        if (last->kind != NodeKind::Return && last->kind != NodeKind::VarDecl &&
-                            last->kind != NodeKind::Break && last->kind != NodeKind::Continue &&
-                            last->kind != NodeKind::While && last->kind != NodeKind::Block &&
-                            last->kind != NodeKind::PyBlock) {
+                        if (Parser::isValueExpr(last->kind)) {
                             auto retStmt = std::make_unique<ReturnStmtAST>(std::move(last));
                             retStmt->loc = nameTok.loc;
                             block->stmts.back() = std::move(retStmt);
@@ -2831,9 +2923,9 @@ private:
                     break;
                 case NodeKind::Call: {
                     auto* cInit = static_cast<CallExprAST*>(init.get());
-                    if (cInit->callee == "flint_map_new") varType = Type::map();
-                    if (cInit->callee == "flint_array_alloc" || cInit->callee == "flint_array_concat")
-                        varType = Type::array(Type::i64());
+                    // Same table inferType uses, so a global bound to a builtin
+                    // call is typed identically to the value codegen produces.
+                    varType = inferCallType(cInit->callee);
                     break;
                 }
                 default: break;
@@ -3723,6 +3815,23 @@ void Parser::lambdaUses(ExprAST* e, std::unordered_set<std::string>& bound,
 // CODEGEN
 // ============================================================================
 
+// One observed call-site type for an unannotated parameter.
+// One observed call-site type for an unannotated parameter.
+//
+// A pointer argument is strictly more informative than an integer one: a
+// pointer can only be passed to a pointer parameter, while `5` fits an i64
+// param *and* is what an unannotated numeric param defaults to. So pointer
+// evidence outranks integer evidence instead of the two merely conflicting --
+// treating them as equal left `fn lex_into(src, kinds)` at i64 whenever one
+// caller passed a real handle and another passed a number, and every handle
+// call then contradicted the callee's signature.
+struct ArgSlot {
+    Type t;              // best type seen so far
+    bool sawPtr = false; // a pointer was passed here
+    bool sawOther = false; // a non-pointer, non-current type was passed
+    bool any = false;
+};
+
 class Codegen {
 public:
     Codegen() : ctx(std::make_unique<llvm::LLVMContext>()),
@@ -3777,6 +3886,10 @@ public:
         programGlobals = &prog.globals;
         PROFILE_BEGIN("codegen_declare_globals");
         declareGlobals(prog);
+        PROFILE_END();
+
+        PROFILE_BEGIN("codegen_infer_params");
+        inferUntypedParams(prog);
         PROFILE_END();
 
         PROFILE_BEGIN("codegen_declare_functions");
@@ -4226,6 +4339,264 @@ public:
         }
     }
 
+    // Best-effort static type of an expression, for call-site param inference.
+    // Only needs to be right about the pointer-vs-integer distinction (an
+    // opaque handle or a str vs a number); it reuses the same reasoning as
+    // Parser::inferType but is a free function so the inference pass can call
+    // it before the Parser's per-function type environment is set up.
+    static Type exprFlintType(ExprAST* e,
+                              const std::unordered_map<std::string, Type>* vars = nullptr) {
+        if (!e) return Type::i64();
+        switch (e->kind) {
+            case NodeKind::String: return Type::str();
+            case NodeKind::Variable: {
+                auto* v = static_cast<VariableExprAST*>(e);
+                if (vars) {
+                    auto it = vars->find(v->name);
+                    if (it != vars->end()) return it->second;
+                }
+                return Type::i64();
+            }
+            case NodeKind::VarDecl: {
+                auto* n = static_cast<VarDeclAST*>(e);
+                return exprFlintType(n->init.get(), vars);
+            }
+            case NodeKind::Number: {
+                auto* n = static_cast<NumberExprAST*>(e);
+                if (n->isFloat) return Type::f64();
+                if (n->isInt) return Type::i64();
+                double ip;
+                return std::modf(n->value, &ip) != 0.0 ? Type::f64() : Type::i64();
+            }
+            case NodeKind::Array: return Type::array(Type::i64());
+            case NodeKind::MapLiteral: return Type::map();
+            case NodeKind::Binary: {
+                auto* b = static_cast<BinaryExprAST*>(e);
+                if (b->op == '+') {
+                    Type lt = exprFlintType(b->lhs.get());
+                    Type rt = exprFlintType(b->rhs.get());
+                    if (lt.kind == TypeKind::Str || rt.kind == TypeKind::Str) return Type::str();
+                }
+                return Type::i64();
+            }
+            case NodeKind::Call: {
+                auto* c = static_cast<CallExprAST*>(e);
+                if (c->callee == "print") return Type::void_();
+                return Parser::inferCallType(c->callee);
+            }
+            default: return Type::i64();
+        }
+    }
+
+    // Direct sub-expressions of `e`, for tree walks that must reach every
+    // nested call. Only expression-bearing fields appear; statement-only
+    // nodes that carry an expression body (Block/If/While/Match) are included
+    // where the type system models them as expressions.
+    static std::vector<ExprAST*> exprChildren(ExprAST* e) {
+        std::vector<ExprAST*> out;
+        if (!e) return out;
+        // Takes a raw pointer: callers pass `n->lhs.get()`.
+        auto push = [&](ExprAST* c) { if (c) out.push_back(c); };
+        switch (e->kind) {
+            case NodeKind::Binary: {
+                auto* n = static_cast<BinaryExprAST*>(e);
+                push(n->lhs.get()); push(n->rhs.get()); break; }
+            case NodeKind::Compare: {
+                auto* n = static_cast<CompareExprAST*>(e);
+                push(n->lhs.get()); push(n->rhs.get()); break; }
+            case NodeKind::Assign: {
+                auto* n = static_cast<AssignExprAST*>(e);
+                push(n->rhs.get()); break; }
+            case NodeKind::VarDecl: {
+                auto* n = static_cast<VarDeclAST*>(e);
+                push(n->init.get()); break; }
+            case NodeKind::Call: {
+                auto* n = static_cast<CallExprAST*>(e);
+                for (auto& a : n->args) push(a.get());
+                break; }
+            case NodeKind::Index: {
+                auto* n = static_cast<IndexExprAST*>(e);
+                push(n->base.get()); push(n->index.get()); break; }
+            case NodeKind::FieldAccess: {
+                auto* n = static_cast<FieldAccessAST*>(e);
+                push(n->base.get()); break; }
+            case NodeKind::Ref: {
+                auto* n = static_cast<RefExprAST*>(e);
+                push(n->target.get()); break; }
+            case NodeKind::Deref: {
+                auto* n = static_cast<DerefExprAST*>(e);
+                push(n->target.get()); break; }
+            case NodeKind::Array: {
+                auto* n = static_cast<ArrayExprAST*>(e);
+                for (auto& v : n->elements) push(v.get());
+                break; }
+            case NodeKind::Slice: {
+                auto* n = static_cast<SliceExprAST*>(e);
+                push(n->arr.get()); push(n->start.get()); push(n->end.get()); break; }
+            case NodeKind::StructLiteral: {
+                auto* n = static_cast<StructLiteralAST*>(e);
+                for (auto& f : n->fields) push(f.second.get());
+                break; }
+            case NodeKind::EnumConstruct: {
+                auto* n = static_cast<EnumConstructAST*>(e);
+                for (auto& v : n->args) push(v.get());
+                break; }
+            case NodeKind::Unwrap: {
+                auto* n = static_cast<UnwrapExprAST*>(e);
+                push(n->inner.get()); break; }
+            case NodeKind::Lambda: {
+                auto* n = static_cast<LambdaExprAST*>(e);
+                push(n->body.get()); break; }
+            case NodeKind::Return: {
+                auto* n = static_cast<ReturnStmtAST*>(e);
+                push(n->value.get()); break; }
+            case NodeKind::MapLiteral: {
+                auto* n = static_cast<MapLiteralAST*>(e);
+                for (auto& v : n->values) push(v.get());
+                break; }
+            // Statement forms: calls overwhelmingly live inside these, so a
+            // walk that skips them sees almost nothing.
+            case NodeKind::Block: {
+                auto* n = static_cast<BlockStmtAST*>(e);
+                for (auto& st : n->stmts) push(st.get());
+                break; }
+            case NodeKind::If: {
+                auto* n = static_cast<IfStmtAST*>(e);
+                push(n->condition.get()); push(n->thenBlock.get()); push(n->elseBlock.get());
+                break; }
+            case NodeKind::While: {
+                auto* n = static_cast<WhileStmtAST*>(e);
+                push(n->condition.get()); push(n->body.get());
+                break; }
+            case NodeKind::Match: {
+                auto* n = static_cast<MatchExprAST*>(e);
+                push(n->scrutinee.get());
+                for (auto& a : n->arms) push(a.body.get());
+                break; }
+            case NodeKind::Destructure: {
+                auto* n = static_cast<DestructureAST*>(e);
+                push(n->init.get());
+                break; }
+            default: break;
+        }
+        return out;
+    }
+
+    // Recursive walk recording, for every call site, the inferred type of each
+    // argument. `conflict` marks a param seen with two different types.
+    // `vars` is threaded by reference and scoped: entering a Block pushes its
+    // declarations, leaving pops them. Passing it by value would give each
+    // sibling statement its own copy, so `sb = f()` would not be visible to
+    // the `g(sb)` on the next line.
+    static void collectArgTypes(ExprAST* e,
+                                std::unordered_map<std::string, std::unordered_map<size_t, ArgSlot>>& seen,
+                                std::unordered_map<std::string, Type>& vars,
+                                std::vector<std::string>* scope = nullptr) {
+        if (!e) return;
+        // Track `x = f()` / `x: T = ...` so a later `f(x)` at another call
+        // site resolves x to the handle type it was given, not to i64.
+        if (e->kind == NodeKind::VarDecl) {
+            auto* n = static_cast<VarDeclAST*>(e);
+            Type vt = exprFlintType(n->init.get(), &vars);
+            vars[n->varName] = n->varType.kind == TypeKind::Void ? vt : n->varType;
+        } else if (e->kind == NodeKind::Assign) {
+            auto* n = static_cast<AssignExprAST*>(e);
+            auto it = vars.find(n->varName);
+            Type t = exprFlintType(n->rhs.get(), &vars);
+            if (it == vars.end() || it->second.kind == TypeKind::I64) vars[n->varName] = t;
+        }
+        if (e->kind == NodeKind::Call) {
+            auto* c = static_cast<CallExprAST*>(e);
+            for (size_t i = 0; i < c->args.size(); i++) {
+                Type t = exprFlintType(c->args[i].get(), &vars);
+                if (t.kind == TypeKind::Void) continue; // says nothing about the param
+                ArgSlot& sl = seen[c->callee][i];
+                bool isPtr = (t.kind == TypeKind::Str || t.kind == TypeKind::Map ||
+                              t.kind == TypeKind::Array || t.kind == TypeKind::Ref);
+                if (!sl.any) { sl.t = t; sl.any = true; sl.sawPtr = isPtr; }
+                else if (isPtr && !sl.sawPtr) { sl.t = t; sl.sawPtr = true; sl.sawOther = false; }
+                else if (!isPtr && sl.sawPtr) { sl.sawOther = true; }
+                else if (!(sl.t == t)) { sl.sawOther = true; }
+            }
+        }
+        // Scope the declarations this statement introduces to its own subtree.
+        std::vector<std::string> introduced;
+        if (e->kind == NodeKind::Block) {
+            auto* n = static_cast<BlockStmtAST*>(e);
+            introduced.reserve(n->stmts.size());
+            for (auto& st : n->stmts)
+                if (st && st->kind == NodeKind::VarDecl) introduced.push_back(static_cast<VarDeclAST*>(st.get())->varName);
+        }
+        for (auto* c : exprChildren(e)) collectArgTypes(c, seen, vars);
+        for (auto& nm : introduced) vars.erase(nm);
+    }
+
+    // Retype unannotated params from the arguments actually passed at call
+    // sites. An unannotated param defaults to i64; when a caller passes a
+    // pointer (a vec/sb/map handle, a str) the emitted call contradicts the
+    // callee's signature and LLVM rejects the module.
+    //
+    // This previously "worked" only by accident: on AArch64 a pointer and an
+    // i64 travel in the same register, so the callee read the right bits from
+    // a call LLVM considered malformed -- a miscompile that is benign on one
+    // ABI and a hard error on any typed target.
+    //
+    // A param seen with two different types keeps its i64 default rather than
+    // guessing.
+    void inferUntypedParams(ProgramAST& prog) {
+        // Seed every unannotated param as "unknown" rather than i64, so a hop
+        // that learns a real type later is not blocked by the default.
+        for (auto& fn : prog.functions)
+            for (size_t idx : fn->untypedParams)
+                if (idx < fn->params.size()) fn->params[idx].second = Type::void_();
+
+        // Types propagate along the call graph, so one pass is not enough:
+        // `fn p_block(out) { p_emit(out, ...) }` learns out's type only from
+        // whoever passes a real handle to p_block. Iterate to a fixpoint.
+        //
+        // Bounded by (functions + 1) rounds: each round that changes nothing
+        // ends the loop, and a param can only change from unknown to a single
+        // concrete type, so no round can oscillate.
+        const size_t maxRounds = prog.functions.size() + 1;
+        for (size_t round = 0; round < maxRounds; round++) {
+            bool changed = false;
+
+            // callee name -> param index -> observed type
+            std::unordered_map<std::string, std::unordered_map<size_t, ArgSlot>> seen;
+            for (auto& fn : prog.functions) {
+                // A callee's own params are visible inside its body, so
+                // `g(x) { f(x) }` propagates x's (possibly still unknown) type.
+                std::unordered_map<std::string, Type> vars;
+                for (auto& pr : fn->params) vars[pr.first] = pr.second;
+                collectArgTypes(fn->body.get(), seen, vars);
+            }
+
+            for (auto& fn : prog.functions) {
+                auto fit = seen.find(fn->name);
+                if (fit == seen.end()) continue;
+                for (size_t idx : fn->untypedParams) {
+                    if (idx >= fn->params.size()) continue;
+                    auto pit = fit->second.find(idx);
+                    if (pit == fit->second.end()) continue;
+                    if (!pit->second.sawPtr && pit->second.sawOther) continue; // ambiguous
+                    Type& cur = fn->params[idx].second;
+                    if (cur.kind != TypeKind::Void) continue; // already decided
+                    if (pit->second.t.kind == TypeKind::Void) continue; // nothing learned
+                    cur = pit->second.t;
+                    changed = true;
+                }
+            }
+            if (!changed) break;
+        }
+
+        // Anything still unknown is genuinely unconstrained here. i64 keeps the
+        // historical behaviour for numeric params (`fn add(a, b)`).
+        for (auto& fn : prog.functions)
+            for (size_t idx : fn->untypedParams)
+                if (idx < fn->params.size() && fn->params[idx].second.kind == TypeKind::Void)
+                    fn->params[idx].second = Type::i64();
+    }
+
     void declareFunctions(ProgramAST& prog) {
         for (auto& fn : prog.functions) {
             if (functionMap.count(fn->name)) continue; // already declared (e.g. from --use-interface)
@@ -4371,10 +4742,16 @@ public:
 
         symTable.exitScope();
 
-    if (0 && llvm::verifyFunction(*f, &llvm::outs())) {
-        std::cerr << "function verification failed: " << fn->name << "\n";
-        return false;
-    }
+    // Verification gate (P0-3). The IR must be valid before it can be
+        // JIT-run, emitted or linked: a bad PHI or a value defined in two
+        // blocks is a codegen bug that otherwise surfaces as a mystery
+        // segfault under ORC with no diagnostic. Verified per function so the
+        // message names the culprit. `errs()`, not `outs()` -- stdout carries
+        // program output.
+        if (llvm::verifyFunction(*f, &llvm::errs())) {
+            std::cerr << "function verification failed: " << fn->name << "\n";
+            return false;
+        }
         // P0-3 gate: any codegen diagnostic above fails the whole function
         // (partial IR is never JIT-run/emitted/linked; exit is nonzero).
         if (cgHadError) return false;
@@ -4980,6 +5357,29 @@ public:
         }
     }
 
+    // Coerce `main`'s return value to the i32 the C ABI requires.
+//
+// `main` is declared `i32 main(i64, i8*)` (see emitFunction), so every `return`
+// in it must produce an i32. The value's type comes from inference and is NOT
+// guaranteed to be an integer: a `return <void call>` (implicit last-expr
+// return in `fn main() { flint_println(...) }`) yields void, and `return
+// flint_array_alloc(n)` yields {ptr,i64}. Emitting `trunc` on either is invalid
+// IR -- LLVM folds it to a poison constant, so main's exit status became
+// garbage that happened to work. Verified by the per-function verifier gate.
+//
+// Numbers convert (trunc/zext/fptosi). Anything else is not a meaningful exit
+// code, so it yields 0 rather than invalid IR.
+llvm::Value* coerceMainReturn(llvm::Value* v) {
+    if (!v) return llvm::ConstantInt::get(i32Ty, 0);
+    llvm::Type* t = v->getType();
+    if (t->isIntegerTy(32)) return v;
+    if (t->isIntegerTy())
+        return t->getIntegerBitWidth() < 32 ? builder->CreateZExt(v, i32Ty, "mainret")
+                                           : builder->CreateTrunc(v, i32Ty, "mainret");
+    if (t->isFloatingPointTy()) return builder->CreateFPToSI(v, i32Ty, "mainret");
+    return llvm::ConstantInt::get(i32Ty, 0);
+}
+
     void emitReturn(ReturnStmtAST* ret) {
         if (currentFunc && currentFunc->getName() == "main" && hasPython) {
             auto it = functionMap.find("flint_py_fini");
@@ -4989,8 +5389,7 @@ public:
             auto* v = emitExpr(ret->value.get());
             if (v) {
                 if (currentFunc && currentFunc->getName() == "main") {
-                    auto* tr = builder->CreateTrunc(v, i32Ty, "mainret");
-                    builder->CreateRet(tr);
+                    builder->CreateRet(coerceMainReturn(v));
                 } else {
                     builder->CreateRet(v);
                 }
@@ -7134,8 +7533,7 @@ void Parser::parseReturnEmit() {
         auto val = parseExpressionEmit();
         if (val) {
             if (cg->currentFunc && cg->currentFunc->getName() == "main") {
-                auto* tr = cg->builder->CreateTrunc(val, cg->i32Ty, "mainret");
-                cg->builder->CreateRet(tr);
+                cg->builder->CreateRet(cg->coerceMainReturn(val));
             } else {
                 cg->builder->CreateRet(val);
             }
