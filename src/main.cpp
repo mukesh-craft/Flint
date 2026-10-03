@@ -5263,15 +5263,15 @@ public:
         return builder->CreateLoad(structTy, tempAlloca, "arr_val");
     }
 
-    // C1 --loop-opt: bounds trap for runtime-fn array paths. Off (default):
-    // unconditional hot-path call (legacy shape, zero IR change). On:
-    // R1-style cold split — inline `icmp ult` on the hot path, call only
-    // in the panic block. Same function, same args, same trap (unsigned
-    // wrap catches negatives); the call simply leaves the hot path.
-    void emitLoopBoundsCheck(llvm::Value* idxVal, llvm::Value* len) {
+    // Bounds trap: inline `icmp ult` on the hot path, call the panic helper
+    // only in the cold block. Same helper, same args, same trap message
+    // (unsigned wrap catches negatives); the call simply leaves the hot
+    // path. An opaque call here would block inlining, unrolling and
+    // loop vectorization, so every array path must use this shape --
+    // `a[i]` and `flint_array_get/set` included.
+    void emitBoundsCheckInline(llvm::Value* idxVal, llvm::Value* len) {
         auto* boundsFn = functionMap["flint_bounds_check"];
         if (!boundsFn) return;
-        if (!loopOpt) { builder->CreateCall(boundsFn, {idxVal, len}); return; }
         auto* curF = builder->GetInsertBlock()->getParent();
         auto* okBB = llvm::BasicBlock::Create(*ctx, "bounds_ok", curF);
         auto* panicBB = llvm::BasicBlock::Create(*ctx, "bounds_panic", curF);
@@ -5281,6 +5281,12 @@ public:
         builder->CreateCall(boundsFn, {idxVal, len});
         builder->CreateBr(okBB);
         builder->SetInsertPoint(okBB);
+    }
+
+    // Bounds trap for the runtime-fn array builtins (`flint_array_get/set`).
+    // Same inline split as `a[i]` -- see emitBoundsCheckInline.
+    void emitLoopBoundsCheck(llvm::Value* idxVal, llvm::Value* len) {
+        emitBoundsCheckInline(idxVal, len);
     }
 
     llvm::Value* emitIndexAccess(IndexExprAST* idx) {
@@ -5294,18 +5300,7 @@ public:
             llvm::Value* dataPtr = builder->CreateExtractValue(base, {0}, "arr_ptr");
             llvm::Value* len = builder->CreateExtractValue(base, {1}, "arr_len");
             if (!idx->unchecked) {
-            auto* boundsFn = functionMap["flint_bounds_check"];
-            if (boundsFn) {
-                auto* curF = builder->GetInsertBlock()->getParent();
-                auto* okBB = llvm::BasicBlock::Create(*ctx, "bounds_ok", curF);
-                auto* panicBB = llvm::BasicBlock::Create(*ctx, "bounds_panic", curF);
-                auto* ok = builder->CreateICmpULT(index, len, "bounds_ok");
-                builder->CreateCondBr(ok, okBB, panicBB, coldWeightsFalse(*ctx));
-                builder->SetInsertPoint(panicBB);
-                builder->CreateCall(boundsFn, {index, len});
-                builder->CreateBr(okBB);
-                builder->SetInsertPoint(okBB);
-            }
+                emitBoundsCheckInline(index, len);
             }
             llvm::Value* elemPtr = builder->CreateGEP(i64Ty, dataPtr, index, "arr_elem");
             return builder->CreateLoad(i64Ty, elemPtr, "arr_elem_val");
@@ -5315,19 +5310,8 @@ public:
             llvm::Value* len = nullptr;
             if (lenFn) len = builder->CreateCall(lenFn, {base}, "str_len");
             else len = llvm::ConstantInt::get(i64Ty, 0);
-            if (!idx->unchecked) {
-            auto* boundsFn = functionMap["flint_bounds_check"];
-            if (boundsFn && len) {
-                auto* curF = builder->GetInsertBlock()->getParent();
-                auto* okBB = llvm::BasicBlock::Create(*ctx, "bounds_ok", curF);
-                auto* panicBB = llvm::BasicBlock::Create(*ctx, "bounds_panic", curF);
-                auto* ok = builder->CreateICmpULT(index, len, "bounds_ok");
-                builder->CreateCondBr(ok, okBB, panicBB, coldWeightsFalse(*ctx));
-                builder->SetInsertPoint(panicBB);
-                builder->CreateCall(boundsFn, {index, len});
-                builder->CreateBr(okBB);
-                builder->SetInsertPoint(okBB);
-            }
+            if (!idx->unchecked && len) {
+                emitBoundsCheckInline(index, len);
             }
             llvm::Value* elemPtr = builder->CreateGEP(i8Ty, base, index, "str_elem");
             auto* byteVal = builder->CreateLoad(i8Ty, elemPtr, "str_byte");
@@ -6633,8 +6617,7 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
 llvm::Value* Parser::emitIndexEmit(llvm::Value* base, llvm::Value* index) {
     llvm::Value* dataPtr = cg->builder->CreateExtractValue(base, {0}, "arr_ptr");
     llvm::Value* len = cg->builder->CreateExtractValue(base, {1}, "arr_len");
-    auto* boundsFn = cg->functionMap["flint_bounds_check"];
-    if (boundsFn) cg->builder->CreateCall(boundsFn, {index, len});
+    cg->emitBoundsCheckInline(index, len);
     llvm::Value* elemPtr = cg->builder->CreateGEP(cg->i64Ty, dataPtr, index, "arr_elem");
     return cg->builder->CreateLoad(cg->i64Ty, elemPtr, "arr_elem_val");
 }
@@ -6647,8 +6630,7 @@ llvm::Value* Parser::emitIndexStoreEmit(llvm::Value* base, llvm::Value* index, l
     }
     llvm::Value* dataPtr = cg->builder->CreateExtractValue(base, {0}, "arr_ptr");
     llvm::Value* len = cg->builder->CreateExtractValue(base, {1}, "arr_len");
-    auto* boundsFn = cg->functionMap["flint_bounds_check"];
-    if (boundsFn) cg->builder->CreateCall(boundsFn, {index, len});
+    cg->emitBoundsCheckInline(index, len);
     llvm::Value* elemPtr = cg->builder->CreateGEP(cg->i64Ty, dataPtr, index, "arr_elem");
     cg->builder->CreateStore(val, elemPtr);
     return llvm::ConstantInt::get(cg->i64Ty, 0); // dummy return
