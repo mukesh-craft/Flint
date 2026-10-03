@@ -2,12 +2,14 @@
 # Differential test: C++ flintc vs self-hosted pipeline must agree.
 # See COMPATIBILITY.md. Fails on any UNLISTED divergence.
 # Usage: bash tests/test_differential.sh [path/to/flintc]
-# Env: SELF_DIR with parse.0/emit.0 (default /tmp/slipstream/self);
+# Env: SELF_DIR with parse.0/emit.0 (default $TMPDIR/slipstream/self);
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
 #      FLINT_JIT=1 falls back to JIT (slow: ~2 min per stage per file).
 set -u
 FLINTC="${1:-./flintc}"
-SELF_DIR="${SELF_DIR:-/data/data/com.termux/files/usr/tmp/slipstream/self}"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/diff"
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+SELF_DIR="${SELF_DIR:-$_TMPBASE/slipstream/self}"
+TMPD="$_TMPBASE/slipstream/diff"
 mkdir -p "$TMPD"
 pass=0; fail=0; known=0
 

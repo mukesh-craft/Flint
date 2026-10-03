@@ -6,8 +6,10 @@
 # Usage: bash tests/test_fuzz_corpus.sh [path/to/flintc]
 set -u
 FLINTC="${1:-./flintc}"
-SELF_DIR="${SELF_DIR:-/data/data/com.termux/files/usr/tmp/slipstream/self}"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/fuzzcorpus"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+SELF_DIR="${SELF_DIR:-$_TMPBASE/slipstream/self}"
+TMPD="$_TMPBASE/slipstream/fuzzcorpus"
 mkdir -p "$TMPD"
 pass=0; fail=0
 shopt -s nullglob

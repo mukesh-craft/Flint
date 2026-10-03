@@ -3,7 +3,9 @@
 # Usage: bash tests/test_merge.sh [path/to/flintc]   (default: ./flintc)
 set -u
 FLINTC="${1:-./flintc}"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/merge"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TMPD="$_TMPBASE/slipstream/merge"
 mkdir -p "$TMPD"
 if ! timeout -s KILL 300 "$FLINTC" tools/merge_sexp.fl -o "$TMPD/merge_sexp.bin" 2>/dev/null; then echo "FAIL merge (build)"; exit 1; fi
 if ! "$TMPD/merge_sexp.bin" tests/fixtures/merge/a.sexp "$TMPD/out.sexp" tests/fixtures/merge/b.sexp 2>/dev/null; then echo "FAIL merge (run)"; exit 1; fi

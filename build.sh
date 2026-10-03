@@ -50,9 +50,39 @@ needs_rebuild() {
     return 1
 }
 
+# Phase J C3 opt-in perf paths. All empty by default -> byte-identical build.
+#   FLINT_THINLTO=1 bash build.sh
+#     flintc-only ThinLTO (-flto=thin at compile+link; runtime .o files untouched).
+#   FLINT_PGO_GEN=<dir> bash build.sh
+#     instrumented flintc (-fprofile-instr-generate). Then train on a real compile:
+#       rm -rf ~/.cache/flintc
+#       LLVM_PROFILE_FILE=<dir>/flintc.profraw ./flintc benchmarks/sum_array.fl --emit-llvm -o $TMPDIR/x.ll
+#       llvm-profdata merge -o <dir>/flintc.profdata <dir>/flintc.profraw
+#     then: FLINT_PGO_USE=<dir>/flintc.profdata bash build.sh
+#   BOLT: manual recipe only — no llvm-bolt on this device (check: `which llvm-bolt`).
+#     On a host with bolt: sample with perf, then
+#       llvm-bolt ./flintc -o ./flintc.bolt -data perf.data --lite
+#     Never shipped as default; measure before keeping.
+# When switching modes, `rm -f flintc` first: needs_rebuild() is mtime-based
+# and cannot tell flag changes apart (a PGO/ThinLTO flintc would look "fresh").
+FLINT_EXTRA_CXX=""
+FLINT_EXTRA_LD=""
+if [ "${FLINT_THINLTO:-}" = "1" ]; then
+    FLINT_EXTRA_CXX="$FLINT_EXTRA_CXX -flto=thin"
+    FLINT_EXTRA_LD="$FLINT_EXTRA_LD -flto=thin"
+fi
+if [ -n "${FLINT_PGO_GEN:-}" ]; then
+    mkdir -p "$FLINT_PGO_GEN"
+    FLINT_EXTRA_CXX="$FLINT_EXTRA_CXX -fprofile-instr-generate"
+fi
+if [ -n "${FLINT_PGO_USE:-}" ]; then
+    if [ ! -f "$FLINT_PGO_USE" ]; then echo "FLINT_PGO_USE=$FLINT_PGO_USE not found" >&2; exit 1; fi
+    FLINT_EXTRA_CXX="$FLINT_EXTRA_CXX -fprofile-instr-use=$FLINT_PGO_USE"
+fi
+
 echo "=== Building Flint compiler (flintc) ==="
-if needs_rebuild flintc src/main.cpp src/flint_os.cpp src/flint_os.h; then
-    $CXX $CXXFLAGS -std=c++17 src/main.cpp src/flint_os.cpp $LDFLAGS -o flintc
+if [ -n "$FLINT_EXTRA_CXX" ] || needs_rebuild flintc src/main.cpp src/flint_os.cpp src/flint_os.h; then
+    $CXX $CXXFLAGS $FLINT_EXTRA_CXX -std=c++17 src/main.cpp src/flint_os.cpp $LDFLAGS $FLINT_EXTRA_LD -o flintc
 else
     echo "  flintc up to date (skipped)"
 fi

@@ -4414,23 +4414,35 @@ fn e_bin_add(l: str, r: str, isf: i64) -> str {
         ETYPE = 2
         t
     } else {
-        ov = e_fresh()
-        e_emit("  " + ov + " = call {{i64, i1}} @llvm.sadd.with.overflow.i64(i64 " + l + ", i64 " + r + ")\n")
-        v = e_fresh()
-        e_emit("  " + v + " = extractvalue {{i64, i1}} " + ov + ", 0\n")
-        o = e_fresh()
-        e_emit("  " + o + " = extractvalue {{i64, i1}} " + ov + ", 1\n")
-        pb = e_label("arith_panic.")
-        ob = e_label("arith_ok.")
-        e_emit("  br i1 " + o + ", label %" + pb + ", label %" + ob + "\n")
-        e_emit(pb + ":\n")
-        m = e_panic_msg("integer overflow")
-        e_emit("  call void @flint_panic(ptr " + m + ")\n")
-        e_emit("  br label %" + ob + "\n")
-        e_emit(ob + ":\n")
-        ECUR = ob
-        ETYPE = 1
-        v
+        # B2: identity elision (provably no overflow): x+0=x, 0+x=x.
+        # Only bare "0" literals (from e_num) match; SSA "%tN" never equals.
+        if l == "0" {
+            ETYPE = 1
+            r
+        } else {
+            if r == "0" {
+                ETYPE = 1
+                l
+            } else {
+                ov = e_fresh()
+                e_emit("  " + ov + " = call {{i64, i1}} @llvm.sadd.with.overflow.i64(i64 " + l + ", i64 " + r + ")\n")
+                v = e_fresh()
+                e_emit("  " + v + " = extractvalue {{i64, i1}} " + ov + ", 0\n")
+                o = e_fresh()
+                e_emit("  " + o + " = extractvalue {{i64, i1}} " + ov + ", 1\n")
+                pb = e_label("arith_panic.")
+                ob = e_label("arith_ok.")
+                e_emit("  br i1 " + o + ", label %" + pb + ", label %" + ob + "\n")
+                e_emit(pb + ":\n")
+                m = e_panic_msg("integer overflow")
+                e_emit("  call void @flint_panic(ptr " + m + ")\n")
+                e_emit("  br label %" + ob + "\n")
+                e_emit(ob + ":\n")
+                ECUR = ob
+                ETYPE = 1
+                v
+            }
+        }
     }
 }
 fn e_bin_sub(l: str, r: str, isf: i64) -> str {
@@ -4440,23 +4452,29 @@ fn e_bin_sub(l: str, r: str, isf: i64) -> str {
         ETYPE = 2
         t
     } else {
-        ov = e_fresh()
-        e_emit("  " + ov + " = call {{i64, i1}} @llvm.ssub.with.overflow.i64(i64 " + l + ", i64 " + r + ")\n")
-        v = e_fresh()
-        e_emit("  " + v + " = extractvalue {{i64, i1}} " + ov + ", 0\n")
-        o = e_fresh()
-        e_emit("  " + o + " = extractvalue {{i64, i1}} " + ov + ", 1\n")
-        pb = e_label("arith_panic.")
-        ob = e_label("arith_ok.")
-        e_emit("  br i1 " + o + ", label %" + pb + ", label %" + ob + "\n")
-        e_emit(pb + ":\n")
-        m = e_panic_msg("integer overflow")
-        e_emit("  call void @flint_panic(ptr " + m + ")\n")
-        e_emit("  br label %" + ob + "\n")
-        e_emit(ob + ":\n")
-        ECUR = ob
-        ETYPE = 1
-        v
+        # B2: x-0=x cannot overflow. NOTE 0-x CAN overflow (0-MIN), keep checked.
+        if r == "0" {
+            ETYPE = 1
+            l
+        } else {
+            ov = e_fresh()
+            e_emit("  " + ov + " = call {{i64, i1}} @llvm.ssub.with.overflow.i64(i64 " + l + ", i64 " + r + ")\n")
+            v = e_fresh()
+            e_emit("  " + v + " = extractvalue {{i64, i1}} " + ov + ", 0\n")
+            o = e_fresh()
+            e_emit("  " + o + " = extractvalue {{i64, i1}} " + ov + ", 1\n")
+            pb = e_label("arith_panic.")
+            ob = e_label("arith_ok.")
+            e_emit("  br i1 " + o + ", label %" + pb + ", label %" + ob + "\n")
+            e_emit(pb + ":\n")
+            m = e_panic_msg("integer overflow")
+            e_emit("  call void @flint_panic(ptr " + m + ")\n")
+            e_emit("  br label %" + ob + "\n")
+            e_emit(ob + ":\n")
+            ECUR = ob
+            ETYPE = 1
+            v
+        }
     }
 }
 fn e_bin_mul(l: str, r: str, isf: i64) -> str {
@@ -4466,23 +4484,44 @@ fn e_bin_mul(l: str, r: str, isf: i64) -> str {
         ETYPE = 2
         t
     } else {
-        ov = e_fresh()
-        e_emit("  " + ov + " = call {{i64, i1}} @llvm.smul.with.overflow.i64(i64 " + l + ", i64 " + r + ")\n")
-        v = e_fresh()
-        e_emit("  " + v + " = extractvalue {{i64, i1}} " + ov + ", 0\n")
-        o = e_fresh()
-        e_emit("  " + o + " = extractvalue {{i64, i1}} " + ov + ", 1\n")
-        pb = e_label("arith_panic.")
-        ob = e_label("arith_ok.")
-        e_emit("  br i1 " + o + ", label %" + pb + ", label %" + ob + "\n")
-        e_emit(pb + ":\n")
-        m = e_panic_msg("integer overflow")
-        e_emit("  call void @flint_panic(ptr " + m + ")\n")
-        e_emit("  br label %" + ob + "\n")
-        e_emit(ob + ":\n")
-        ECUR = ob
-        ETYPE = 1
-        v
+        # B2: x*0=0, 0*x=0, x*1=x, 1*x=x cannot overflow. x*-1 CAN (MIN), keep.
+        if l == "0" {
+            ETYPE = 1
+            "0"
+        } else {
+            if r == "0" {
+                ETYPE = 1
+                "0"
+            } else {
+                if l == "1" {
+                    ETYPE = 1
+                    r
+                } else {
+                    if r == "1" {
+                        ETYPE = 1
+                        l
+                    } else {
+                        ov = e_fresh()
+                        e_emit("  " + ov + " = call {{i64, i1}} @llvm.smul.with.overflow.i64(i64 " + l + ", i64 " + r + ")\n")
+                        v = e_fresh()
+                        e_emit("  " + v + " = extractvalue {{i64, i1}} " + ov + ", 0\n")
+                        o = e_fresh()
+                        e_emit("  " + o + " = extractvalue {{i64, i1}} " + ov + ", 1\n")
+                        pb = e_label("arith_panic.")
+                        ob = e_label("arith_ok.")
+                        e_emit("  br i1 " + o + ", label %" + pb + ", label %" + ob + "\n")
+                        e_emit(pb + ":\n")
+                        m = e_panic_msg("integer overflow")
+                        e_emit("  call void @flint_panic(ptr " + m + ")\n")
+                        e_emit("  br label %" + ob + "\n")
+                        e_emit(ob + ":\n")
+                        ECUR = ob
+                        ETYPE = 1
+                        v
+                    }
+                }
+            }
+        }
     }
 }
 fn e_bin_div(l: str, r: str, isf: i64) -> str {

@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Driver test: build driver/flintc.fl + matrix (single/multi/emit-llvm/errors).
 # Usage: bash tests/test_driver.sh [path/to/flintc]   (default: ./flintc)
-# Env: SELF_DIR with parse.0/emit.0 (default /tmp/slipstream/self).
+# Env: SELF_DIR with parse.0/emit.0 (default $TMPDIR/slipstream/self).
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
 set -u
 FLINTC="${1:-./flintc}"
-SELF_DIR="${SELF_DIR:-/data/data/com.termux/files/usr/tmp/slipstream/self}"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/driver"
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+SELF_DIR="${SELF_DIR:-$_TMPBASE/slipstream/self}"
+TMPD="$_TMPBASE/slipstream/driver"
 mkdir -p "$TMPD"
 pass=0; fail=0; skip=0
 [ -x "$SELF_DIR/parse.0" ] && [ -x "$SELF_DIR/emit.0" ] \

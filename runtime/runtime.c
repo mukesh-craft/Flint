@@ -39,7 +39,11 @@ char** flint_g_argv = NULL;
 
 // Forward declarations (used by early array/string helpers before definition).
 void flint_set_err(int64_t err);
-void flint_panic(const char* msg);
+// B1: panic paths are cold and never return; bounds failures are cold but
+// return on the hot (in-bounds) path. Attributes keep optimizers honest
+// around checks without removing any check.
+void flint_panic(const char* msg) __attribute__((cold, noreturn));
+void flint_bounds_check(int64_t index, int64_t length) __attribute__((cold));
 
 void flint_print_i64(int64_t val) {
     printf("%ld", (long)val);
@@ -79,7 +83,7 @@ void flint_print_fmt(const char* fmt, ...) {
     va_end(args);
 }
 
-void flint_panic(const char* msg) {
+void __attribute__((cold, noreturn)) flint_panic(const char* msg) {
     // Flush user output first: otherwise prints before the panic are lost
     // (stdio buffers are discarded by abort). All PANIC paths funnel here.
     fflush(stdout);
@@ -89,8 +93,8 @@ void flint_panic(const char* msg) {
     abort();
 }
 
-void flint_bounds_check(int64_t index, int64_t length) {
-    if (index < 0 || index >= length) {
+void __attribute__((cold)) flint_bounds_check(int64_t index, int64_t length) {
+    if (__builtin_expect(index < 0 || index >= length, 0)) {
         char msg[128];
         snprintf(msg, sizeof(msg), "index %lld out of bounds for length %lld",
                  (long long)index, (long long)length);
@@ -280,10 +284,18 @@ int64_t flint_time_ns(void) {
     LARGE_INTEGER now;
     if (freq.QuadPart == 0) QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&now);
-    return (int64_t)(now.QuadPart * 1000000000LL / (freq.QuadPart ? freq.QuadPart : 1));
+    // B1 UB audit: QuadPart*1e9 overflows signed after ~15 min at 10 MHz.
+    // Divide first (quotient + remainder) so no intermediate overflows.
+    {
+        int64_t f = freq.QuadPart ? freq.QuadPart : 1;
+        int64_t q = now.QuadPart / f, r = now.QuadPart % f;
+        return q * 1000000000LL + r * 1000000000LL / f;
+    }
 #else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
+    // B1 UB audit: tv_sec*1e9 overflows only after ~292 years of uptime;
+    // unreachable in practice, so the direct multiply is kept.
     return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 #endif
 }
@@ -504,7 +516,12 @@ void flint_set_err(int64_t err) { flint_g_err = err; }
 double flint_sqrt(double x) { return sqrt(x); }
 double flint_pow(double x, double y) { return pow(x, y); }
 double flint_abs_f64(double x) { return fabs(x); }
-int64_t flint_abs_i64(int64_t x) { return x < 0 ? -x : x; }
+int64_t flint_abs_i64(int64_t x) {
+    // B1 UB audit: -INT64_MIN overflows signed (UB). Saturate at INT64_MAX
+    // would change magnitude; return INT64_MIN (wrap value) as defined behavior.
+    if (x == INT64_MIN) return INT64_MIN;
+    return x < 0 ? -x : x;
+}
 double flint_min_f64(double a, double b) { return a < b ? a : b; }
 int64_t flint_min_i64(int64_t a, int64_t b) { return a < b ? a : b; }
 double flint_max_f64(double a, double b) { return a > b ? a : b; }
@@ -545,7 +562,9 @@ double flint_rand_f64(void) {
 
 int64_t flint_rand_i64_range(int64_t lo, int64_t hi) {
     if (hi <= lo) return lo;
-    uint64_t range = (uint64_t)(hi - lo);
+    // B1 UB audit: (hi - lo) overflows signed when lo==INT64_MIN and
+    // hi==INT64_MAX. Compute the distance in unsigned instead.
+    uint64_t range = (uint64_t)hi - (uint64_t)lo;
     return lo + (int64_t)(flint_rand_u64() % range);
 }
 
@@ -584,7 +603,15 @@ int64_t flint_str_to_bool(const char* s) {
 
 double flint_i64_to_f64(int64_t v) { return (double)v; }
 
-int64_t flint_f64_to_i64(double v) { return (int64_t)v; }
+int64_t flint_f64_to_i64(double v) {
+    // B1 UB audit: float->int outside [INT64_MIN,INT64_MAX] or NaN/inf is UB.
+    // Define it: NaN -> 0, +inf/huge -> INT64_MAX, -inf/huge -> INT64_MIN.
+    // In-range values convert exactly as before.
+    if (!isfinite(v)) return v > 0 ? INT64_MAX : (v < 0 ? INT64_MIN : 0);
+    if (v >= 9223372036854775807.0) return INT64_MAX;
+    if (v < -9223372036854775808.0) return INT64_MIN;
+    return (int64_t)v;
+}
 
 // ==================== ADDITIONAL STRING OPERATIONS ====================
 
@@ -592,8 +619,9 @@ char* flint_str_repeat(const char* s, int64_t n) {
     if (!s || n < 0) return NULL;
     int64_t slen = (int64_t)strlen(s);
     if (slen == 0 || n == 0) return strdup("");
-    int64_t total = slen * n;
-    if (total / n != slen) return NULL;
+    // B1 UB audit: slen*n can overflow signed (UB) before the check.
+    int64_t total = 0;
+    if (__builtin_mul_overflow(slen, n, &total)) return NULL;
     char* r = (char*)malloc((size_t)total + 1);
     if (!r) flint_panic("out of memory");
     for (int64_t i = 0; i < n; i++)
@@ -672,7 +700,10 @@ char* flint_str_replace(const char* s, const char* old, const char* newstr) {
     int64_t count = 0;
     const char* p = s;
     while ((p = strstr(p, old)) != NULL) { count++; p += olen; }
-    int64_t reslen = slen + count * (nlen - olen);
+    // B1 UB audit: count*(nlen-olen) and slen+delta can overflow signed (UB).
+    int64_t delta = 0, reslen = 0;
+    if (__builtin_mul_overflow(count, nlen - olen, &delta)) return NULL;
+    if (__builtin_add_overflow(slen, delta, &reslen)) return NULL;
     if (reslen < 0) return NULL;
     char* result = (char*)malloc((size_t)reslen + 1);
     if (!result) flint_panic("out of memory");
