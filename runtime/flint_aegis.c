@@ -220,13 +220,29 @@ void flint_aegis_write_i64(int64_t lease, int64_t idx, int64_t val) {
     aegis_unlock();
 }
 
-int64_t flint_aegis_read_i64_unchecked(int64_t lease, int64_t idx) {
+// Unchecked accessors: no generation compare, no bounds check -- the caller
+// is trusted to have hoisted both (the hot-loop opt-out).
+//
+// A *table* guard is kept even here, because it costs one predictable branch
+// and turns the two ways this can go wrong from memory corruption into a
+// panic: g_slots is NULL before the first allocation, and the slot index is
+// an unchecked 32-bit field of the lease. Previously both indexed straight
+// through, so a dead or forged lease read arbitrary memory. The compiler
+// only exposes these under --unsafe; this is the backstop for when it is set.
+static void aegis_unchecked_guard(int64_t lease) {
     int64_t slot = aegis_slot_of(lease);
-    // No validation: caller guarantees liveness+bounds (hot-loop opt-out).
+    if (g_slots == NULL || slot < 0 || slot >= g_cap || !g_slots[slot].ptr)
+        flint_panic("aegis_unchecked: lease table not initialized or slot empty");
+}
+
+int64_t flint_aegis_read_i64_unchecked(int64_t lease, int64_t idx) {
+    aegis_unchecked_guard(lease);
+    int64_t slot = aegis_slot_of(lease);
     return ((int64_t*)g_slots[slot].ptr)[idx];
 }
 
 void flint_aegis_write_i64_unchecked(int64_t lease, int64_t idx, int64_t val) {
+    aegis_unchecked_guard(lease);
     int64_t slot = aegis_slot_of(lease);
     ((int64_t*)g_slots[slot].ptr)[idx] = val;
 }
