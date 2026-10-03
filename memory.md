@@ -2216,6 +2216,75 @@ gates concurrently (cross-contamination mimics miscompiles).
   Uncommitted: src/main.cpp, stage2/flint_parse.fl, tests/t_flow.fl,
   tests/run.sh, tools/docs_check.sh, README.md, memory.md.
 
+### SESSION 2026-10-03 — research audit + inline bounds checks (3.5x)
+
+Branch `inline-bounds-check`. Baseline commit first (7ecaed9), then:
+
+**THE PERF FIX.** `emitLoopBoundsCheck` gated its inline `icmp`+`br` behind
+`--loop-opt` (default OFF), so the array *builtins* emitted an opaque
+`bl flint_bounds_check` every iteration, while the `a[i]` *syntax* always
+inlined. An opaque call blocks inlining/unrolling/vectorization. Same
+algorithm, two spellings, measured on `benchmarks/sum_array.fl` (10M):
+
+| Form | Before | After |
+|---|---|---|
+| `flint_array_get/set` | 65.4 ms | **18.7 ms** |
+| `arr[i]` syntax | 18.5 ms | 18.5 ms (already inline) |
+| C -O0 | 41.3 ms | — |
+| C -O2 | 8.2 ms | — |
+
+**3.5x, and Flint is now 2.2x FASTER than clang -O0.** Output verified
+identical to C (99999990000000); bounds traps still fire with byte-identical
+messages, negatives included (the `icmp ult` unsigned wrap catches them).
+Four sites now share `Codegen::emitBoundsCheckInline`: AST `a[i]`, both array
+builtins, and both single-pass emit-mode paths (`emitIndexEmit`,
+`emitIndexStoreEmit`). Ladder goldens needed NO re-blessing (21/21) — the
+stage3 emitter already emitted this shape; only the C++ side changed.
+
+**CORRECTION to the 2026-09-13 R2 note.** It concluded "checks are NOT the
+bottleneck; loop codegen quality is". Wrong, and here is the control: the same
+i64 sum loop in C at -O2 — plain `s += a[i]` VECTORIZES (2-wide, 2 partial
+accumulators, `llvm.vector.reduce.add.v2i64`); with `__builtin_add_overflow`
+it gets ZERO vectorization. `sadd.with.overflow` + branch structurally blocks
+integer-reduction vectorization — in clang too. Not a backend bug, not
+routable. Explains the benchmark table exactly: `pi` (f64) is at parity
+because FP reductions ARE reorderable and `pi.fl` really does vectorize (7
+vector ops in its IR); sum/primes are 2.2-2.4x because integer reductions are
+not. The fix is NOT weakening the default — it is wrapping integer types
+(`u8..u64`), which are associative by definition and CAN vectorize, with
+checked `i64` as the default (same tradeoff as Rust RFC 560).
+
+**AUDIT FINDINGS (verified, NOT yet fixed — see docs/IMPROVEMENT-PLAN.md):**
+1. `verifyModule` is DISABLED — `src/main.cpp:4374` reads
+   `if (0 && llvm::verifyFunction(...))`. Invalid IR ships silently. This is
+   the root of the `--fast` segfault P0 carried since 2026-09-06.
+2. **`AegisChecker` is GONE.** memory.md above documents it as a static pass
+   "after BorrowChecker" and lists aegis_uaf/double_free/branch_uaf as
+   compile-time rejects. Run today, all three COMPILE and only PANIC at
+   runtime. Lost in the 2026-09-14 `git checkout -- src/main.cpp` wipe. The
+   "hybrid static+runtime" claim is currently runtime-only.
+3. `BorrowChecker::checkStmt` (main.cpp:8049) has no case for Match, Lambda,
+   StructLiteral, FieldAccess, Index, Ref, Deref, Slice, MapLiteral, Unwrap,
+   Destructure — all fall to `default: checkExpr`. NO loop fixpoint (while
+   body walked once, so borrows never restore across iterations). And
+   `isCopyType()` returns true for Struct/Enum/Str/Map, so moving a non-Copy
+   field out of a struct is never checked — the "heap str/map/chan are Copy =
+   UAF" hole this file already flagged.
+4. No LICENSE file (publish blocker).
+
+**RESEARCH.** Subagents were unavailable (every model returned API 400), so
+this was done directly. Zig's "500k lines" is stale: ~197k at self-hosting
+(Apr 2022), ~700-850k by 2025 — Flint is ~33k, already ~20x under the number
+in question. LOC does not predict adoption (SQLite: ~150k lines of C, ships
+in every browser/phone/aircraft). Polonius Alpha shipped on Rust nightly
+Aug 2026 and the 2023 re-formulation needs only minimal rearchitecture of
+existing NLL — the cheapest real borrow-checker upgrade available. Flint's
+AEGIS lease (slot<<32|gen) is, independently, Vale's generational reference;
+Vale's edge is the *Catalyst* pass that deletes generation checks, which Flint
+lacks. Android/Rust: memory-safety bugs fell >75% -> <20% in four years, ~20%
+fewer revisions (blog.google); no equivalent published C# numbers exist.
+Full writeup with citations: `docs/IMPROVEMENT-PLAN.md`.
+
 1. Read `REQUIREMENTS.md` for setup
 2. Read `ROADMAP.md` for phase status
 3. Test with `./flintc examples/hello.fl` (JIT run) or `./flintc examples/hello.fl output.ll && clang output.ll runtime.o -o hello && ./hello` (AOT)
