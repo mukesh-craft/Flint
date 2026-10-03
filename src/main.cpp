@@ -6,6 +6,7 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/MDBuilder.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/FileSystem.h"
@@ -39,6 +40,7 @@
 #include <cstdio>
 #include <cctype>
 #include <cstdint>
+#include <cmath>
 #include <cassert>
 #include <iostream>
 #include <thread>
@@ -527,12 +529,47 @@ static const char* kFlintVersion = FLINT_VERSION;
 // so a rebuilt/upgraded flintc (or different --unsafe/--opt-level/
 // --backend) silently reused stale modules/binaries.
 static std::string cacheSalt(llvm::CodeGenOptLevel ol, bool releaseMode,
-                             const std::string& backend, const char* argv0) {
+                             const std::string& backend, const char* argv0,
+                             bool loopOpt = false) {
     struct stat st;
     uint64_t mt = 0;
     if (argv0 && stat(argv0, &st) == 0) mt = (uint64_t)st.st_mtime;
     return "flintc-v" + std::string(kFlintVersion) + "-o" + std::to_string((int)ol)
-         + (releaseMode ? "-unsafe" : "-safe") + "-" + backend + "-m" + std::to_string(mt);
+         + (releaseMode ? "-unsafe" : "-safe") + "-" + backend + "-m" + std::to_string(mt)
+         + (loopOpt ? "-loopopt" : "");
+}
+
+// B1: cold panic/bounds helpers for generated IR. flint_panic never returns
+// (runtime abort), so mark Cold+NoReturn; flint_bounds_check returns on the
+// hot path, so Cold only. Branch weights put panic blocks out of hot blocks
+// without hoisting or removing any check (checked-by-default unchanged).
+static void markColdPanicFn(llvm::Function* fn) {
+    if (!fn) return;
+    fn->addFnAttr(llvm::Attribute::Cold);
+    fn->setDoesNotReturn();
+}
+static void markColdCheckFn(llvm::Function* fn) {
+    if (!fn) return;
+    fn->addFnAttr(llvm::Attribute::Cold);
+}
+// C1 --loop-opt: optimizer-friendly check decls. memory(read)+nounwind
+// lets LICM/GVN work across checks. Deliberately WITHOUT willreturn or
+// noreturn: every trap still fires exactly as before (checked-by-default
+// unchanged; hoisting/DCE of the trap itself stays forbidden).
+static void markLoopCheckFn(llvm::Function* fn) {
+    if (!fn) return;
+    fn->setOnlyReadsMemory();
+    fn->setDoesNotThrow();
+}
+static llvm::MDNode* coldWeightsTrue(llvm::LLVMContext& ctx) {
+    // True edge is the cold panic (ov==1 / is_none==1).
+    llvm::MDBuilder mb(ctx);
+    return mb.createBranchWeights(1, 1000);
+}
+static llvm::MDNode* coldWeightsFalse(llvm::LLVMContext& ctx) {
+    // False edge is the cold panic (ok==0).
+    llvm::MDBuilder mb(ctx);
+    return mb.createBranchWeights(1000, 1);
 }
 
 // ============================================================================
@@ -3869,12 +3906,17 @@ public:
     std::unordered_map<std::string, FunctionAST*> genericFunctions;
     bool hasPython = false;
     bool releaseMode = true;  // default: no overflow checks
+    bool loopOpt = false;   // C1 --loop-opt: loop-friendly check attrs (off by default)
     std::unordered_map<std::string, Type> typeSubstMap;
     std::unordered_map<std::string, llvm::Function*> genericCache;
     std::unordered_map<std::string, FunctionAST*> functionDefs; // for default param lookup
     std::unordered_map<std::string, Symbol> globalSymTable;
     std::vector<std::unique_ptr<VarDeclAST>>* programGlobals = nullptr;
     Parser* parser = nullptr;
+    // B2: vars known to hold flint_time_ns results (>=0 by OS contract).
+    // Cleared on any reassign to non-time value. Used only to elide the
+    // ssub overflow check for time1-time0 (diff of two [0,MAX] fits).
+    std::unordered_set<std::string> timeVars;
 
     void initStdEnums() {
         // Define Option enum: Option.None, Option.Some(i64)
@@ -3906,6 +3948,10 @@ public:
         add("flint_py_fini", voidTy, {}, false);
         add("flint_py_eval_int", i64Ty, {i8PtrTy}, false);
         add("flint_bounds_check", voidTy, {i64Ty, i64Ty}, false);
+        // B1: cold-mark the panic/bounds declarations so the optimizer lays
+        // panic blocks out of hot blocks. Checked-by-default unchanged.
+        markColdPanicFn(functionMap["flint_panic"]);
+        markColdCheckFn(functionMap["flint_bounds_check"]);
         // Runtime string / I/O / conversion helpers (from runtime/runtime.c)
         add("flint_str_concat", i8PtrTy, {i8PtrTy, i8PtrTy}, false);
         add("flint_str_compare", i64Ty, {i8PtrTy, i8PtrTy}, false);
@@ -3941,6 +3987,11 @@ public:
         add("flint_array_free", voidTy, {arrTy}, false);
         add("flint_array_concat", arrTy, {arrTy, arrTy}, false);
         add("flint_null_check", voidTy, {i8PtrTy, i8PtrTy}, false);
+        // C1: loopOpt-gated check attrs (off by default → zero IR change).
+        if (loopOpt) {
+            markLoopCheckFn(functionMap["flint_bounds_check"]);
+            markLoopCheckFn(functionMap["flint_null_check"]);
+        }
         // Pointer-based array access (no struct reload per iteration)
         auto ptrTy = llvm::PointerType::get(*ctx, 0);
         add("flint_array_data", ptrTy, {arrTy}, false);
@@ -4368,6 +4419,12 @@ public:
                 if (std::modf(v, &intPart) != 0.0) {
                     return llvm::ConstantFP::get(llvm::Type::getDoubleTy(*ctx), v);
                 }
+                // B1 UB audit: double->i64 outside range is UB. Keep huge
+                // whole doubles as f64 (matches parse fallback to double).
+                if (!std::isfinite(v) || v >= 9223372036854775807.0 ||
+                    v < -9223372036854775808.0) {
+                    return llvm::ConstantFP::get(llvm::Type::getDoubleTy(*ctx), v);
+                }
                 return llvm::ConstantInt::get(i64Ty, static_cast<int64_t>(v));
             }
             case NodeKind::String: {
@@ -4423,7 +4480,7 @@ public:
                 auto* check = builder->CreateICmpEQ(tag, llvm::ConstantInt::get(i8Ty, 0), "is_none");
                 auto* okBB = llvm::BasicBlock::Create(*ctx, "unwrap_ok", currentFunc);
                 auto* panicBB = llvm::BasicBlock::Create(*ctx, "unwrap_panic", currentFunc);
-                builder->CreateCondBr(check, panicBB, okBB);
+                builder->CreateCondBr(check, panicBB, okBB, coldWeightsTrue(*ctx));
                 // Panic block
                 builder->SetInsertPoint(panicBB);
                 auto* panicFn = functionMap["flint_panic"];
@@ -4431,6 +4488,7 @@ public:
                     auto* fTy = llvm::FunctionType::get(voidTy, {i8PtrTy}, false);
                     panicFn = llvm::Function::Create(fTy, llvm::Function::ExternalLinkage, "flint_panic", mod.get());
                     functionMap["flint_panic"] = panicFn;
+                    markColdPanicFn(panicFn);
                 }
                 builder->CreateCall(panicFn, {builder->CreateGlobalString("unwrap of None/Err", "unwrap_msg")});
                 builder->CreateRet(llvm::ConstantInt::get(i64Ty, 0));
@@ -4480,6 +4538,16 @@ public:
                 }
                 auto* store = builder->CreateStore(val, sym->alloca);
                 if (sym->moved) sym->moved = false;
+                // B2: maintain time-derived set (invalidated on any non-time assign).
+                if (a->rhs && a->rhs->kind == NodeKind::Call) {
+                    auto* rc2 = static_cast<CallExprAST*>(a->rhs.get());
+                    if (rc2->callee == "flint_time_ns" || rc2->callee == "flint_time_ns_monotonic")
+                        timeVars.insert(a->varName);
+                    else
+                        timeVars.erase(a->varName);
+                } else {
+                    timeVars.erase(a->varName);
+                }
                 return store;
             }
             case NodeKind::Binary: {
@@ -4565,6 +4633,46 @@ public:
                             default:  return builder->CreateMul(l, r, "mul");
                         }
                     }
+                    // B2 identity: x+0=x, 0+x=x, x-0=x, x*0=0, x*1=x, 1*x=x.
+                    // Provably no overflow (result is x or 0). 0-x and x*-1
+                    // CAN overflow (MIN), never elided. Local ConstantInt only.
+                    if (auto* lc = llvm::dyn_cast<llvm::ConstantInt>(l)) {
+                        if (b->op == '+' && lc->isZero()) return r;
+                        if (b->op == '*' && lc->isZero()) return llvm::ConstantInt::get(i64Ty, 0);
+                        if (b->op == '*' && lc->isOne()) return r;
+                    }
+                    if (auto* rc = llvm::dyn_cast<llvm::ConstantInt>(r)) {
+                        if ((b->op == '+' || b->op == '-') && rc->isZero()) return l;
+                        if (b->op == '*' && rc->isZero()) return llvm::ConstantInt::get(i64Ty, 0);
+                        if (b->op == '*' && rc->isOne()) return l;
+                    }
+                    // B2 time-diff: t1-t0 where both are flint_time_ns results
+                    // ([0,MAX] by CLOCK_MONOTONIC/QPC contract) cannot overflow:
+                    // diff in [-MAX,MAX] fits i64. Both operands must be direct
+                    // time calls or vars assigned once from time calls (tracked
+                    // in timeVars, invalidated on any other assign).
+                    if (b->op == '-') {
+                        auto isTimeExpr = [&](ExprAST* e) -> bool {
+                            if (!e) return false;
+                            if (e->kind == NodeKind::Call) {
+                                auto* c = static_cast<CallExprAST*>(e);
+                                return c->callee == "flint_time_ns" ||
+                                       c->callee == "flint_time_ns_monotonic";
+                            }
+                            if (e->kind == NodeKind::Variable) {
+                                auto* v = static_cast<VariableExprAST*>(e);
+                                if (timeVars.count(v->name) == 0) return false;
+                                // Borrowed vars could be mutated via & (aliasing
+                                // hole): require no outstanding borrows.
+                                auto* sym = symTable.lookup(v->name);
+                                if (sym && sym->borrowCount > 0) return false;
+                                return true;
+                            }
+                            return false;
+                        };
+                        if (isTimeExpr(b->lhs.get()) && isTimeExpr(b->rhs.get()))
+                            return builder->CreateSub(l, r, "sub_notime");
+                    }
                     llvm::Intrinsic::ID iid;
                     switch (b->op) {
                         case '+': iid = llvm::Intrinsic::sadd_with_overflow; break;
@@ -4577,7 +4685,7 @@ public:
                     auto* ov = builder->CreateExtractValue(callRes, {1}, "arith_ovfl");
                     auto* okBB = llvm::BasicBlock::Create(*ctx, "arith_ok", currentFunc);
                     auto* panicBB = llvm::BasicBlock::Create(*ctx, "arith_panic", currentFunc);
-                    builder->CreateCondBr(ov, panicBB, okBB);
+                    builder->CreateCondBr(ov, panicBB, okBB, coldWeightsTrue(*ctx));
                     builder->SetInsertPoint(panicBB);
                     auto* panicFn = functionMap["flint_panic"];
                     if (panicFn) {
@@ -4864,6 +4972,12 @@ public:
             }
         }
         if (init) builder->CreateStore(init, alloca);
+        // B2: track time-derived vars for time-diff elision.
+        if (decl->init && decl->init->kind == NodeKind::Call) {
+            auto* cc = static_cast<CallExprAST*>(decl->init.get());
+            if (cc->callee == "flint_time_ns" || cc->callee == "flint_time_ns_monotonic")
+                timeVars.insert(decl->varName);
+        }
     }
 
     void emitReturn(ReturnStmtAST* ret) {
@@ -5149,6 +5263,26 @@ public:
         return builder->CreateLoad(structTy, tempAlloca, "arr_val");
     }
 
+    // C1 --loop-opt: bounds trap for runtime-fn array paths. Off (default):
+    // unconditional hot-path call (legacy shape, zero IR change). On:
+    // R1-style cold split — inline `icmp ult` on the hot path, call only
+    // in the panic block. Same function, same args, same trap (unsigned
+    // wrap catches negatives); the call simply leaves the hot path.
+    void emitLoopBoundsCheck(llvm::Value* idxVal, llvm::Value* len) {
+        auto* boundsFn = functionMap["flint_bounds_check"];
+        if (!boundsFn) return;
+        if (!loopOpt) { builder->CreateCall(boundsFn, {idxVal, len}); return; }
+        auto* curF = builder->GetInsertBlock()->getParent();
+        auto* okBB = llvm::BasicBlock::Create(*ctx, "bounds_ok", curF);
+        auto* panicBB = llvm::BasicBlock::Create(*ctx, "bounds_panic", curF);
+        auto* ok = builder->CreateICmpULT(idxVal, len, "bounds_ok");
+        builder->CreateCondBr(ok, okBB, panicBB, coldWeightsFalse(*ctx));
+        builder->SetInsertPoint(panicBB);
+        builder->CreateCall(boundsFn, {idxVal, len});
+        builder->CreateBr(okBB);
+        builder->SetInsertPoint(okBB);
+    }
+
     llvm::Value* emitIndexAccess(IndexExprAST* idx) {
         llvm::Value* base = emitExpr(idx->base.get());
         llvm::Value* index = emitExpr(idx->index.get());
@@ -5166,7 +5300,7 @@ public:
                 auto* okBB = llvm::BasicBlock::Create(*ctx, "bounds_ok", curF);
                 auto* panicBB = llvm::BasicBlock::Create(*ctx, "bounds_panic", curF);
                 auto* ok = builder->CreateICmpULT(index, len, "bounds_ok");
-                builder->CreateCondBr(ok, okBB, panicBB);
+                builder->CreateCondBr(ok, okBB, panicBB, coldWeightsFalse(*ctx));
                 builder->SetInsertPoint(panicBB);
                 builder->CreateCall(boundsFn, {index, len});
                 builder->CreateBr(okBB);
@@ -5188,7 +5322,7 @@ public:
                 auto* okBB = llvm::BasicBlock::Create(*ctx, "bounds_ok", curF);
                 auto* panicBB = llvm::BasicBlock::Create(*ctx, "bounds_panic", curF);
                 auto* ok = builder->CreateICmpULT(index, len, "bounds_ok");
-                builder->CreateCondBr(ok, okBB, panicBB);
+                builder->CreateCondBr(ok, okBB, panicBB, coldWeightsFalse(*ctx));
                 builder->SetInsertPoint(panicBB);
                 builder->CreateCall(boundsFn, {index, len});
                 builder->CreateBr(okBB);
@@ -5714,8 +5848,7 @@ public:
             }
             auto* dataPtr = builder->CreateExtractValue(arrVal, {0}, "arr_data");
             auto* len = builder->CreateExtractValue(arrVal, {1}, "arr_len");
-            auto* boundsFn = functionMap["flint_bounds_check"];
-            if (boundsFn) builder->CreateCall(boundsFn, {idxVal, len});
+            emitLoopBoundsCheck(idxVal, len);
             auto* elemPtr = builder->CreateGEP(i64Ty, dataPtr, idxVal, "arr_elem");
             return builder->CreateLoad(i64Ty, elemPtr, "arr_elem_val");
         }
@@ -5731,8 +5864,7 @@ public:
             }
             auto* dataPtr = builder->CreateExtractValue(arrVal, {0}, "arr_data");
             auto* len = builder->CreateExtractValue(arrVal, {1}, "arr_len");
-            auto* boundsFn = functionMap["flint_bounds_check"];
-            if (boundsFn) builder->CreateCall(boundsFn, {idxVal, len});
+            emitLoopBoundsCheck(idxVal, len);
             auto* elemPtr = builder->CreateGEP(i64Ty, dataPtr, idxVal, "arr_elem");
             builder->CreateStore(valVal, elemPtr);
             return llvm::ConstantInt::get(i64Ty, 0); // dummy return
@@ -6125,6 +6257,11 @@ llvm::Value* Parser::parseNudEmit() {
         if (std::modf(v, &intPart) != 0.0) {
             return llvm::ConstantFP::get(llvm::Type::getDoubleTy(*cg->ctx), v);
         }
+        // B1 UB audit: see AST path above — huge whole doubles stay f64.
+        if (!std::isfinite(v) || v >= 9223372036854775807.0 ||
+            v < -9223372036854775808.0) {
+            return llvm::ConstantFP::get(llvm::Type::getDoubleTy(*cg->ctx), v);
+        }
         return llvm::ConstantInt::get(cg->i64Ty, static_cast<int64_t>(v));
     }
     if (match(TokenType::STRING_LITERAL)) {
@@ -6296,6 +6433,17 @@ llvm::Value* Parser::emitArithOpEmit(char op, llvm::Value* l, llvm::Value* r) {
             default:  return cg->builder->CreateMul(l, r, "mul");
         }
     }
+    // B2 identity mirror (agreement with AST + Flint e_bin_*): x+0=x etc.
+    if (auto* lc = llvm::dyn_cast<llvm::ConstantInt>(l)) {
+        if (op == '+' && lc->isZero()) return r;
+        if (op == '*' && lc->isZero()) return llvm::ConstantInt::get(cg->i64Ty, 0);
+        if (op == '*' && lc->isOne()) return r;
+    }
+    if (auto* rc = llvm::dyn_cast<llvm::ConstantInt>(r)) {
+        if ((op == '+' || op == '-') && rc->isZero()) return l;
+        if (op == '*' && rc->isZero()) return llvm::ConstantInt::get(cg->i64Ty, 0);
+        if (op == '*' && rc->isOne()) return l;
+    }
     llvm::Intrinsic::ID iid;
     switch (op) {
         case '+': iid = llvm::Intrinsic::sadd_with_overflow; break;
@@ -6308,7 +6456,7 @@ llvm::Value* Parser::emitArithOpEmit(char op, llvm::Value* l, llvm::Value* r) {
     auto* ov = cg->builder->CreateExtractValue(callRes, {1}, "arith_ovfl");
     auto* okBB = llvm::BasicBlock::Create(*cg->ctx, "arith_ok", cg->currentFunc);
     auto* panicBB = llvm::BasicBlock::Create(*cg->ctx, "arith_panic", cg->currentFunc);
-    cg->builder->CreateCondBr(ov, panicBB, okBB);
+    cg->builder->CreateCondBr(ov, panicBB, okBB, coldWeightsTrue(*cg->ctx));
     cg->builder->SetInsertPoint(panicBB);
     auto* panicFn = cg->functionMap["flint_panic"];
     if (panicFn) {
@@ -6646,8 +6794,7 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
         if (args.size() != 2) { parseError("flint_array_get needs 2 args"); return nullptr; }
         auto* dataPtr = cg->builder->CreateExtractValue(args[0], {0}, "arr_data");
         auto* len = cg->builder->CreateExtractValue(args[0], {1}, "arr_len");
-        auto* boundsFn = cg->functionMap["flint_bounds_check"];
-        if (boundsFn) cg->builder->CreateCall(boundsFn, {args[1], len});
+        cg->emitLoopBoundsCheck(args[1], len);
         auto* elemPtr = cg->builder->CreateGEP(cg->i64Ty, dataPtr, args[1], "arr_elem");
         return cg->builder->CreateLoad(cg->i64Ty, elemPtr, "arr_elem_val");
     }
@@ -6656,8 +6803,7 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
         if (args.size() != 3) { parseError("flint_array_set needs 3 args"); return nullptr; }
         auto* dataPtr = cg->builder->CreateExtractValue(args[0], {0}, "arr_data");
         auto* len = cg->builder->CreateExtractValue(args[0], {1}, "arr_len");
-        auto* boundsFn = cg->functionMap["flint_bounds_check"];
-        if (boundsFn) cg->builder->CreateCall(boundsFn, {args[1], len});
+        cg->emitLoopBoundsCheck(args[1], len);
         auto* elemPtr = cg->builder->CreateGEP(cg->i64Ty, dataPtr, args[1], "arr_elem");
         cg->builder->CreateStore(args[2], elemPtr);
         return llvm::ConstantInt::get(cg->i64Ty, 0);
@@ -8453,12 +8599,16 @@ public:
 
 int main(int argc, char* argv[]) {
     PROFILE_BEGIN("total");
+    // B3: explicit init phase — argv parsing + registry fetch. Lets the
+    // profiler report process-init share (daemon decision hinges on init>15%).
+    PROFILE_BEGIN("init");
     if (argc < 2) {
         std::cerr << "usage: flintc [options] <input.fl> [-o <output>] [-- args...]\n";
         std::cerr << "       flintc --emit-interface <input.fl> <output.flint.bc>\n";
         std::cerr << "       flintc --use-interface <file.flint.bc> <input.fl> <output> [--use-interface ...]\n";
         std::cerr << "       flintc --parallel <N> <input.fl> <output> [--link ...]\n";
         std::cerr << "       flintc --opt-level <0|1|2|3> <input.fl> <output> [--link ...]\n";
+        std::cerr << "       flintc --loop-opt <input.fl> <output> (loop-friendly check attrs, off by default)\n";
         std::cerr << "       flintc --release <input.fl> [args...]\n";
         std::cerr << "       flintc --backend <llvm|qbe> <input.fl> <output> [--link ...]\n";
         std::cerr << "\n";
@@ -8485,6 +8635,7 @@ int main(int argc, char* argv[]) {
     bool safeMode = true;     // --safe is now the default
     bool offlineMode = false; // --offline: registry uses cache only, no fetch
     bool checkBce = false;    // --check-bce: report emitted vs O2-surviving checks
+    bool loopOpt = false;     // C1 --loop-opt: loop-friendly check attrs (off by default)
     bool testModeFlag = false; // --test: run test_ fns (must bypass cache hits)
     std::vector<std::string> libPaths;
     // Default library path: compiler's parent dir / std
@@ -8573,6 +8724,8 @@ int main(int argc, char* argv[]) {
             runMode = false;
         } else if (arg == "--check-bce") {
             checkBce = true; // diagnostic only: report check counts, change nothing
+        } else if (arg == "--loop-opt") {
+            loopOpt = true; // C1: loop-friendly check attrs (off by default)
         } else if (arg == "--run") {
             runMode = true; // explicit no-op (it's the default)
         } else if (arg == "--dump-tokens" && i + 1 < argc) {
@@ -8605,6 +8758,7 @@ int main(int argc, char* argv[]) {
     // Registry: fetch flint.toml deps into the local cache (or verify the
     // cache in --offline mode) before any parsing/import resolution.
     if (!fetchRegistryDeps(inputPath, libPaths, offlineMode)) return 1;
+    PROFILE_END(); // init (argv parsing + registry; LLVM/target init is in codegen_init)
 
     // --emit-interface mode: parse declarations only, emit .flint.bc
     if (emitInterfaceMode) {
@@ -8643,8 +8797,38 @@ int main(int argc, char* argv[]) {
     // Check content-addressed cache.
     // A1: the key mixes compiler identity + codegen flags with the source
     // (see cacheSalt) so rebuilds/upgrades/flag changes bust stale entries.
+    // B3: --use-interface .bc bytes + --link flags/objects join the same
+    // salted key. Previously the key was main-file bytes only, so an edited
+    // header (re-emitted .bc) or a changed lib.o silently reused the stale
+    // cached binary (wrong build — the rustc lesson). Hashing bytes (not
+    // mtimes) keeps the check exact; cost is one extra file read per
+    // interface/object (negligible vs link). Interface .bc files themselves
+    // are explicit user artifacts, not cache entries, so they carry no
+    // separate salt — version skew is caught here via cacheSalt.
+    PROFILE_BEGIN("iface_hash");
+    std::string ifaceFp;
+    for (auto& iface : useInterfaces) {
+        auto ibuf = llvm::MemoryBuffer::getFile(iface);
+        if (ibuf) ifaceFp += std::to_string(fnv1a(ibuf.get()->getBuffer())) + "|";
+        else ifaceFp += "missing|";
+    }
+    std::string linkFp = linkFlags;
+    for (auto& tok : splitFlags(linkFlags)) {
+        bool isObj = tok.size() > 2 &&
+            (tok.substr(tok.size() - 2) == ".o" || tok.substr(tok.size() - 2) == ".a" ||
+             tok.find(".so") != std::string::npos);
+        if (isObj) {
+            auto lbuf = llvm::MemoryBuffer::getFile(tok);
+            if (lbuf) linkFp += "|" + std::to_string(fnv1a(lbuf.get()->getBuffer()));
+            else linkFp += "|missing";
+        }
+    }
+    PROFILE_END(); // iface_hash
     uint64_t sourceHash =
-        fnv1a(cacheSalt(optLevel, releaseMode, backend, argv[0]) + std::string(1, '\0') + sourceRef.str());
+        fnv1a(cacheSalt(optLevel, releaseMode, backend, argv[0], loopOpt) + std::string(1, '\0') + sourceRef.str() +
+              std::string(1, '\0') + ifaceFp + std::string(1, '\0') + linkFp);
+    if (getenv("FLINT_LOG_CACHE"))
+        std::cerr << "cache: key iface=[" << ifaceFp << "] link=[" << linkFp << "]\n";
     ModuleCache cache;
 
     // For binary output, check if cached binary exists (skip lex/parse/codegen/link entirely)
@@ -8654,11 +8838,14 @@ int main(int argc, char* argv[]) {
 
     if (emitBinary && !testModeFlag && cache.hasBinary(sourceHash)) {
         if (cache.loadBinary(sourceHash, outputPath)) {
+            if (getenv("FLINT_LOG_CACHE"))
+                std::cerr << "cache: hit binary (skipped lex/parse/codegen/link)\n";
             PROFILE_BEGIN("total");
             PROFILE_END(); // total
             PROFILE_REPORT();
             return 0;
         }
+        if (getenv("FLINT_LOG_CACHE")) std::cerr << "cache: miss binary\n";
     }
 
     PROFILE_BEGIN("cache_check");
@@ -8893,6 +9080,7 @@ int main(int argc, char* argv[]) {
     PROFILE_BEGIN("codegen");
     Codegen codegen;
     codegen.releaseMode = releaseMode;
+    codegen.loopOpt = loopOpt;
     codegen.setParser(&parser);
 
     // Generate declarations from the combined AST
@@ -8903,10 +9091,15 @@ int main(int argc, char* argv[]) {
     }
 
     // Load pre-compiled interfaces (--use-interface)
-    // These add declarations NOT in the AST (e.g., pre-compiled libraries)
+    // These add declarations NOT in the AST (e.g., pre-compiled libraries).
+    // B3: timed as iface_load so init-share breakdowns show the reuse cost;
+    // truncated/corrupt .bc fails cleanly here (never a wrong build).
+    PROFILE_BEGIN("iface_load");
     for (auto& iface : useInterfaces) {
         auto ifaceMod = loadInterface(iface, *codegen.ctx);
         if (!ifaceMod) { PROFILE_END(); PROFILE_END(); PROFILE_REPORT(); std::cerr << "error: cannot load interface '" << iface << "'\n"; return 1; }
+        if (getenv("FLINT_LOG_CACHE"))
+            std::cerr << "interface: loaded '" << iface << "'\n";
         // Manually copy function declarations from interface module into the main module.
         // We avoid llvm::Linker::linkModules because it can silently drop declarations
         // when the modules have slightly different data layouts (e.g. LLVM version skew).
@@ -8928,6 +9121,7 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+    PROFILE_END(); // iface_load
     // Sync LLVM declarations into C++ symbol tables for call resolution
     codegen.syncInterfaceSymbols();
 

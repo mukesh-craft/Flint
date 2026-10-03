@@ -15,7 +15,9 @@ else
   PARSE_BIN=""
 fi
 CANON="stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl driver/flintc.fl tools/merge_sexp.fl"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/fmtgate"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TMPD="$_TMPBASE/slipstream/fmtgate"
 mkdir -p "$TMPD"
 fail=0
 # 1. --check clean

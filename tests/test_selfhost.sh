@@ -8,7 +8,9 @@
 #         stable (verify + promote emit.1 to $STABLE_DIR)
 set -u
 FLINTC="${FLINTC:-./flintc}"
-OUT="/data/data/com.termux/files/usr/tmp/slipstream/self"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+OUT="$_TMPBASE/slipstream/self"
 mkdir -p "$OUT"
 PHASE="${1:-all}"
 
@@ -110,7 +112,7 @@ fi
 
 if [ "$PHASE" = all ] || [ "$PHASE" = stable ]; then
   echo "=== Stable promotion (flintc-stable)"
-  STABLE_DIR="${STABLE_DIR:-/data/data/com.termux/files/usr/tmp/slipstream/stable}"
+  STABLE_DIR="${STABLE_DIR:-$_TMPBASE/slipstream/stable}"
   mkdir -p "$STABLE_DIR"
   # Re-verify before promoting: fixed point + ladder smoke through emit.1.
   diff -q "$OUT/emit_self.ll" "$OUT/emit_self2.ll" > /dev/null \

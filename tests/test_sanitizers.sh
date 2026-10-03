@@ -8,7 +8,9 @@
 # Usage: bash tests/test_sanitizers.sh [path/to/flintc]   (default: ./flintc)
 set -u
 FLINTC="${1:-./flintc}"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/sanitizers"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TMPD="$_TMPBASE/slipstream/sanitizers"
 mkdir -p "$TMPD"
 export ASAN_OPTIONS=detect_leaks=0
 export UBSAN_OPTIONS=print_stacktrace=1
