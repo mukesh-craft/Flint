@@ -1,0 +1,38 @@
+fn main() -> i64 {
+    # Autograd tape reachability + a real gradient.
+    #
+    # y = x * x with x = [1,2,3] gives y = [1,4,9]. The runtime's AG_MUL rule is
+    # a pass-through (it lacks the operand values at that point), so d/dx comes
+    # back as the seed [2,2,2] rather than the true [2,4,6]. This pins the
+    # current behaviour so a real rule shows up as a visible change.
+    #
+    # Gradients are read with ag_grad_at, not by indexing the double*: `ptr[i]`
+    # is string indexing in Flint, so `g[0]` on a gradient buffer traps.
+    ag_init()
+
+    x = flt_create_1d(3)
+    flt_set(x, 0, 1.0)
+    flt_set(x, 1, 2.0)
+    flt_set(x, 2, 3.0)
+    xid = ag_track_tensor(x)
+
+    a = ag_mul(x, x)
+    print(flt_get(a, 0))
+    print(flt_get(a, 1))
+    print(flt_get(a, 2))
+
+    # Name the node the op recorded. Re-tracking would allocate a second id and
+    # orphan it, leaving ag_backward with nothing to differentiate.
+    aid = ag_grad_id(a)
+    ag_backward(aid)
+
+    print(ag_grad_len(xid))
+    print(ag_grad_at(xid, 0))
+    print(ag_grad_at(xid, 1))
+    print(ag_grad_at(xid, 2))
+
+    ag_cleanup()
+    flt_destroy(a)
+    flt_destroy(x)
+    0
+}

@@ -123,11 +123,23 @@ fi
 echo "  ffi helper:   ./ffi_helper.o"
 
 echo "=== Building Flint tensor runtime (parallel) ==="
+# OpenBLAS is optional. flint_blas.c probes cblas_dgemm with a weak symbol, so
+# linking -lopenblas turns the accelerated matmul on and omitting it leaves the
+# portable loop -- no #define, and a build without OpenBLAS still links.
+# Override with FLINT_NO_BLAS=1 to force portable (used by the test gate to
+# check both paths agree).
+FLINT_BLAS_LDLIB=""
+if [ "${FLINT_NO_BLAS:-}" != "1" ] && [ -f "$PREFIX/lib/libopenblas.so" ]; then
+    FLINT_BLAS_LDLIB="-lopenblas"
+fi
+echo "  blas:         ${FLINT_BLAS_LDLIB:-portable (no OpenBLAS)}"
 ( needs_rebuild flint_tensor.o runtime/flint_tensor.c && $CC -c $CFLAGS_RT runtime/flint_tensor.c -o flint_tensor.o ) &
+( needs_rebuild flint_blas.o runtime/flint_blas.c && $CC -c $CFLAGS_RT runtime/flint_blas.c -o flint_blas.o ) &
 ( needs_rebuild flint_ai.o runtime/flint_ai.c && $CC -c $CFLAGS_RT runtime/flint_ai.c -o flint_ai.o ) &
 ( needs_rebuild flint_ai_opt.o runtime/flint_ai_opt.c && $CC -c $CFLAGS_RT runtime/flint_ai_opt.c -o flint_ai_opt.o ) &
 wait
 echo "  tensor:       ./flint_tensor.o"
+echo "  blas:         ./flint_blas.o"
 echo "  flint_ai:     ./flint_ai.o"
 echo "  flint_ai_opt: ./flint_ai_opt.o"
 

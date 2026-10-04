@@ -24,6 +24,7 @@ gate decl-order python3 tests/test_decl_order.py stage1/flint_lex.fl stage2/flin
 gate fmt bash tests/test_fmt.sh "$FLINTC"
 gate errors bash tests/test_errors.sh
 gate aegis bash tests/test_aegis.sh "$FLINTC"
+gate ai bash tests/test_ai.sh "$FLINTC"
 if [ "$FULL" = 1 ]; then
   gate parse-gate-83 bash tests/test_parse_gate.sh "$FLINTC"
   gate fixpoint-83 bash tests/test_fixpoint.sh "$FLINTC"
