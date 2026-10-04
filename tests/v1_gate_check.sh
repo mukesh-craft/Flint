@@ -23,6 +23,7 @@ gate driver bash tests/test_driver.sh "$FLINTC"
 gate decl-order python3 tests/test_decl_order.py stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl driver/flintc.fl tools/merge_sexp.fl
 gate fmt bash tests/test_fmt.sh "$FLINTC"
 gate errors bash tests/test_errors.sh
+gate aegis bash tests/test_aegis.sh "$FLINTC"
 if [ "$FULL" = 1 ]; then
   gate parse-gate-83 bash tests/test_parse_gate.sh "$FLINTC"
   gate fixpoint-83 bash tests/test_fixpoint.sh "$FLINTC"

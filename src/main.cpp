@@ -8505,6 +8505,401 @@ public:
     }
 };
 
+// ===================== AEGIS Lease Checker =====================
+// The compile-time half of the hybrid model documented in
+// runtime/flint_aegis.h: the runtime lease table catches dynamic frees and
+// FFI-escaped leases, while this pass rejects the ones that are provable
+// statically. It was lost with the 2026-09-14 src/main.cpp wipe, leaving all
+// three documented errors runtime-only.
+//
+// A lease is the int64 returned by flint_aegis_alloc / _move. Variables that
+// receive one are tracked per scope; a lease freed or moved out from under a
+// later read is rejected at compile time rather than panicking at runtime.
+class AegisChecker {
+    enum class LeaseState { Live, Freed, Moved };
+    struct Sym {
+        bool isLease = false; // holds an aegis lease (not a plain int/str/...)
+        LeaseState state = LeaseState::Live;
+        int borrowCount = 0;
+        // Set when this binding is an alias of another binding's lease (a
+        // _borrow result). The count then lives on the named original.
+        std::string aliasOf;
+    };
+    std::vector<std::unordered_map<std::string, Sym>> scopes;
+    std::string funcName;
+    bool hadErr = false;
+    std::string errMsg;
+
+    // Leases that each branch may retire. A free on one path must not be
+    // treated as a free on the other, so branch effects are recorded per
+    // side and only committed when the branch joins.
+    std::unordered_map<std::string, LeaseState> thenEffects;
+    std::unordered_map<std::string, LeaseState> elseEffects;
+
+    void error(const std::string& msg) {
+        if (!hadErr) { hadErr = true; errMsg = msg; }
+    }
+
+    void enterScope() { scopes.emplace_back(); }
+    void exitScope() { if (!scopes.empty()) scopes.pop_back(); }
+
+    Sym* lookup(const std::string& n) {
+        for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+            auto f = it->find(n);
+            if (f != it->end()) return &f->second;
+        }
+        return nullptr;
+    }
+
+    // Follow aliasOf to the binding that owns the borrow count, so freeing or
+    // moving through an alias is still checked against the real lease.
+    Sym* owner(const std::string& n, std::string* rootName = nullptr) {
+        Sym* sym = lookup(n);
+        if (!sym || !sym->isLease) return sym;
+        std::string cur = n;
+        int guard = 0;
+        while (!sym->aliasOf.empty() && guard++ < 16) {
+            Sym* nx = lookup(sym->aliasOf);
+            if (!nx || !nx->isLease) break;
+            cur = sym->aliasOf;
+            sym = nx;
+        }
+        if (rootName) *rootName = cur;
+        return sym;
+    }
+
+    Sym* lookupLocal(const std::string& n) {
+        if (scopes.empty()) return nullptr;
+        auto f = scopes.back().find(n);
+        return f == scopes.back().end() ? nullptr : &f->second;
+    }
+
+    void declare(const std::string& n, bool isLease) {
+        Sym s; s.isLease = isLease;
+        scopes.back()[n] = s;
+    }
+
+    static bool isAegisAlloc(const std::string& callee) {
+        return callee == "flint_aegis_alloc";
+    }
+    // A fresh id from _move is still a lease.
+    static bool isAegisProducer(const std::string& callee) {
+        return callee == "flint_aegis_alloc" || callee == "flint_aegis_move";
+    }
+    // _borrow returns the same lease, not a new one; it increments a count.
+    static bool isAegisBorrow(const std::string& callee) {
+        return callee == "flint_aegis_borrow";
+    }
+    static bool isAegisUnborrow(const std::string& callee) {
+        return callee == "flint_aegis_unborrow";
+    }
+    static bool isAegisFree(const std::string& callee) {
+        return callee == "flint_aegis_free";
+    }
+    static bool isAegisUse(const std::string& callee) {
+        // flint_aegis_check is the documented weak-reference query: it
+        // answers "is this lease still live?" and returns 0 rather than
+        // panicking. Asking it about a freed lease is the whole point, so it
+        // is exempt from use-after-free.
+        if (callee == "flint_aegis_check") return false;
+        // Anything else that dereferences or inspects a lease.
+        return callee.rfind("flint_aegis_", 0) == 0;
+    }
+
+    // Apply a retirement to the symbol and, if inside a branch, to that
+    // branch's pending effects rather than to the symbol outright.
+    void retire(Sym* sym, const std::string& name, LeaseState st, const char* what) {
+        if (st == LeaseState::Freed && sym->borrowCount > 0) {
+            error("cannot free lease '" + name + "' while it is borrowed");
+            return;
+        }
+        if (inThen) thenEffects[name] = st;
+        else if (inElse) elseEffects[name] = st;
+        else sym->state = st;
+        (void)what;
+    }
+
+    bool inThen = false;
+    bool inElse = false;
+
+    // Effective state of `name` at this point: a retirement recorded by the
+    // branch currently being walked takes precedence over the committed
+    // state, so `free(a); use(a)` inside one arm is still a use-after-free.
+    LeaseState effectiveState(const std::string& name, LeaseState committed) {
+        if (inThen) { auto it = thenEffects.find(name); if (it != thenEffects.end()) return it->second; }
+        if (inElse) { auto it = elseEffects.find(name); if (it != elseEffects.end()) return it->second; }
+        return committed;
+    }
+
+    void checkExpr(ExprAST* e) {
+        if (!e) return;
+        if (e->kind == NodeKind::Call) {
+            auto* c = static_cast<CallExprAST*>(e);
+            const std::string& callee = c->callee;
+            if (isAegisProducer(callee)) {
+                // alloc/move both yield a fresh Live lease. _move consumes its
+                // argument, so retire it -- that is what makes a second move
+                // of the same lease (or a use after it) an error.
+                for (auto& a : c->args) checkExpr(a.get());
+                if (callee == "flint_aegis_move" && !c->args.empty()) {
+                    if (auto* arg = c->args[0].get()) {
+                        if (arg->kind == NodeKind::Variable) {
+                            std::string from = static_cast<VariableExprAST*>(arg)->name;
+                            if (Sym* sym = lookup(from); sym && sym->isLease) {
+                                if (sym->borrowCount > 0)
+                                    error("cannot move lease '" + from + "' while it is borrowed");
+                                else if (effectiveState(from, sym->state) != LeaseState::Live)
+                                    error("aegis_uaf: lease '" + from + "' moved twice");
+                                else
+                                    retire(sym, from, LeaseState::Moved, "move");
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            if (isAegisBorrow(callee)) {
+                // Counts on the lease the call names. An enclosing assignment
+                // makes the target an alias of that same lease, so the count
+                // must not be incremented twice for one borrow.
+                if (!c->args.empty()) {
+                    if (auto* arg = c->args[0].get()) {
+                        if (arg->kind == NodeKind::Variable) {
+                            std::string name = static_cast<VariableExprAST*>(arg)->name;
+                            if (Sym* sym = lookup(name); sym && sym->isLease) {
+                                if (effectiveState(name, sym->state) != LeaseState::Live)
+                                    error("aegis_uaf: lease '" + name + "' borrowed after retirement");
+                                else sym->borrowCount++;
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            if (isAegisFree(callee) && !c->args.empty()) {
+                if (auto* arg = c->args[0].get()) {
+                    if (arg->kind == NodeKind::Variable) {
+                        std::string name = static_cast<VariableExprAST*>(arg)->name;
+                        std::string root = name;
+                        Sym* sym = owner(name, &root);
+                        if (sym && sym->isLease) {
+                            if (sym->state == LeaseState::Freed) {
+                                error("aegis_double_free: lease '" + name + "' is already freed");
+                            } else if (sym->state == LeaseState::Moved) {
+                                error("aegis_uaf: lease '" + name + "' was already moved");
+                            } else {
+                                // A borrow recorded on this binding, or on any
+                                // alias of it, blocks the free.
+                                int held = sym->borrowCount;
+                                for (auto& sc : scopes)
+                                    for (auto& kv : sc)
+                                        if (kv.second.isLease && !kv.second.aliasOf.empty() &&
+                                            kv.second.aliasOf == name)
+                                            held += kv.second.borrowCount;
+                                if (held > 0)
+                                    error("cannot free lease '" + name + "' while it is borrowed");
+                                else
+                                    retire(sym, root, LeaseState::Freed, "free");
+                            }
+                        }
+                    }
+                }
+                return; // free is handled here; do not re-report via isAegisUse
+            }
+            if (isAegisUnborrow(callee)) {
+                // The count lives on the binding that was borrowed (an alias),
+                // not on the root: the root's count describes borrows of it.
+                if (!c->args.empty()) {
+                    if (auto* arg = c->args[0].get()) {
+                        if (arg->kind == NodeKind::Variable) {
+                            std::string name = static_cast<VariableExprAST*>(arg)->name;
+                            if (Sym* sym = lookup(name); sym && sym->borrowCount > 0)
+                                sym->borrowCount--;
+                        }
+                    }
+                }
+                return;
+            }
+            if (isAegisUse(callee)) {
+                for (auto& a : c->args) {
+                    if (!a || a->kind != NodeKind::Variable) continue;
+                    std::string name = static_cast<VariableExprAST*>(a.get())->name;
+                    Sym* sym = lookup(name);
+                    if (!sym || !sym->isLease) continue;
+                    LeaseState st = effectiveState(name, sym->state);
+                    if (st == LeaseState::Freed)
+                        error((inThen || inElse ? "aegis_branch_uaf: lease '" + name + "' used after free on this path"
+                                                : "aegis_uaf: lease '" + name + "' used after free"));
+                    else if (st == LeaseState::Moved && callee != "flint_aegis_move")
+                        error("aegis_uaf: lease '" + name + "' used after move");
+                }
+                return; // arguments already inspected above
+            }
+            // flint_aegis_check is the weak-reference query and takes a
+            // possibly-dead lease by design, so its argument is not walked
+            // as an ordinary use.
+            if (callee != "flint_aegis_check")
+                for (auto& a : c->args) checkExpr(a.get());
+            return;
+        }
+        if (e->kind == NodeKind::VarDecl) {
+            auto* n = static_cast<VarDeclAST*>(e);
+            // `x = flint_aegis_alloc(..)` binds a fresh Live lease.
+            if (n->init && n->init->kind == NodeKind::Call) {
+                auto* ic = static_cast<CallExprAST*>(n->init.get());
+                if (isAegisProducer(ic->callee)) {
+                    // Walk the initializer FIRST: for _move it retires the
+                    // source lease, and declaring the target before that walk
+                    // would let a stale pending effect survive.
+                    checkExpr(n->init.get());
+                    declare(n->varName, true);
+                    Sym* sym = lookupLocal(n->varName);
+                    sym->state = LeaseState::Live;   // a fresh id, always
+                    sym->borrowCount = 0;
+                    sym->aliasOf.clear();
+                    return;
+                }
+                // `c = flint_aegis_borrow(b)` binds an ALIAS of b's lease: the
+                // runtime hands back the same id, so the borrow is recorded
+                // once, on this binding.
+                if (isAegisBorrow(ic->callee) && !ic->args.empty()) {
+                    if (auto* arg = ic->args[0].get()) {
+                        if (arg->kind == NodeKind::Variable) {
+                            std::string from = static_cast<VariableExprAST*>(arg)->name;
+                            if (Sym* src2 = lookup(from); src2 && src2->isLease) {
+                                declare(n->varName, true);
+                                Sym* tgt = lookupLocal(n->varName);
+                                tgt->state = effectiveState(from, src2->state);
+                                tgt->borrowCount = 1;
+                                tgt->aliasOf = from;
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            declare(n->varName, false);
+            checkExpr(n->init.get());
+            return;
+        }
+        if (e->kind == NodeKind::Assign) {
+            auto* n = static_cast<AssignExprAST*>(e);
+            // `c = flint_aegis_borrow(b)` makes c an ALIAS of b's lease --
+            // the runtime returns the same id -- so the two bindings must
+            // share one borrow count rather than each holding their own.
+            if (n->rhs && n->rhs->kind == NodeKind::Call) {
+                auto* rc = static_cast<CallExprAST*>(n->rhs.get());
+                if (isAegisBorrow(rc->callee) && !rc->args.empty()) {
+                    if (auto* arg = rc->args[0].get()) {
+                        if (arg->kind == NodeKind::Variable) {
+                            std::string from = static_cast<VariableExprAST*>(arg)->name;
+                            if (Sym* src2 = lookup(from); src2 && src2->isLease) {
+                                // One borrow, recorded once on the alias. The
+                                // source is deliberately NOT walked here: that
+                                // would add a second count for the same borrow.
+                                thenEffects.erase(n->varName);
+                                elseEffects.erase(n->varName);
+                                auto apply = [&](Sym* tgt) {
+                                    tgt->isLease = true;
+                                    tgt->state = effectiveState(from, src2->state);
+                                    tgt->borrowCount = 1;
+                                    tgt->aliasOf = from;
+                                };
+                                if (Sym* tgt = lookupLocal(n->varName)) apply(tgt);
+                                else {
+                                    declare(n->varName, true);
+                                    apply(lookupLocal(n->varName));
+                                }
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            checkExpr(n->rhs.get());
+            if (n->rhs && n->rhs->kind == NodeKind::Call &&
+                isAegisProducer(static_cast<CallExprAST*>(n->rhs.get())->callee)) {
+                // The target now holds a brand-new Live lease, so any pending
+                // retirement recorded for it in this branch is stale.
+                thenEffects.erase(n->varName);
+                elseEffects.erase(n->varName);
+                if (Sym* sym = lookupLocal(n->varName)) {
+                    sym->isLease = true; sym->state = LeaseState::Live; sym->borrowCount = 0;
+                    sym->aliasOf.clear();
+                } else declare(n->varName, true);
+            }
+            return;
+        }
+        for (auto* c : Codegen::exprChildren(e)) checkExpr(c);
+    }
+
+    void checkBlock(BlockStmtAST* b) {
+        enterScope();
+        if (b) for (auto& st : b->stmts) checkStmt(st.get());
+        exitScope();
+    }
+
+    void checkStmt(ExprAST* s) {
+        if (!s) return;
+        switch (s->kind) {
+            case NodeKind::Block: checkBlock(static_cast<BlockStmtAST*>(s)); return;
+            case NodeKind::If: {
+                auto* n = static_cast<IfStmtAST*>(s);
+                checkExpr(n->condition.get());
+                thenEffects.clear(); elseEffects.clear();
+                bool pt = inThen, pe = inElse;
+                inThen = true; inElse = false;
+                checkStmt(n->thenBlock.get());
+                inThen = pt; inElse = true;
+                checkStmt(n->elseBlock.get());
+                inThen = pt; inElse = pe;
+                for (auto& kv : thenEffects) {
+                    auto* sym = lookup(kv.first);
+                    if (!sym || !sym->isLease) continue;
+                    if (elseEffects.count(kv.first)) sym->state = kv.second;
+                }
+                thenEffects.clear(); elseEffects.clear();
+                return;
+            }
+            case NodeKind::While: {
+                auto* n = static_cast<WhileStmtAST*>(s);
+                checkExpr(n->condition.get());
+                enterScope();
+                checkStmt(n->body.get());
+                // Loop fixpoint: a lease retired on one path is retired on the
+                // next iteration too, so walk the body twice.
+                checkStmt(n->body.get());
+                exitScope();
+                return;
+            }
+            case NodeKind::Return:
+                if (auto* r = static_cast<ReturnStmtAST*>(s)) checkExpr(r->value.get());
+                return;
+            case NodeKind::Break:
+            case NodeKind::Continue:
+                return;
+            default: checkExpr(s); return;
+        }
+    }
+
+public:
+    bool check(FunctionAST* fn, std::string& errorOut) {
+        hadErr = false; errMsg.clear();
+        funcName = fn->name;
+        scopes.clear();
+        inThen = inElse = false;
+        enterScope();
+        for (auto& p : fn->params) declare(p.first, false);
+        if (fn->body) {
+            if (fn->body->kind == NodeKind::Block) checkBlock(static_cast<BlockStmtAST*>(fn->body.get()));
+            else checkStmt(fn->body.get());
+        }
+        exitScope();
+        if (hadErr) errorOut = errMsg;
+        return !hadErr;
+    }
+};
+
 // ===================== QBE Backend =====================
 class QbeEmitter {
     std::ostringstream il;
@@ -9467,6 +9862,62 @@ int main(int argc, char* argv[]) {
     }
 
     // ===== LLVM Backend (kept for --backend llvm) =====
+    //
+    // Static safety passes. These used to run only under `--backend qbe`,
+    // which is not installed on this device -- so the default path compiled
+    // and ran a use-after-free with no diagnostic at all. They belong to the
+    // language, not to one backend, so they run here too.
+    //
+    // Bodies are reparsed from their token ranges when the single-pass emit
+    // mode left them unbuilt, exactly as the QBE path does, so the walkers
+    // below always see a tree.
+    for (auto& fn : combined->functions) {
+        if (fn->isDeclaration) continue;
+        if (!fn->body && fn->bodyStart > 0 && fn->bodyEnd > 0) {
+            size_t savedPos = parser.getPos();
+            parser.setPos(fn->bodyStart);
+            parser.setCodegen(nullptr, false);
+            parser.resetDeclaredVars(fn->params);
+            fn->body = parser.reparseBlock();
+            parser.setPos(fn->bodyEnd);
+            parser.setPos(savedPos);
+            if (parser.hadError()) {
+                std::cerr << parser.errorMsg() << "\n";
+                PROFILE_END(); PROFILE_END(); PROFILE_REPORT();
+                return 1;
+            }
+        }
+    }
+
+    // Borrow/move checking: use-after-move, free-while-borrowed.
+    {
+        BorrowChecker borrowChecker;
+        for (auto& fn : combined->functions) {
+            if (fn->isDeclaration) continue;
+            std::string errorOut;
+            if (!borrowChecker.check(fn.get(), errorOut)) {
+                std::cerr << "borrow/move error in '" << fn->name << "': " << errorOut << "\n";
+                PROFILE_END(); PROFILE_END(); PROFILE_REPORT();
+                return 1;
+            }
+        }
+    }
+
+    // AEGIS lease checking: the compile-time half of the hybrid model that
+    // runtime/flint_aegis.h documents but that no longer existed.
+    {
+        AegisChecker aegisChecker;
+        for (auto& fn : combined->functions) {
+            if (fn->isDeclaration) continue;
+            std::string errorOut;
+            if (!aegisChecker.check(fn.get(), errorOut)) {
+                std::cerr << "aegis error in '" << fn->name << "': " << errorOut << "\n";
+                PROFILE_END(); PROFILE_END(); PROFILE_REPORT();
+                return 1;
+            }
+        }
+    }
+
     PROFILE_BEGIN("codegen");
     Codegen codegen;
     codegen.releaseMode = releaseMode;
