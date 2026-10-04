@@ -2290,3 +2290,62 @@ Full writeup with citations: `docs/IMPROVEMENT-PLAN.md`.
 3. Test with `./flintc examples/hello.fl` (JIT run) or `./flintc examples/hello.fl output.ll && clang output.ll runtime.o -o hello && ./hello` (AOT)
 4. Run all examples: `for f in examples/*.fl; do echo "=== $f ===" && timeout 30 ./flintc "$f" 2>&1 | head -5; done`
 5. Run benchmarks: `for f in benchmarks/*.fl; do echo "=== $f ===" && timeout 60 ./flintc "$f" 2>&1; done`
+
+---
+
+## 2026-10-04 — AEGIS hardening: S1-S7 (verifyModule + AegisChecker)
+
+**verifyModule gate enabled** (was `if (0 && verifyFunction(...))`). It found
+five classes of silently-invalid IR, all now fixed: `trunc` of a non-integer
+in main's return (poison exit status); inference/codegen disagreement on
+builtin return types; void last-expression becoming an implicit `return`
+(`ret ptr` from a void fn); unannotated params defaulting to i64 when a handle
+was passed; and three wrong `sb: i64` annotations in stage3.
+
+**S1 CRITICAL — `_unchecked` AEGIS builtins were registered as callable.** Any
+Flint program could segfault the runtime:
+`flint_aegis_free(a)` then `flint_aegis_read_i64_unchecked(a, 999999)`. Now
+registered only under `--unsafe`, plus a runtime table guard that panics
+instead of indexing a NULL `g_slots` / unvalidated slot.
+
+**S2 CRITICAL — `AegisChecker` did not exist** (lost in the 2026-09-14 wipe)
+AND both static passes ran only under `if (backend == "qbe")`, which is not
+installed — so the default LLVM path ran NEITHER. A use-after-free compiled and
+ran silently. Both passes now run on LLVM; AegisChecker rejects aegis_uaf,
+aegis_double_free, aegis_branch_uaf, moved-twice, used-after-move and
+free-while-borrowed. Branch effects are per-arm; `_borrow` binds an *alias*
+(count lives on the alias); `_check` is exempt (documented weak-ref query).
+
+**S3 — division/modulo by zero was UB, not a panic.** `100 / 0` printed 1 and
+exited 0. Both AST and emit-mode paths now check.
+
+**S4/S6/S7 — `isCopyType()` counted Str/Map/Struct/Enum as Copy.** Narrowed to
+I64/F64/Bool. This exposed three masked bugs: (a) passing a variable as a call
+argument marked it MOVED — wrong, the caller's binding stays usable, and it made
+`flint_sb_append(sb,..)` retire `sb`; ownership is now transferred only at
+assignment. (b) No loop fixpoint — a `mut` moved inside a loop body stayed moved
+next iteration. (c) NINE GENUINE use-after-moves in the self-hosted sources
+(2 in flint_parse.fl, 2 in flint_emit.fl, 5 in driver/flintc.fl) plus one
+undeclared variable (`full`). BorrowChecker gained Match/Lambda/StructLiteral/
+Unwrap/Destructure.
+
+**Two traps worth remembering.** (1) Blind string-splice edits to main.cpp
+destroyed `class QbeEmitter`'s header and a whole method body; the compiler
+errors pointed at the *symptoms* far from the damage. Reverting to HEAD and
+re-applying edits one at a time was faster than debugging the splice. (2) A
+stale ./flintc produced a bogus "3 passed, 8 failed" gate run — always rebuild
+before trusting a gate result after editing sources.
+
+**Gates:** v1 11/11 (aegis gate added), parse-gate 92, fixpoint 92, lexdiff 91,
+stage3-ladder 21/21 with no re-blessing, tutorial 8, sanitizers 10,
+opt-identity 11, selfhost Phase C byte-identical. sum_array 23.31 ms at HEAD
+vs 23.48 ms here (same session) — the 17.1 ms seen earlier was a cooler
+machine, not a regression.
+
+**Note:** `driver/flintc.fl` is gitignored and untracked (only `driver/VERSIONS`
+is in git), so its use-after-move fixes exist only in the working tree.
+
+**Still open — S5:** leases cover ONLY explicit `flint_aegis_*` allocations.
+`str`, `map` and `chan` have no lease (grep in runtime.c/flint_chan.c = 0), so
+UAF through them hits neither backstop. Highest-value remaining work (~400
+lines).
