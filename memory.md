@@ -2365,6 +2365,26 @@ no-op that quietly turns a safety feature off is worse than a link error.
 ./flintc or stale test binary. `rm -f runtime.o flint_aegis.o` before
 concluding a runtime change is inert. Confirm with `nm <obj> | grep aegis`.
 
+**Two more gaps closed after that.** (a) chan was quarantined on free but not
+guarded on USE, so send/recv hit `pthread_mutex_lock` on a destroyed mutex --
+UB that _FORTIFY_SOURCE flags as "pthread_mutex_lock called on a destroyed
+mutex". All four use sites (send/recv/close/len) now check. (b)
+`driver/flintc.fl` was UNTRACKED: the .gitignore rule `flintc.fl`, meant for the
+built compiler artifact, matches at any depth and so excluded a 369-line
+hand-written source file that test_driver, test_fmt and decl-order all read.
+Anchored it to `/flintc.fl` and tracked the file -- its five use-after-move
+fixes had been living only in the working tree.
+
 **Gates now:** v1 11/11, parse-gate 92, fixpoint 92, lexdiff 91, ladder 21/21,
-tutorial 8, sanitizers 10, opt-identity 11, aegis 14/14, selfhost Phase C
+tutorial 8, sanitizers 10, opt-identity 11, aegis 15/15, selfhost Phase C
 byte-identical.
+
+**S1-S7 all closed.** AEGIS gap table, for reference:
+  S1 unchecked builtins reachable from source   -> --unsafe only + runtime guard
+  S2 AegisChecker gone, passes never ran on LLVM -> restored + wired to LLVM
+  S3 div/mod by zero was UB                      -> traps
+  S4 Str/Map/Struct/Enum counted as Copy        -> scalars only
+  S5 str/map/chan had no runtime backstop       -> UAF quarantine
+  S6 11 node kinds fell through unchecked        -> Match/Lambda/StructLiteral/
+                                                   Unwrap/Destructure added
+  S7 no loop fixpoint for move state            -> revive between passes
