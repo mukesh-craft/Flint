@@ -264,12 +264,23 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
 
     // Include standard library .o files if they exist
     struct stat st;
-    const char* stdLibs[] = {"flint_tensor.o", "flint_ai.o", "flint_ai_opt.o",
+    const char* stdLibs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o",
+                             "flint_ai_opt.o",
                              "flint_serial.o", "flint_crypto.o", "flint_net.o",
                              "flint_aegis.o", "flint_chan.o",
                              "ffi_helper.o"};
     for (auto* lib : stdLibs) {
         if (stat(lib, &st) == 0) args.push_back(lib);
+    }
+
+    // OpenBLAS, when it is installed. flint_blas.o references cblas_dgemm
+    // weakly, so this is an optimisation rather than a requirement: without the
+    // library the symbol resolves to NULL at runtime and matmul falls back to
+    // the portable loop. Passing -lopenblas when it does not exist would fail
+    // the link, hence the probe.
+    if (const char* p = getenv("PREFIX")) {
+        std::string blasLib = std::string(p) + "/lib/libopenblas.so";
+        if (stat(blasLib.c_str(), &st) == 0) args.push_back("-lopenblas");
     }
 
     // Include pyruntime.o if it exists (Python support) — try current dir.
@@ -389,7 +400,7 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
         return true;
     };
     if (stat("runtime.o", &st) == 0 && !loadOne("runtime.o", true)) return false;
-    const char* aiObjs[] = {"flint_tensor.o", "flint_ai.o", "flint_ai_opt.o"};
+    const char* aiObjs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o", "flint_ai_opt.o"};
     for (auto* objName : aiObjs)
         if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
     const char* stdObjs[] = {"flint_serial.o", "flint_crypto.o", "flint_net.o",
@@ -4358,18 +4369,106 @@ public:
         add("flint_chan_close", i64Ty, {i8PtrTy}, false);
         add("flint_chan_len", i64Ty, {i8PtrTy}, false);
 
-        // AI engine builtins
-        auto tensorTy = llvm::StructType::get(*ctx, {i64Ty, i64Ty, llvm::PointerType::get(*ctx, 0)}); // {rows, cols, data*}
-        add("fao_matmul", tensorTy, {tensorTy, tensorTy}, false);
-        add("fao_relu", tensorTy, {tensorTy}, false);
-        add("fao_sigmoid", tensorTy, {tensorTy}, false);
-        add("fao_dropout", tensorTy, {tensorTy, llvm::Type::getDoubleTy(*ctx)}, false);
-        add("fao_softmax", tensorTy, {tensorTy}, false);
-        add("fa_relu", tensorTy, {tensorTy}, false);
-        add("fa_sigmoid", tensorTy, {tensorTy}, false);
-        add("fa_dropout", tensorTy, {tensorTy, llvm::Type::getDoubleTy(*ctx)}, false);
-        add("fa_softmax", tensorTy, {tensorTy}, false);
-        add("fa_default_arena", llvm::PointerType::get(*ctx, 0), {}, false);
+        // ──────────────────────────────────────────────────────
+        // AI / tensor builtins
+        //
+        // These were previously registered against a {i64,i64,ptr} struct with
+        // signatures that matched no definition: fa_relu is
+        // fa_relu(FArena*, FATensor*) -- two args, not one -- and fa_softmax,
+        // fa_dropout, fao_relu, fao_sigmoid, fao_dropout, fao_softmax and
+        // fa_default_arena do not exist at all. So all nine were uncallable
+        // (the verifier rejects the call) or unlinkable, which is why 2,891
+        // lines of AI runtime were unreachable from Flint code.
+        //
+        // FlintTensor is passed as an opaque pointer: it is a C struct whose
+        // layout the compiler does not need to know, and several entry points
+        // return it.
+        // ──────────────────────────────────────────────────────
+        auto tPtr = llvm::PointerType::get(*ctx, 0);
+
+        // Core tensor
+        add("flt_create",   tPtr, {i64Ty, llvm::PointerType::get(i64Ty, 0)}, false);
+        add("flt_create_1d", tPtr, {i64Ty}, false);
+        add("flt_create_2d", tPtr, {i64Ty, i64Ty}, false);
+        add("flt_create_3d", tPtr, {i64Ty, i64Ty, i64Ty}, false);
+        add("flt_destroy",  voidTy, {tPtr}, false);
+        add("flt_clone",    tPtr, {tPtr}, false);
+        add("flt_zeros_like", tPtr, {tPtr}, false);
+        add("flt_size",     i64Ty, {tPtr}, false);
+        add("flt_ndim",     i64Ty, {tPtr}, false);
+        add("flt_shape",    i64Ty, {tPtr, i64Ty}, false);
+        add("flt_get",      f64Ty, {tPtr, i64Ty}, false);
+        add("flt_set",      voidTy, {tPtr, i64Ty, f64Ty}, false);
+        add("flt_fill",     voidTy, {tPtr, f64Ty}, false);
+        add("flt_copy",     voidTy, {tPtr, tPtr}, false);
+        add("flt_randn",    voidTy, {tPtr}, false);
+        add("flt_rand",     voidTy, {tPtr}, false);
+        add("flt_uniform",  voidTy, {tPtr, f64Ty, f64Ty}, false);
+
+        // Elementwise / math (return a new tensor)
+        add("flt_neg",      tPtr, {tPtr}, false);
+        add("flt_exp",      tPtr, {tPtr}, false);
+        add("flt_log",      tPtr, {tPtr}, false);
+        add("flt_sqrt",     tPtr, {tPtr}, false);
+        add("flt_pow",      tPtr, {tPtr, f64Ty}, false);
+        add("flt_relu",     tPtr, {tPtr}, false);
+        add("flt_sigmoid",  tPtr, {tPtr}, false);
+        add("flt_tanh",     tPtr, {tPtr}, false);
+        add("flt_add_tt",   tPtr, {tPtr, tPtr}, false);
+        add("flt_sub_tt",   tPtr, {tPtr, tPtr}, false);
+        add("flt_mul_tt",   tPtr, {tPtr, tPtr}, false);
+        add("flt_div_tt",   tPtr, {tPtr, tPtr}, false);
+        add("flt_matmul",   tPtr, {tPtr, tPtr}, false);
+        add("flt_matmul_blas", tPtr, {tPtr, tPtr}, false);
+        add("flt_sum",      f64Ty, {tPtr}, false);
+        add("flt_mean",     f64Ty, {tPtr}, false);
+        add("flt_reshape",  tPtr, {tPtr, i64Ty, llvm::PointerType::get(i64Ty, 0)}, false);
+        add("flt_transpose", tPtr, {tPtr, i64Ty, i64Ty}, false);
+
+        // In-place activations
+        add("flt_relu_inplace",    voidTy, {tPtr}, false);
+        add("flt_sigmoid_inplace", voidTy, {tPtr}, false);
+        add("flt_tanh_inplace",    voidTy, {tPtr}, false);
+
+        // Autograd tape
+        add("ag_init",        voidTy, {}, false);
+        add("ag_cleanup",     voidTy, {}, false);
+        add("ag_track_tensor", i64Ty, {tPtr}, false);
+        add("ag_backward",    voidTy, {i64Ty}, false);
+        add("ag_get_grad",    llvm::PointerType::get(f64Ty, 0), {i64Ty}, false);
+        add("ag_grad_id",     i64Ty, {tPtr}, false);
+        add("ag_grad_at",     f64Ty, {i64Ty, i64Ty}, false);
+        add("ag_grad_len",    i64Ty, {i64Ty}, false);
+        add("ag_zero_grad",   voidTy, {i64Ty}, false);
+        add("ag_matmul",      tPtr, {tPtr, tPtr}, false);
+        add("ag_add",         tPtr, {tPtr, tPtr}, false);
+        add("ag_mul",         tPtr, {tPtr, tPtr}, false);
+        add("ag_relu",        tPtr, {tPtr}, false);
+        add("ag_sigmoid",     tPtr, {tPtr}, false);
+        add("ag_tanh",        tPtr, {tPtr}, false);
+        add("ag_exp",         tPtr, {tPtr}, false);
+        add("ag_log",         tPtr, {tPtr}, false);
+        add("ag_neg",         tPtr, {tPtr}, false);
+
+        // Optimizers (AdamState / SGDState are opaque)
+        add("adam_create",     tPtr, {f64Ty}, false);
+        add("adam_add_param",  voidTy, {tPtr, i64Ty, i64Ty}, false);
+        add("adam_step",       voidTy, {tPtr}, false);
+        add("adam_destroy",    voidTy, {tPtr}, false);
+        add("sgd_create",      tPtr, {f64Ty, f64Ty}, false);
+        add("sgd_add_param",   voidTy, {tPtr, i64Ty, i64Ty}, false);
+        add("sgd_step",        voidTy, {tPtr}, false);
+        add("sgd_destroy",     voidTy, {tPtr}, false);
+
+        // Loss
+        add("mse_loss",      f64Ty, {tPtr, tPtr}, false);
+        add("mse_loss_grad", tPtr, {tPtr, tPtr}, false);
+
+        // BLAS backend introspection -- lets Flint report which matmul path is
+        // live, which matters because it differs per build.
+        add("flint_blas_available", i64Ty, {}, false);
+        add("flint_blas_backend",   i8PtrTy, {}, false);
+        add("flint_blas_calls",     i64Ty, {}, false);
     }
 
     void declareGlobals(ProgramAST& prog) {

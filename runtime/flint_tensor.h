@@ -56,6 +56,13 @@ typedef struct AGNode {
 // Tensor API
 // =========================================================================
 void*  flt_create(int64_t ndim, int64_t* shape);
+// Rank-specific constructors. A Flint array is a vec handle, not an i64
+// buffer, so a caller in Flint cannot supply the `int64_t*` that flt_create
+// wants -- these take the dimensions directly.
+void*  flt_create_1d(int64_t n0);
+void*  flt_create_2d(int64_t n0, int64_t n1);
+void*  flt_create_3d(int64_t n0, int64_t n1, int64_t n2);
+void   flt_set_all(void* t, const double* vals, int64_t n);
 void   flt_destroy(void* t);
 void*  flt_clone(void* t);
 void*  flt_zeros_like(void* t);
@@ -89,7 +96,9 @@ double flt_mean(void* a);
 void*  flt_reshape(void* a, int64_t ndim, int64_t* shape);
 void*  flt_transpose(void* a, int64_t dim0, int64_t dim1);
 
-// BLAS-accelerated matmul (detects OpenBLAS at link time)
+// Deterministic matmul: always the portable reference loop, never BLAS.
+// Same result as flt_matmul, so it is the oracle the test gate compares the
+// live (possibly BLAS-accelerated) path against.
 void* flt_matmul_blas(void* a, void* b);
 
 // In-place ops
@@ -107,6 +116,15 @@ void   ag_record(int64_t op_type, int64_t output_id, int64_t* input_ids,
                   int n_inputs, void* extra, int extra_int);
 void   ag_backward(int64_t output_id);
 double* ag_get_grad(int64_t grad_id);
+// The grad_id an ag_* op assigned to its output tensor. Needed because the op
+// sets grad_id itself: re-tracking with ag_track_tensor allocates a second id
+// and orphans the recorded node, so ag_backward would find nothing.
+int64_t ag_grad_id(void* tensor);
+// Read gradient element `idx` of the tensor tracked as `grad_id`. Provided
+// because `double*` cannot be indexed from Flint -- `ptr[i]` is string
+// indexing, so `g[0]` on a gradient buffer traps on the length check.
+double ag_grad_at(int64_t grad_id, int64_t idx);
+int64_t ag_grad_len(int64_t grad_id);
 void   ag_zero_grad(int64_t grad_id);
 void   ag_print_graph(void);
 

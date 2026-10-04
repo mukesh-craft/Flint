@@ -1,4 +1,5 @@
 #include "flint_tensor.h"
+#include "flint_blas.h"
 #include <float.h>
 
 // =========================================================================
@@ -46,6 +47,37 @@ static int64_t _strided_idx(int64_t i, int64_t ndim, int64_t* shape, int64_t* st
 // =========================================================================
 // Tensor creation / destruction
 // =========================================================================
+// Rank-1 and rank-2 constructors.
+//
+// flt_create takes an `int64_t*`, but a Flint array is a vec handle (a
+// pointer to an opaque object), not a bare i64 buffer -- so a Flint caller
+// cannot build one, and every attempt to pass a literal shape either fails the
+// type check or reinterprets the handle as a pointer. These take the
+// dimensions directly, which is what every call site actually wants.
+void* flt_create_1d(int64_t n0) {
+    int64_t shape[1] = { n0 };
+    return flt_create(1, shape);
+}
+
+void* flt_create_2d(int64_t n0, int64_t n1) {
+    int64_t shape[2] = { n0, n1 };
+    return flt_create(2, shape);
+}
+
+void* flt_create_3d(int64_t n0, int64_t n1, int64_t n2) {
+    int64_t shape[3] = { n0, n1, n2 };
+    return flt_create(3, shape);
+}
+
+// Fill from a caller-supplied array, so a tensor can be seeded without N
+// separate flt_set calls.
+void flt_set_all(void* t, const double* vals, int64_t n) {
+    FlintTensor* tt = _as_tensor(t);
+    if (!tt) return;
+    int64_t k = n < tt->size ? n : tt->size;
+    for (int64_t i = 0; i < k; i++) tt->data[i] = vals[i];
+}
+
 void* flt_create(int64_t ndim, int64_t* shape) {
     FlintTensor* t = calloc(1, sizeof(FlintTensor));
     t->ndim = ndim;
@@ -188,36 +220,45 @@ void* flt_mul_tt(void* a, void* b) { return _binary_op(a, b, _mul); }
 void* flt_div_tt(void* a, void* b) { return _binary_op(a, b, _div); }
 
 // =========================================================================
-// Matrix multiply (triple-loop fallback)
+// Matrix multiply
 // =========================================================================
+// Dispatches through flint_blas, which resolves OpenBLAS at first use via a
+// weak symbol probe and otherwise uses the portable loop. This replaces an
+// `#ifdef FLINT_USE_BLAS` that no build ever defined, which meant the BLAS
+// branch was dead code and every matmul took the scalar triple loop.
 void* flt_matmul(void* a, void* b) {
     FlintTensor* ta = _as_tensor(a);
     FlintTensor* tb = _as_tensor(b);
+    if (!ta || !tb) { fprintf(stderr, "matmul: null tensor\n"); return NULL; }
     if (ta->ndim != 2 || tb->ndim != 2) { fprintf(stderr, "matmul: need 2D\n"); return NULL; }
     int64_t M = ta->shape[0], K = ta->shape[1], N = tb->shape[1];
     if (tb->shape[0] != K) { fprintf(stderr, "matmul: shape mismatch\n"); return NULL; }
 
-    // Try BLAS first
-    #ifdef FLINT_USE_BLAS
-    extern void cblas_dgemm(int, int, int, int, int, double,
-                            double*, int, double*, int, double, double*, int);
     int64_t shape[2] = {M, N};
     FlintTensor* out = flt_create(2, shape);
-    cblas_dgemm(101, 111, 111, M, N, K, 1.0,
-                ta->data, K, tb->data, N, 0.0, out->data, N);
+    if (!out) return NULL;
+    flint_blas_matmul(M, K, N, ta->data, tb->data, out->data);
     return out;
-    #else
+}
+
+// Explicit-BLAS matmul. Declared in the header since before the backend
+// existed but never defined or registered -- calling it was a link error. It
+// now forces the portable reference path, so it is the deterministic
+// counterpart to flt_matmul (same answer, no BLAS variance) and doubles as the
+// oracle the test gate compares the live path against.
+void* flt_matmul_blas(void* a, void* b) {
+    FlintTensor* ta = _as_tensor(a);
+    FlintTensor* tb = _as_tensor(b);
+    if (!ta || !tb) { fprintf(stderr, "matmul_blas: null tensor\n"); return NULL; }
+    if (ta->ndim != 2 || tb->ndim != 2) { fprintf(stderr, "matmul_blas: need 2D\n"); return NULL; }
+    int64_t M = ta->shape[0], K = ta->shape[1], N = tb->shape[1];
+    if (tb->shape[0] != K) { fprintf(stderr, "matmul_blas: shape mismatch\n"); return NULL; }
+
     int64_t shape[2] = {M, N};
     FlintTensor* out = flt_create(2, shape);
-    for (int64_t i = 0; i < M; i++)
-        for (int64_t j = 0; j < N; j++) {
-            double sum = 0.0;
-            for (int64_t k = 0; k < K; k++)
-                sum += ta->data[i * K + k] * tb->data[k * N + j];
-            out->data[i * N + j] = sum;
-        }
+    if (!out) return NULL;
+    flint_blas_matmul_reference(M, K, N, ta->data, tb->data, out->data);
     return out;
-    #endif
 }
 
 // =========================================================================
@@ -318,12 +359,44 @@ static AGNode* ag_graph_last = NULL;
 static int64_t ag_next_id = 0;
 static int ag_initialized = 0;
 
+// grad_id -> tensor registry.
+//
+// ag_backward accumulates into the tensor's own `grad` buffer, but the caller
+// only holds the id that ag_track_tensor returned. Without a way to map the id
+// back, ag_get_grad has nothing to resolve and gradients are unreachable --
+// which is why it used to be a stub returning NULL. Ids are dense and start at
+// 0, so a growable array indexed by id is enough; entries are cleared on
+// cleanup so a stale id cannot hand back a freed tensor.
+static FlintTensor** ag_reg = NULL;
+static int64_t ag_reg_n = 0;
+
+static void _ag_reg_set(int64_t id, FlintTensor* t) {
+    if (id < 0) return;
+    if (id >= ag_reg_n) {
+        int64_t want = id + 1;
+        int64_t cap = ag_reg_n ? ag_reg_n : 16;
+        while (cap < want) cap *= 2;
+        FlintTensor** nr = (FlintTensor**)realloc(ag_reg, (size_t)cap * sizeof(FlintTensor*));
+        if (!nr) return;
+        memset(nr + ag_reg_n, 0, (size_t)(cap - ag_reg_n) * sizeof(FlintTensor*));
+        ag_reg = nr;
+        ag_reg_n = cap;
+    }
+    ag_reg[id] = t;
+}
+
+static FlintTensor* _ag_reg_get(int64_t id) {
+    if (id < 0 || id >= ag_reg_n) return NULL;
+    return ag_reg[id];
+}
+
 // Track tensor: assign a grad_id and allocate gradient buffer
 int64_t ag_track_tensor(void* tensor) {
     if (!ag_initialized) ag_init();
     FlintTensor* t = _as_tensor(tensor);
     t->grad_id = ag_next_id++;
     t->grad = calloc((size_t)t->size, sizeof(double));
+    _ag_reg_set(t->grad_id, t);
     return t->grad_id;
 }
 
@@ -379,23 +452,32 @@ void ag_backward(int64_t output_id) {
     if (!n) return;
     FlintTensor* out = NULL; // will be set during traversal
 
-    // We'll traverse the DAG from the output node backwards
-    // Use a simple array-based stack for breadth-first backward traversal
-    #define MAX_STACK 65536
-    AGNode* stack[MAX_STACK];
-    double* grad_stack[MAX_STACK];
+    // Traverse the DAG backwards breadth-first.
+    //
+    // The stack used to be two 65536-entry arrays declared here, i.e. 1 MB of
+    // automatic storage. That overflows the default stack on a normal thread and
+    // aborted inside ag_backward before doing any work -- the function was
+    // uncallable on any real program. Heap-allocate it instead: a graph is
+    // bounded by its node count, so 1024 entries handles any realistic tape and
+    // growth is explicit if one ever needs more.
+    #define AG_STACK_INIT 1024
+    #define AG_STACK_MAX  (1 << 20)
+    int stack_cap = AG_STACK_INIT;
+    AGNode** stack = (AGNode**)malloc((size_t)stack_cap * sizeof(AGNode*));
+    double** grad_stack = (double**)malloc((size_t)stack_cap * sizeof(double*));
+    if (!stack || !grad_stack) { free(stack); free(grad_stack); return; }
     int stack_size = 0;
 
-    // Get the output tensor's gradient
-    // (grad should have been set by the user or is all-ones for scalar)
-    // We set initial gradient to all-1s for scalar output (default)
     stack[stack_size] = n;
-    // Allocate gradient buffer for the output
-    // Actually, we need to find the output tensor. We search by grad_id.
-    // This is a limitation; for now, the user must ensure gradient is set.
-    // We'll handle it by creating a scalar gradient [1.0]
-    double* ones = malloc(sizeof(double));
-    ones[0] = 1.0;
+    // Seed the output gradient. The old code seeded a single 1.0 regardless of
+    // the output's rank, so every op read grad_out[0] and left the rest of the
+    // buffer untouched -- ag_backward on a length-3 tensor produced zeros past
+    // element 0. Seed one 1.0 per element, which is the correct seed for a
+    // non-scalar output (d/dx sum(x) = 1) and reduces to the old behaviour for
+    // a scalar.
+    int64_t seed_n = n->extra_int > 0 ? n->extra_int : 1;
+    double* ones = (double*)malloc((size_t)seed_n * sizeof(double));
+    for (int64_t i = 0; i < seed_n; i++) ones[i] = 1.0;
     grad_stack[stack_size] = ones;
     stack_size++;
 
@@ -411,6 +493,12 @@ void ag_backward(int64_t output_id) {
 
         double* grad_inputs = NULL;
         int64_t n_grad = 0;
+        // True when grad_inputs is a freshly allocated buffer this loop owns,
+        // false when it aliases grad_out (which is freed separately below).
+        // Without this the two frees at the end of the loop double-free whenever
+        // an op passes its input gradient straight through -- which ag_mul does,
+        // so ag_backward aborted on any program using it. ASan caught it.
+        int grad_inputs_owned = 0;
 
         switch (node->op) {
             case AG_RELU: {
@@ -423,6 +511,7 @@ void ag_backward(int64_t output_id) {
                 // extra_int stores the total size.
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
                 double* gi = malloc(n_grad * sizeof(double));
+                grad_inputs_owned = 1;
                 memcpy(gi, grad_out, n_grad * sizeof(double));
                 // relu gradients don't need input values for the grad itself
                 // (0 if input < 0, but we don't have the input here)
@@ -433,6 +522,7 @@ void ag_backward(int64_t output_id) {
             case AG_NEG: {
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
                 double* gi = malloc(n_grad * sizeof(double));
+                grad_inputs_owned = 1;
                 for (int64_t i = 0; i < n_grad; i++) gi[i] = -grad_out[i];
                 grad_inputs = gi;
                 break;
@@ -441,6 +531,7 @@ void ag_backward(int64_t output_id) {
                 // grad_a = grad_out, grad_b = grad_out (broadcast)
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
                 grad_inputs = malloc(n_grad * sizeof(double));
+                grad_inputs_owned = 1;
                 memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
                 // Both inputs get the same gradient
                 break;
@@ -451,6 +542,7 @@ void ag_backward(int64_t output_id) {
                 // For now, pass through gradient (simplified).
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
                 grad_inputs = malloc(n_grad * sizeof(double));
+                grad_inputs_owned = 1;
                 memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
                 break;
             }
@@ -461,6 +553,7 @@ void ag_backward(int64_t output_id) {
                 // Simplified: pass through
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
                 grad_inputs = malloc(n_grad * sizeof(double));
+                grad_inputs_owned = 1;
                 memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
                 break;
             }
@@ -468,6 +561,7 @@ void ag_backward(int64_t output_id) {
                 // grad = grad_out * exp(input)
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
                 grad_inputs = malloc(n_grad * sizeof(double));
+                grad_inputs_owned = 1;
                 memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
                 break;
             }
@@ -475,6 +569,7 @@ void ag_backward(int64_t output_id) {
                 // grad = grad_out / input
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
                 grad_inputs = malloc(n_grad * sizeof(double));
+                grad_inputs_owned = 1;
                 memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
                 break;
             }
@@ -482,41 +577,122 @@ void ag_backward(int64_t output_id) {
                 // grad = grad_out * sigmoid(x) * (1 - sigmoid(x))
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
                 grad_inputs = malloc(n_grad * sizeof(double));
+                grad_inputs_owned = 1;
                 memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
                 break;
             }
             default: {
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
                 grad_inputs = malloc(n_grad * sizeof(double));
+                grad_inputs_owned = 1;
                 memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
                 break;
             }
         }
 
-        // Propagate to inputs (if they have creator nodes)
+        // Propagate to inputs. An input with no creator node is a leaf -- a
+        // tensor the caller tracked -- so its gradient accumulates into its own
+        // buffer. Without this the whole pass computed gradients and discarded
+        // them: _acc_grad existed but had no callers, so ag_backward left every
+        // tracked tensor's grad at zero.
+        //
+        // A repeated input (ag_mul(x, x) records x's id twice) must accumulate
+        // once. It did, but the loop then freed grad_inputs once per input, so
+        // the second pass double-freed -- ASan caught it, and without ASan it
+        // aborted the process inside ag_backward. Accumulate per unique input
+        // and free the buffer once after the loop.
         for (int k = 0; k < node->n_inputs; k++) {
             AGNode* input_node = _find_node(node->input_ids[k]);
-            if (input_node) {
-                if (stack_size < MAX_STACK) {
-                    stack[stack_size] = input_node;
-                    double* g = malloc(n_grad * sizeof(double));
-                    memcpy(g, grad_inputs, n_grad * sizeof(double));
-                    grad_stack[stack_size] = g;
-                    stack_size++;
-                }
+            if (!input_node) {
+                FlintTensor* leaf = _ag_reg_get(node->input_ids[k]);
+                if (leaf) _acc_grad(leaf, grad_inputs, n_grad);
+                continue;
+            }
+            // Already scheduled by an earlier k with the same id: adding it
+            // again would double-count its gradient.
+            int dup = 0;
+            for (int j = 0; j < stack_size; j++) {
+                if (stack[j] == input_node) { dup = 1; break; }
+            }
+            if (dup) continue;
+            if (stack_size == stack_cap && stack_cap < AG_STACK_MAX) {
+                int ncap = stack_cap * 2;
+                AGNode** ns = (AGNode**)realloc(stack, (size_t)ncap * sizeof(AGNode*));
+                double** ng = (double**)realloc(grad_stack, (size_t)ncap * sizeof(double*));
+                if (ns) stack = ns;
+                if (ng) grad_stack = ng;
+                if (ns && ng) stack_cap = ncap;
+            }
+            if (stack_size < stack_cap) {
+                stack[stack_size] = input_node;
+                double* g = malloc((size_t)n_grad * sizeof(double));
+                if (!g) break;
+                memcpy(g, grad_inputs, (size_t)n_grad * sizeof(double));
+                grad_stack[stack_size] = g;
+                stack_size++;
             }
         }
 
         free(grad_out);
-        if (grad_inputs) free(grad_inputs);
+        if (grad_inputs && grad_inputs_owned) free(grad_inputs);
     }
 
-    if (ones) free(ones);
-    #undef MAX_STACK
+    // `ones` was pushed onto grad_stack, so the loop already freed it as
+    // grad_out. Freeing it again here was a double free that aborted
+    // ag_backward on every call.
+    free(stack);
+    free(grad_stack);
+    #undef AG_STACK_INIT
+    #undef AG_STACK_MAX
 }
 
-double* ag_get_grad(int64_t grad_id) { (void)grad_id; return NULL; }
-void ag_zero_grad(int64_t grad_id) { (void)grad_id; }
+double* ag_get_grad(int64_t grad_id) {
+    FlintTensor* t = _ag_reg_get(grad_id);
+    return t ? t->grad : NULL;
+}
+
+// The grad_id an ag_* op assigned to its output.
+//
+// ag_matmul and friends set grad_id on the tensor they return, but the caller
+// has no way to read it back: re-tracking with ag_track_tensor allocates a
+// SECOND id and orphans the recorded node, so ag_backward finds nothing and the
+// gradient stays zero. Callers need this to name the node they want to
+// differentiate from.
+// Read one gradient element.
+//
+// The `double*` ag_get_grad returns cannot be indexed from Flint: `ptr[i]` is
+// defined as string indexing (an i8 load guarded by flint_str_length), so
+// `g[0]` reads the gradient buffer as if it were a NUL-terminated string and
+// traps on the length check. Exposing the element read as a call keeps the
+// language unchanged and makes gradients actually reachable.
+double ag_grad_at(int64_t grad_id, int64_t idx) {
+    FlintTensor* t = _ag_reg_get(grad_id);
+    if (!t || !t->grad) return 0.0;
+    if (idx < 0 || idx >= t->size) {
+        fprintf(stderr, "ag_grad_at: index %lld out of bounds for length %lld\n",
+                (long long)idx, (long long)t->size);
+        return 0.0;
+    }
+    return t->grad[idx];
+}
+
+// Elements in a tracked tensor's gradient buffer.
+int64_t ag_grad_len(int64_t grad_id) {
+    FlintTensor* t = _ag_reg_get(grad_id);
+    return (t && t->grad) ? t->size : 0;
+}
+
+int64_t ag_grad_id(void* tensor) {
+    if (!tensor) return -1;
+    FlintTensor* t = _as_tensor(tensor);
+    return t->grad_id;
+}
+
+void ag_zero_grad(int64_t grad_id) {
+    FlintTensor* t = _ag_reg_get(grad_id);
+    if (t && t->grad)
+        memset(t->grad, 0, (size_t)t->size * sizeof(double));
+}
 
 // =========================================================================
 // High-level autograd ops (for Flint wrapper)
@@ -529,6 +705,7 @@ void* ag_matmul(void* a, void* b) {
         int64_t ids[2] = {ta->grad_id, tb->grad_id};
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
         // Store shapes for backward
         int64_t* shapes = malloc(4 * sizeof(int64_t));
         shapes[0] = ta->shape[0]; shapes[1] = ta->shape[1];
@@ -546,6 +723,7 @@ void* ag_add(void* a, void* b) {
         int64_t ids[2] = {ta->grad_id, tb->grad_id};
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
         ag_record(AG_ADD, tout->grad_id, ids, 2, NULL, (int)tout->size);
     }
     return out;
@@ -559,6 +737,7 @@ void* ag_mul(void* a, void* b) {
         int64_t ids[2] = {ta->grad_id, tb->grad_id};
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
         ag_record(AG_MUL, tout->grad_id, ids, 2, NULL, (int)tout->size);
     }
     return out;
@@ -571,6 +750,7 @@ void* ag_relu(void* a) {
         int64_t ids[1] = {ta->grad_id};
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
         ag_record(AG_RELU, tout->grad_id, ids, 1, NULL, (int)tout->size);
     }
     return out;
@@ -583,6 +763,7 @@ void* ag_sigmoid(void* a) {
         int64_t ids[1] = {ta->grad_id};
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
         ag_record(AG_SIGMOID, tout->grad_id, ids, 1, NULL, (int)tout->size);
     }
     return out;
@@ -595,6 +776,7 @@ void* ag_exp(void* a) {
         int64_t ids[1] = {ta->grad_id};
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
         ag_record(AG_EXP, tout->grad_id, ids, 1, NULL, (int)tout->size);
     }
     return out;
@@ -607,6 +789,7 @@ void* ag_neg(void* a) {
         int64_t ids[1] = {ta->grad_id};
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
         ag_record(AG_NEG, tout->grad_id, ids, 1, NULL, (int)tout->size);
     }
     return out;
