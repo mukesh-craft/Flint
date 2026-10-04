@@ -534,8 +534,28 @@ static std::string cacheSalt(llvm::CodeGenOptLevel ol, bool releaseMode,
     struct stat st;
     uint64_t mt = 0;
     if (argv0 && stat(argv0, &st) == 0) mt = (uint64_t)st.st_mtime;
+    // The cached module links the runtime, so the runtime's build state is part
+    // of the key. Without this, editing runtime/*.c left every cached module
+    // bound to the previous runtime: strrev appeared to take 17 s under the
+    // quarantine where the same source compiled fresh took 2 ms, because the
+    // stale entry still linked the pre-fix flint_aegis.o.
+    uint64_t rt = 0;
+    static const char* kRuntimeObjs[] = {
+        "flint_aegis.o", "flint_chan.o", "flint_tensor.o", "flint_serial.o",
+        "flint_crypto.o", "flint_net.o", "flint_ai.o", "flint_ai_opt.o", "runtime.o",
+    };
+    for (const char* obj : kRuntimeObjs) {
+        struct stat rs;
+        if (stat(obj, &rs) == 0) {
+            rt = rt * 1000003u + (uint64_t)rs.st_mtime;
+            rt = rt * 1000003u + (uint64_t)rs.st_size;
+        } else {
+            rt = rt * 1000003u + 0x9e3779b9u; // absent: still distinguishes
+        }
+    }
     return "flintc-v" + std::string(kFlintVersion) + "-o" + std::to_string((int)ol)
          + (releaseMode ? "-unsafe" : "-safe") + "-" + backend + "-m" + std::to_string(mt)
+         + "-rt" + std::to_string(rt)
          + (loopOpt ? "-loopopt" : "");
 }
 
