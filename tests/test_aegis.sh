@@ -165,5 +165,58 @@ accept ok_div \
     0
 }"
 
+# ---- S5: UAF quarantine for str / map / chan ----
+# Leases cover only explicit flint_aegis_* allocations, so a stale pointer to a
+# freed string used to read whatever the allocator handed out next. With
+# FLINT_AEGIS_QUARANTINE=1 the freed block is retained and poisoned, so the
+# same read traps. Both behaviours are asserted: without the flag the program
+# runs (that is the default fast path), with it the read must panic.
+
+quarantine_traps() { # $1=name $2=src $3=expected-output-before-panic
+  name="$1"; src="$2"; want="$3"
+  printf '%s\n' "$src" > "$TMPD/$name.fl"
+  if ! "$FLINTC" "$TMPD/$name.fl" -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
+    echo "FAIL $name: failed to compile: $(head -n1 "$TMPD/$name.err")"
+    fail=$((fail+1)); return
+  fi
+  out="$(FLINT_AEGIS_QUARANTINE=1 "$TMPD/$name.bin" 2>&1)"
+  if printf '%s' "$out" | grep -q "use-after-free"; then
+    if printf '%s' "$out" | grep -qF "$want"; then pass=$((pass+1));
+    else echo "FAIL $name: trapped but output before it was wrong"; fail=$((fail+1)); fi
+  else
+    echo "FAIL $name: stale read did not trap: $(printf '%s' "$out" | head -n1)"
+    fail=$((fail+1))
+  fi
+}
+
+quarantine_traps uaf_str \
+"fn main() -> i64 {
+    s = flint_str_concat(\"ab\", \"cd\")
+    flint_println(s)
+    flint_str_free(s)
+    print(flint_str_length(s))
+    0
+}" "abcd"
+
+quarantine_traps uaf_map \
+"fn main() -> i64 {
+    m = flint_map_new()
+    flint_map_set(m, \"k\", 7)
+    flint_println(\"mapped\")
+    flint_map_free(m)
+    print(flint_map_get(m, \"k\"))
+    0
+}" "mapped"
+
+# Default (quarantine off) must still run cleanly and produce the right answer:
+# the guard costs one predictable branch and nothing else.
+accept ok_after_free \
+"fn main() -> i64 {
+    s = flint_str_concat(\"ab\", \"cd\")
+    flint_println(s)
+    flint_str_free(s)
+    0
+}"
+
 echo "aegis: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

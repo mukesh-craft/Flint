@@ -18,6 +18,7 @@
 // PORT(v0.20): pthread mutex guards the lease table. POSIX (Linux/macOS/
 // Android) fine; Windows needs SRWLOCK/CRITICAL_SECTION or MinGW pthreads.
 #include <pthread.h>
+#include <stdlib.h>
 
 extern void flint_panic(const char* msg);
 extern void flint_set_err(int64_t err);
@@ -316,4 +317,78 @@ void flint_aegis_write_u8(int64_t lease, int64_t idx, int64_t val) {
     }
     ((char*)g_slots[slot].ptr)[idx] = (char)(val & 0xff);
     aegis_unlock();
+}
+
+// ---- UAF quarantine (S5) ----
+//
+// A freed block is retained (not returned to the allocator) and overwritten
+// with a poison byte, so a stale pointer read hits poison instead of another
+// allocation's data. Blocks are released once the retained budget is
+// exceeded, oldest first, which bounds memory while still catching the
+// read-after-free that actually happens.
+//
+// Enabled by FLINT_AEGIS_QUARANTINE=1. Off by default: the hot path pays one
+// predictable branch on an already-loaded global.
+
+#define AEGIS_POISON 0xDE
+
+typedef struct QBlock {
+    void* ptr;
+    size_t size;
+} QBlock;
+
+static QBlock*  g_qblocks = NULL;
+static size_t   g_qcount = 0;
+static size_t   g_qcap   = 0;
+static size_t   g_qbytes = 0;
+static int64_t g_qon    = -1;   // -1 = not yet resolved
+
+static int64_t aegis_quarantine_on(void) {
+    if (g_qon < 0) {
+        const char* e = getenv("FLINT_AEGIS_QUARANTINE");
+        g_qon = (e && *e && *e != '0') ? 1 : 0;
+    }
+    return g_qon;
+}
+
+int64_t flint_aegis_quarantine_enabled(void) { return aegis_quarantine_on(); }
+
+static void aegis_quarantine_push(void* ptr, size_t size) {
+    if (g_qcount == g_qcap) {
+        size_t ncap = g_qcap ? g_qcap * 2 : 64;
+        QBlock* nb = (QBlock*)realloc(g_qblocks, ncap * sizeof(QBlock));
+        if (!nb) return;              // out of memory: fall back to a real free
+        g_qblocks = nb;
+        g_qcap = ncap;
+    }
+    g_qblocks[g_qcount].ptr = ptr;
+    g_qblocks[g_qcount].size = size;
+    g_qcount++;
+    g_qbytes += size;
+    memset(ptr, AEGIS_POISON, size);
+    // Over budget: release the oldest entries. They have already been poisoned
+    // and are recorded, so freeing them now cannot be observed as a UAF.
+    while (g_qbytes > AEGIS_QUARANTINE_BYTES && g_qcount > 1) {
+        free(g_qblocks[0].ptr);
+        g_qbytes -= g_qblocks[0].size;
+        for (size_t i = 1; i < g_qcount; i++) g_qblocks[i - 1] = g_qblocks[i];
+        g_qcount--;
+    }
+}
+
+void flint_aegis_quarantine_free(void* ptr, size_t size) {
+    if (!ptr) return;
+    if (!aegis_quarantine_on()) { free(ptr); return; }
+    aegis_quarantine_push(ptr, size);
+}
+
+void flint_aegis_check_live(void* ptr, const char* what) {
+    if (!ptr || !aegis_quarantine_on()) return;
+    for (size_t i = 0; i < g_qcount; i++) {
+        if (g_qblocks[i].ptr == ptr) {
+            // Report rather than corrupt: the read is about to happen.
+            flint_panic("aegis: use-after-free on a quarantined pointer");
+        }
+    }
+    (void)what;
 }

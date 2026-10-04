@@ -22,7 +22,7 @@ for f in "${cases[@]}"; do
   cpp_ok=0; cpp_out=""; cpp_exit=-1
   if timeout -s KILL 120 "$FLINTC" "$f" --emit-llvm -o "$TMPD/c.ll" > /dev/null 2>&1 \
      && llvm-as "$TMPD/c.ll" -o "$TMPD/c.bc" > /dev/null 2>&1 \
-     && clang "$TMPD/c.ll" runtime/runtime.c -lm -o "$TMPD/c.bin" > /dev/null 2>&1; then
+     && clang "$TMPD/c.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/c.bin" > /dev/null 2>&1; then
     cpp_out="$("$TMPD/c.bin" 2>&1)"; cpp_exit=$?; cpp_ok=1
   fi
   if [ "$HAVE_SELF" = 0 ]; then
@@ -34,7 +34,7 @@ for f in "${cases[@]}"; do
   if timeout -s KILL 300 "$SELF_DIR/parse.0" "$f" > "$TMPD/c.sexp" 2>/dev/null \
      && timeout -s KILL 300 "$SELF_DIR/emit.0" "$TMPD/c.sexp" "$TMPD/c.self.ll" > /dev/null 2>&1 \
      && llvm-as "$TMPD/c.self.ll" -o /dev/null > /dev/null 2>&1 \
-     && clang "$TMPD/c.self.ll" runtime/runtime.c -lm -o "$TMPD/c.self.bin" > /dev/null 2>&1; then
+     && clang "$TMPD/c.self.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/c.self.bin" > /dev/null 2>&1; then
     self_out="$("$TMPD/c.self.bin" 2>&1)"; self_exit=$?; self_ok=1
   fi
   if [ "$cpp_ok" = "$self_ok" ] && [ "$cpp_exit" = "$self_exit" ] && [ "$cpp_out" = "$self_out" ]; then

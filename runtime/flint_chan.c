@@ -15,6 +15,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <pthread.h>
+#include "flint_aegis.h"
 
 extern void flint_panic(const char* msg);
 extern void flint_set_err(int64_t err);
@@ -59,8 +60,8 @@ void flint_chan_free(void* p) {
     pthread_mutex_destroy(&ch->mtx);
     pthread_cond_destroy(&ch->not_empty);
     pthread_cond_destroy(&ch->not_full);
-    free(ch->buf);
-    free(ch);
+    flint_aegis_quarantine_free(ch->buf, (size_t)ch->cap * sizeof(int64_t));
+    flint_aegis_quarantine_free(ch, sizeof(FlintChan));
 }
 
 int64_t flint_chan_send(void* p, int64_t v) {

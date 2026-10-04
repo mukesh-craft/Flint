@@ -94,7 +94,7 @@ if [ "$PHASE" = all ] || [ "$PHASE" = B ]; then
   timeout -s KILL 900 "$OUT/parse.0" stage1/flint_lex.fl > "$OUT/lex.main.sexp" || { echo "FAIL parse lex"; exit 1; }
   merge_sexp "$OUT/emit.main.sexp" "$OUT/emit.merged.sexp" "$OUT/lex.main.sexp"
   timeout -s KILL 900 "$OUT/emit.0" "$OUT/emit.merged.sexp" "$OUT/emit_self.ll" || { echo "FAIL emit self"; exit 1; }
-  clang "$OUT/emit_self.ll" runtime/runtime.c -lm -o "$OUT/emit.1" || { echo "FAIL link emit.1"; exit 1; }
+  clang "$OUT/emit_self.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$OUT/emit.1" || { echo "FAIL link emit.1"; exit 1; }
   # emit.1 must compile the ladder
   timeout -s KILL 300 "$OUT/emit.1" stage3/ladder/g0_hello.sexp "$OUT/smoke1.ll" || { echo "FAIL emit.1 smoke"; exit 1; }
   echo "Phase B OK"
