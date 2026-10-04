@@ -19,7 +19,7 @@ profile_data.csv
 *_output.txt
 *_g3*
 flint-build
-flintc.fl
+/flintc.fl  # root artifact only -- driver/flintc.fl is SOURCE (test_driver, fmt, decl-order all read it)
 flint-test
 # Debug/ASan compiler binary (rebuildable, 16MB — never commit)
 /flintc_asan

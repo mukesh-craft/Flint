@@ -208,6 +208,17 @@ quarantine_traps uaf_map \
     0
 }" "mapped"
 
+quarantine_traps uaf_chan \
+"fn main() -> i64 {
+    ch = flint_chan_new(4)
+    flint_chan_send(ch, 7)
+    flint_println(\"sent\")
+    flint_chan_free(ch)
+    flint_chan_send(ch, 9)
+    print(flint_chan_recv(ch))
+    0
+}" "sent"
+
 # Default (quarantine off) must still run cleanly and produce the right answer:
 # the guard costs one predictable branch and nothing else.
 accept ok_after_free \

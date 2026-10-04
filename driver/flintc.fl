@@ -1,0 +1,369 @@
+# driver/flintc.fl — single pipeline driver: .fl -> parse -> [merge] ->
+# emit -> clang. Mirrors the C++ flintc CLI subset for self-builds.
+#
+# Usage: flintc.fl main.fl [-o out] [--emit-llvm] [--no-run]
+#          [--parse P] [--emit E] [--merge M] [--rt DIR] [--self-hosted]
+#   main.fl      source file (exactly one)
+#   -o out       output path (default <base>.bin, or <base>.ll --emit-llvm)
+#   --emit-llvm  stop after LLVM IR (deliverable kept, temps cleaned)
+#   --no-run     build only (default builds AND runs, like C++ flintc)
+#   --parse P    stage-1 parser binary (default: discovered)
+#   --emit E     stage-3 emitter binary (default: discovered)
+#   --merge M    merge_sexp binary, needed for multi-file (default: discovered)
+#   --rt DIR     runtime dir holding runtime.c (default: discovered, else ./runtime)
+#   --self-hosted  use emit.1 (must exist; build via tests/test_selfhost.sh B)
+# Tool discovery: explicit flag > argv[0] sibling > ./<name> > loud error.
+# Exit codes: 0 ok, 1 usage/IO/tool error (message printed first).
+mut DVACC: str = ""
+mut DVSEEN: str = ""
+mut DVND: i64 = 0
+# ---- small string helpers (self-contained tool) ----
+fn dv_is_space(c: i64) -> i64 {
+    if c == 32 {
+        1
+    } else {
+        if c == 10 {
+            1
+        } else {
+            if c == 9 {
+                1
+            } else {
+                0
+            }
+        }
+    }
+}
+fn dv_dirname(path: str) -> str {
+    n = flint_str_length(path)
+    mut k: i64 = n - 1
+    mut go: i64 = 1
+    while go == 1 {
+        if k < 0 {
+            go = 0
+        } else {
+            if flint_str_char_at(path, k) == 47 {
+                go = 0
+            } else {
+                k = k - 1
+            }
+        }
+    }
+    if k < 0 {
+        "."
+    } else {
+        flint_str_substring(path, 0, k)
+    }
+}
+fn dv_join(a: str, b: str) -> str {
+    if a == "." {
+        b
+    } else {
+        a + "/" + b
+    }
+}
+fn dv_strip_fl(path: str) -> str {
+    n = flint_str_length(path)
+    if n > 3 {
+        tail = flint_str_substring(path, n - 3, n)
+        if tail == ".fl" {
+            flint_str_substring(path, 0, n - 3)
+        } else {
+            path
+        }
+    } else {
+        path
+    }
+}
+fn dv_shell_quote(path: str) -> str {
+    "\"" + path + "\""
+}
+# Run cmd via shell; die loud on nonzero exit. Returns 1.
+fn dv_run(cmd: str, what: str) -> i64 {
+    rc = flint_command(cmd)
+    if rc == 0 {
+        1
+    } else {
+        print("flintc: tool failed")
+        print(what)
+        flint_exit(1)
+        0
+    }
+}
+# ---- tool discovery ----
+fn dv_discover(flagval: str, name: str, selfdir: str) -> str {
+    if flagval != "" {
+        flagval
+    } else {
+        sib = dv_join(selfdir, name)
+        if flint_exists(sib) == 1 {
+            sib
+        } else {
+            dot = dv_join(".", name)
+            if flint_exists(dot) == 1 {
+                dot
+            } else {
+                print("flintc: cannot find tool (pass explicit flag)")
+                print(name)
+                flint_exit(1)
+                ""
+            }
+        }
+    }
+}
+# ---- import collection (recursive, cycle-safe via DVSEEN) ----
+fn dv_collect_file(flpath: str, sexppath: str, parsebin: str) -> i64 {
+    cmd = dv_shell_quote(parsebin) + " " + dv_shell_quote(flpath) + " > " + dv_shell_quote(sexppath)
+    dv_run(cmd, parsebin)
+}
+fn dv_collect(sexp_path: str, srcdir: str, parsebin: str, tmpdir: str) -> i64 {
+    txt = flint_read_file(sexp_path)
+    if flint_err_occurred() == 1 {
+        print("flintc: cannot read sexp")
+        print(sexp_path)
+        return 0
+    }
+    n = flint_str_length(txt)
+    mut i: i64 = 0
+    mut ok: i64 = 1
+    mut go: i64 = 1
+    mut q1: i64 = 0
+    mut gq: i64 = 1
+    mut full: str = ""
+    mut fullv: str = ""
+    mut depfl: str = ""
+    while go == 1 {
+        if i < n {
+            rest = flint_str_substring(txt, i, n)
+            k = flint_str_index_of(rest, "(import \"")
+            if k == -1 {
+                go = 0
+            } else {
+                q0 = i + k + 9
+                q1 = q0
+                gq = 1
+                while gq == 1 {
+                    if q1 < n {
+                        if flint_str_char_at(txt, q1) == 34 {
+                            gq = 0
+                        } else {
+                            q1 = q1 + 1
+                        }
+                    } else {
+                        gq = 0
+                    }
+                }
+                p = flint_str_substring(txt, q0, q1)
+                full = dv_join(srcdir, p)
+                fullv = flint_str_concat(full, "")
+                key = "\n" + fullv + "\n"
+                seen = "\n" + DVSEEN + "\n"
+                if flint_str_index_of(seen, key) == -1 {
+                    DVSEEN = DVSEEN + fullv + "\n"
+                    depfl = fullv + ".fl"
+                    if flint_exists(depfl) == 0 {
+                        depfl = flint_str_concat(fullv, "")
+                    }
+                    if flint_exists(depfl) == 0 {
+                        print("flintc: import not found")
+                        print(fullv)
+                        ok = 0
+                    } else {
+                        depsexp = dv_join(tmpdir, "dep" + flint_i64_to_string(DVND) + ".sexp")
+                        DVND = DVND + 1
+                        if dv_collect_file(depfl, depsexp, parsebin) == 0 {
+                            ok = 0
+                        } else {
+                            DVACC = DVACC + " " + depsexp
+                            if dv_collect(depsexp, dv_dirname(depfl), parsebin, tmpdir) == 0 {
+                                ok = 0
+                            }
+                        }
+                    }
+                }
+                i = q1 + 1
+            }
+        } else {
+            go = 0
+        }
+    }
+    ok
+}
+fn dv_usage() -> i64 {
+    print("usage: flintc.fl main.fl [-o out] [--emit-llvm] [--no-run]")
+    print("  [--parse P] [--emit E] [--merge M] [--rt DIR] [--self-hosted]")
+    1
+}
+fn main() -> i64 {
+    mut src: str = ""
+    mut out: str = ""
+    mut emitllvm: i64 = 0
+    mut norun: i64 = 0
+    mut fparse: str = ""
+    mut femit: str = ""
+    mut fmerge: str = ""
+    mut frt: str = ""
+    mut selfhosted: i64 = 0
+    mut ai: i64 = 1
+    mut ok: i64 = 1
+    while ai < flint_arg_count() {
+        a = flint_get_arg(ai)
+        if a == "-o" {
+            if ai + 1 < flint_arg_count() {
+                out = flint_get_arg(ai + 1)
+                ai = ai + 2
+            } else {
+                print("flintc: -o needs a value")
+                ok = 0
+                ai = ai + 1
+            }
+        } else {
+            if a == "--emit-llvm" {
+                emitllvm = 1
+                ai = ai + 1
+            } else {
+                if a == "--no-run" {
+                    norun = 1
+                    ai = ai + 1
+                } else {
+                    if a == "--parse" {
+                        if ai + 1 < flint_arg_count() {
+                            fparse = flint_get_arg(ai + 1)
+                            ai = ai + 2
+                        } else {
+                            print("flintc: --parse needs a value")
+                            ok = 0
+                            ai = ai + 1
+                        }
+                    } else {
+                        if a == "--emit" {
+                            if ai + 1 < flint_arg_count() {
+                                femit = flint_get_arg(ai + 1)
+                                ai = ai + 2
+                            } else {
+                                print("flintc: --emit needs a value")
+                                ok = 0
+                                ai = ai + 1
+                            }
+                        } else {
+                            if a == "--merge" {
+                                if ai + 1 < flint_arg_count() {
+                                    fmerge = flint_get_arg(ai + 1)
+                                    ai = ai + 2
+                                } else {
+                                    print("flintc: --merge needs a value")
+                                    ok = 0
+                                    ai = ai + 1
+                                }
+                            } else {
+                                if a == "--rt" {
+                                    if ai + 1 < flint_arg_count() {
+                                        frt = flint_get_arg(ai + 1)
+                                        ai = ai + 2
+                                    } else {
+                                        print("flintc: --rt needs a value")
+                                        ok = 0
+                                        ai = ai + 1
+                                    }
+                                } else {
+                                    if a == "--self-hosted" {
+                                        selfhosted = 1
+                                        ai = ai + 1
+                                    } else {
+                                        if src == "" {
+                                            src = a
+                                            ai = ai + 1
+                                        } else {
+                                            print("flintc: only one source file")
+                                            ok = 0
+                                            ai = ai + 1
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if ok == 0 {
+        dv_usage()
+        return 1
+    }
+    if src == "" {
+        dv_usage()
+        return 1
+    }
+    selfdir = dv_dirname(flint_get_arg(0))
+    parsebin = dv_discover(fparse, "parse.0", selfdir)
+    mergebin = dv_discover(fmerge, "merge_sexp.bin", selfdir)
+    mut emitname: str = "emit.0"
+    if selfhosted == 1 {
+        emitname = "emit.1"
+    }
+    emitbin = dv_discover(femit, emitname, selfdir)
+    if selfhosted == 1 {
+        if flint_exists(emitbin) == 0 {
+            print("flintc: --self-hosted needs emit.1 (build via tests/test_selfhost.sh B)")
+            return 1
+        }
+    }
+    if frt == "" {
+        frt = "runtime"
+    }
+    if flint_exists(dv_join(frt, "runtime.c")) == 0 {
+        print("flintc: runtime dir missing runtime.c (--rt DIR)")
+        return 1
+    }
+    srcdir = dv_dirname(src)
+    if out == "" {
+        base = dv_strip_fl(src)
+        if emitllvm == 1 {
+            out = base + ".ll"
+        } else {
+            out = base + ".bin"
+        }
+    }
+    outdir = dv_dirname(out)
+    mainsexp = dv_join(outdir, "flintc_main.sexp")
+    if dv_collect_file(src, mainsexp, parsebin) == 0 {
+        return 1
+    }
+    DVACC = ""
+    DVSEEN = ""
+    DVND = 0
+    if dv_collect(mainsexp, srcdir, parsebin, outdir) == 0 {
+        return 1
+    }
+    mut merged: str = flint_str_concat(mainsexp, "")
+    if DVACC != "" {
+        merged = dv_join(outdir, "flintc_merged.sexp")
+        cmd = dv_shell_quote(mergebin) + " " + dv_shell_quote(mainsexp) + " " + dv_shell_quote(merged) + DVACC
+        dv_run(cmd, mergebin)
+    }
+    mut outll: str = flint_str_concat(out, "")
+    if emitllvm == 0 {
+        outll = dv_join(outdir, "flintc_out.ll")
+    }
+    cmde = dv_shell_quote(emitbin) + " " + dv_shell_quote(merged) + " " + dv_shell_quote(outll)
+    dv_run(cmde, emitbin)
+    if emitllvm == 1 {
+        print(outll)
+        return 0
+    }
+    rt = dv_join(frt, "runtime.c")
+    # AEGIS leases live in a separate TU; link it when present so
+    # lease programs (tutorial 08) build through the driver too.
+    mut aegis: str = ""
+    if flint_exists(dv_join(frt, "flint_aegis.c")) == 1 {
+        aegis = " " + dv_shell_quote(dv_join(frt, "flint_aegis.c"))
+    }
+    cmdl = "clang " + dv_shell_quote(outll) + " " + dv_shell_quote(rt) + aegis + " -lm -o " + dv_shell_quote(out)
+    dv_run(cmdl, "clang")
+    if norun == 1 {
+        print(out)
+        return 0
+    }
+    rc = flint_command(dv_shell_quote(out))
+    rc
+}
