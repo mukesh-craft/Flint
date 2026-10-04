@@ -47,6 +47,32 @@ int64_t flint_aegis_unborrow(int64_t lease);
 int64_t flint_aegis_read_u8(int64_t lease, int64_t idx);
 void    flint_aegis_write_u8(int64_t lease, int64_t idx, int64_t val);
 
+// ---- UAF quarantine (S5) ----
+//
+// Leases cover only explicit flint_aegis_* allocations, so str/map/chan were
+// invisible to the runtime backstop: a use-after-free through any of them read
+// whatever the allocator handed out next. Rather than put a lease (and a
+// mutex) behind every string operation -- which would tax the hot path -- the
+// quarantine keeps freed blocks alive and poisoned for a while. A stale read
+// then hits poison and traps, instead of silently returning another
+// allocation's bytes.
+//
+// Off by default so the hot path costs one branch; enable with
+// FLINT_AEGIS_QUARANTINE=1 (or a --asan-style build) for debugging and tests.
+
+// Bytes of freed memory retained before the block is really released.
+#define AEGIS_QUARANTINE_BYTES ((size_t)8 << 20)
+
+// Record `ptr` as freed. Subsequent reads of it trap.
+void flint_aegis_quarantine_free(void* ptr, size_t size);
+
+// Non-zero when the quarantine is enabled.
+int64_t flint_aegis_quarantine_enabled(void);
+
+// Panic if `ptr` is currently quarantined (i.e. already freed). Call this on
+// any pointer before dereferencing it.
+void flint_aegis_check_live(void* ptr, const char* what);
+
 #ifdef __cplusplus
 }
 #endif

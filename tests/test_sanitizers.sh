@@ -21,7 +21,7 @@ build_run() { # $1=label $2=fl $3=want_exit $4=want_grep(optional)
     echo "FAIL $label (emit)"; fail=$((fail+1)); return
   fi
   if ! clang -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
-      "$TMPD/t.ll" runtime/runtime.c -lm -o "$TMPD/t.bin" 2> "$TMPD/build.err"; then
+      "$TMPD/t.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/t.bin" 2> "$TMPD/build.err"; then
     echo "FAIL $label (sanitizer build)"; head -n 3 "$TMPD/build.err"; fail=$((fail+1)); return
   fi
   out="$("$TMPD/t.bin" 2> "$TMPD/run.err")"; rc=$?
@@ -52,7 +52,7 @@ panic_run() { # $1=label $2=fl $3=message
     echo "FAIL $label (emit)"; fail=$((fail+1)); return
   fi
   if ! clang -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
-      "$TMPD/t.ll" runtime/runtime.c -lm -o "$TMPD/t.bin" 2> "$TMPD/build.err"; then
+      "$TMPD/t.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/t.bin" 2> "$TMPD/build.err"; then
     echo "FAIL $label (sanitizer build)"; head -n 3 "$TMPD/build.err"; fail=$((fail+1)); return
   fi
   "$TMPD/t.bin" > /dev/null 2> "$TMPD/run.err"; rc=$?

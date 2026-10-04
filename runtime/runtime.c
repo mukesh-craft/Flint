@@ -29,6 +29,7 @@
 // gap; use string find/replace builtins instead).
 #ifndef _WIN32
 #include <regex.h>
+#include "flint_aegis.h"
 #else
 #define FLINT_NO_POSIX_REGEX 1
 #endif
@@ -105,7 +106,9 @@ void __attribute__((cold)) flint_bounds_check(int64_t index, int64_t length) {
 // Free a heap string returned by any flint_str_* / flint_i64_to_string /
 // flint_file_read function. Callers own the returned memory.
 void flint_str_free(char* s) {
-    free(s);
+    // Quarantined rather than freed outright when tracking is on, so a stale
+    // pointer read traps instead of returning another allocation's bytes.
+    flint_aegis_quarantine_free(s, s ? strlen(s) + 1 : 0);
 }
 
 // ---- Self-hosting runtime ----
@@ -120,6 +123,8 @@ char* flint_get_arg(int64_t i) {
 }
 
 char* flint_str_concat(const char* a, const char* b) {
+    flint_aegis_check_live((void*)a, "str_concat");
+    flint_aegis_check_live((void*)b, "str_concat");
     if (!a) a = "";
     if (!b) b = "";
     // Fast paths: empty side avoids malloc+memcpy (also cuts the constant
@@ -179,11 +184,13 @@ static int64_t flint_cached_strlen(const char* s) {
 }
 
 int64_t flint_str_length(const char* s) {
+    flint_aegis_check_live((void*)s, "str_length");
     return flint_cached_strlen(s);
 }
 
 int64_t flint_str_char_at(const char* s, int64_t i) {
     if (!s) flint_panic("str_char_at: null string");
+    flint_aegis_check_live((void*)s, "str_char_at");
     int64_t len = flint_cached_strlen(s);
     flint_bounds_check(i, len);
     return (unsigned char)s[i];
@@ -191,6 +198,7 @@ int64_t flint_str_char_at(const char* s, int64_t i) {
 
 char* flint_str_substring(const char* s, int64_t start, int64_t end) {
     if (!s) return NULL;
+    flint_aegis_check_live((void*)s, "str_substring");
     int64_t slen = flint_cached_strlen(s);
     // Validate ordering and bounds — reject inverted/out-of-range slices.
     if (start < 0 || end < start || end > slen) {
@@ -325,7 +333,7 @@ void* flint_malloc(int64_t size) {
 }
 
 void flint_free(void* ptr) {
-    free(ptr);
+    flint_aegis_quarantine_free(ptr, 0);
 }
 
 int64_t flint_ptr_to_int(void* p) {
@@ -946,9 +954,11 @@ FlintMap* flint_map_new(void) {
 void flint_map_free(FlintMap* m) {
     if (!m) return;
     for (int64_t i = 0; i < m->cap; i++) {
-        if (m->keys[i]) { free(m->keys[i]); m->keys[i] = NULL; }
+        if (m->keys[i]) { flint_aegis_quarantine_free(m->keys[i], strlen(m->keys[i]) + 1); m->keys[i] = NULL; }
     }
-    free(m->keys); free(m->values); free(m);
+    flint_aegis_quarantine_free(m->keys, (size_t)m->cap * sizeof(char*));
+    flint_aegis_quarantine_free(m->values, (size_t)m->cap * sizeof(int64_t));
+    flint_aegis_quarantine_free(m, sizeof(FlintMap));
 }
 
 static int64_t map_probe(FlintMap* m, const char* key, int64_t* slot) {
@@ -972,6 +982,7 @@ int64_t flint_map_has(FlintMap* m, const char* key) {
 }
 
 int64_t flint_map_get(FlintMap* m, const char* key) {
+    flint_aegis_check_live(m, "map_get");
     if (!m || !key) { flint_set_err(1); return 0; }
     int64_t slot;
     if (map_probe(m, key, &slot)) return m->values[slot];
@@ -1015,7 +1026,10 @@ void flint_map_set(FlintMap* m, const char* key, int64_t val) {
     }
 }
 
-int64_t flint_map_len(FlintMap* m) { return m ? m->len : 0; }
+int64_t flint_map_len(FlintMap* m) {
+    flint_aegis_check_live(m, "map_len");
+    return m ? m->len : 0;
+}
 
 char* flint_map_keys(FlintMap* m) {
     if (!m) return strdup("");

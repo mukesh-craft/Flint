@@ -17,7 +17,7 @@ run_cpp() { # $1=src $2=outbase ; echoes "emit_ok run_exit"
   base="$2"
   if timeout -s KILL 300 "$FLINTC" "$1" --emit-llvm -o "$TMPD/$base.cpp.ll" > /dev/null 2>&1 \
      && llvm-as "$TMPD/$base.cpp.ll" -o "$TMPD/$base.cpp.bc" > /dev/null 2>&1 \
-     && clang "$TMPD/$base.cpp.ll" runtime/runtime.c -lm -o "$TMPD/$base.cpp" > /dev/null 2>&1; then
+     && clang "$TMPD/$base.cpp.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/$base.cpp" > /dev/null 2>&1; then
     "$TMPD/$base.cpp" > "$TMPD/$base.cpp.out" 2>&1
     echo "1 $?"
   else
@@ -39,7 +39,7 @@ run_self() { # $1=src $2=outbase ; echoes "emit_ok run_exit"
   if "${PARSE[@]}" "$1" > "$TMPD/$base.sexp" 2>/dev/null \
      && "${EMIT[@]}" "$TMPD/$base.sexp" "$TMPD/$base.self.ll" > /dev/null 2>&1 \
      && llvm-as "$TMPD/$base.self.ll" -o "$TMPD/$base.self.bc" > /dev/null 2>&1 \
-     && clang "$TMPD/$base.self.ll" runtime/runtime.c -lm -o "$TMPD/$base.self" > /dev/null 2>&1; then
+     && clang "$TMPD/$base.self.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/$base.self" > /dev/null 2>&1; then
     "$TMPD/$base.self" > "$TMPD/$base.self.out" 2>&1
     echo "1 $?"
   else
