@@ -327,9 +327,9 @@ fn p_expr_code(e: str) -> i64 {
                 if p_starts_with(e, "(call ") == 1 {
                     rest = flint_str_substring(e, 6, flint_str_length(e))
                     sp = flint_str_index_of(rest, " ")
-                    mut nm: str = rest
+                    mut nm: str = flint_str_concat(rest, "")
                     if sp >= 0 {
-                        nm = flint_str_substring(rest, 0, sp)
+                        nm = flint_str_substring(flint_str_concat(nm, ""), 0, sp)
                     }
                     p_call_code(nm)
                 } else {
@@ -2706,16 +2706,16 @@ fn pp_tagged2(src: str, tag: str) -> str {
         rp = PPPREC
         p = pp_op_prec(op)
         PPPREC = p
-        mut ls: str = l
+        mut ls: str = flint_str_concat(l, "")
         if lp < p {
-            ls = pp_paren(l)
+            ls = pp_paren(ls)
         }
-        mut rs: str = r
+        mut rs: str = flint_str_concat(r, "")
         if rp < p {
-            rs = pp_paren(r)
+            rs = pp_paren(rs)
         } else {
             if rp == p {
-                rs = pp_paren(r)
+                rs = pp_paren(rs)
             }
         }
         ls + " " + op + " " + rs
@@ -2898,10 +2898,10 @@ fn pp_tagged5(src: str, tag: str) -> str {
         ty = pp_word(src)
         init = pp_node(src)
         PPPREC = 100
-        mut head: str = nm
+        mut head: str = flint_str_concat(nm, "")
         mut op: str = "="
         if k == "mut" {
-            head = "mut " + nm
+            head = "mut " + flint_str_concat(nm, "")
         } else {
             if k == "let" {
                 head = "let " + nm
