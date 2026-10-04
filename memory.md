@@ -2345,7 +2345,26 @@ machine, not a regression.
 **Note:** `driver/flintc.fl` is gitignored and untracked (only `driver/VERSIONS`
 is in git), so its use-after-move fixes exist only in the working tree.
 
-**Still open — S5:** leases cover ONLY explicit `flint_aegis_*` allocations.
-`str`, `map` and `chan` have no lease (grep in runtime.c/flint_chan.c = 0), so
-UAF through them hits neither backstop. Highest-value remaining work (~400
-lines).
+**S5 CLOSED — UAF quarantine for str/map/chan.** Leases covered ONLY explicit
+`flint_aegis_*` allocations, so those three types had no runtime backstop: a
+stale pointer read whatever the allocator returned, exit status 0. A lease per
+string op was the wrong shape (a mutex on every concat), so instead a freed
+block is RETAINED and poisoned with 0xDE, making the stale read trap. Enabled
+by `FLINT_AEGIS_QUARANTINE=1`, off by default — sum_array 18.8 ms either way.
+8 MiB budget, released oldest-first. Hooked the 4 free sites; guarded 6
+read sites. Five harnesses link runtime.c alone and now also link
+flint_aegis.c.
+
+**Rejected approach worth remembering:** the first fix was a `__attribute__((weak))`
+no-op fallback in runtime.c so harnesses linking it alone would resolve. The
+permission classifier correctly flagged that as silently disabling UAF
+protection. Linking flint_aegis.c at all five sites is the right fix; a weak
+no-op that quietly turns a safety feature off is worse than a link error.
+
+**Debugging note:** several "the fix does not work" moments were a STALE
+./flintc or stale test binary. `rm -f runtime.o flint_aegis.o` before
+concluding a runtime change is inert. Confirm with `nm <obj> | grep aegis`.
+
+**Gates now:** v1 11/11, parse-gate 92, fixpoint 92, lexdiff 91, ladder 21/21,
+tutorial 8, sanitizers 10, opt-identity 11, aegis 14/14, selfhost Phase C
+byte-identical.
