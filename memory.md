@@ -2375,8 +2375,29 @@ hand-written source file that test_driver, test_fmt and decl-order all read.
 Anchored it to `/flintc.fl` and tracked the file -- its five use-after-move
 fixes had been living only in the working tree.
 
+**Quarantine is now ON BY DEFAULT** (was FLINT_AEGIS_QUARANTINE=1). Measured
+cost: strrev 1.36x, fib 1.02x, sum_array 1.01x, pi 1.005x, primes unchanged.
+`FLINT_AEGIS_QUARANTINE=0` is the opt-out. Safety you must ask for is not a
+guarantee.
+
+**Three bugs found while measuring it — all worth more than the flag:**
+1. `check_live` scanned the quarantine table LINEARLY -> O(n^2) in a loop doing
+   n small frees. Now an open-addressed pointer set (mixed multiplicative hash,
+   tombstone-free delete that rehashes the colliding cluster).
+2. Over-budget release shifted the whole table down, also O(n) per free. Table
+   is now a ring; release advances a head index in O(1).
+3. **The module cache key salted on flintc's mtime but NOT the runtime's.**
+   Editing runtime/*.c left every cached module bound to the OLD runtime. This
+   is what made strrev look like 17 s under the quarantine — the stale entry
+   still linked a pre-fix flint_aegis.o with the O(n^2) scan; the same source
+   compiled fresh took 2 ms. `cacheSalt` now folds in mtime+size of every
+   runtime object the linker may use. **This class of stale-artifact confusion
+   has now bitten three times this session** (stale flintc, stale runtime.o,
+   stale cache entry). Before concluding a runtime change is inert, check the
+   cache: `FLINT_LOG_CACHE=1` prints the key inputs.
+
 **Gates now:** v1 11/11, parse-gate 92, fixpoint 92, lexdiff 91, ladder 21/21,
-tutorial 8, sanitizers 10, opt-identity 11, aegis 15/15, selfhost Phase C
+tutorial 8, sanitizers 10, opt-identity 11, aegis 16/16, selfhost Phase C
 byte-identical.
 
 **S1-S7 all closed.** AEGIS gap table, for reference:
