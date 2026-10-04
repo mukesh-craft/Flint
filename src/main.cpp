@@ -5083,8 +5083,10 @@ public:
                     builder->SetInsertPoint(okBB);
                     return val;
                 } else if (b->op == '/') {
+                    emitDivByZeroCheck(r);
                     return builder->CreateSDiv(l, r, "div");
                 } else if (b->op == '%') {
+                    emitDivByZeroCheck(r);
                     return builder->CreateSRem(l, r, "mod");
                 } else if (b->op == '@') {
                     auto it = functionMap.find("fao_matmul");
@@ -5367,7 +5369,27 @@ public:
         }
     }
 
-    // Coerce `main`'s return value to the i32 the C ABI requires.
+    // Trap a zero divisor before `sdiv`/`srem`.
+//
+// Integer division by zero is undefined behaviour in LLVM -- not a panic, not
+// a zero result -- so `100 / 0` silently produced a garbage exit status. The
+// check mirrors the overflow check beside it: inline `icmp` + branch, with
+// flint_panic only in the cold block, so the hot path keeps no call.
+void emitDivByZeroCheck(llvm::Value* r) {
+    auto* panicFn = functionMap["flint_panic"];
+    if (!panicFn) return;
+    auto* curF = builder->GetInsertBlock()->getParent();
+    auto* okBB = llvm::BasicBlock::Create(*ctx, "div_ok", curF);
+    auto* panicBB = llvm::BasicBlock::Create(*ctx, "div_panic", curF);
+    auto* isZero = builder->CreateICmpEQ(r, llvm::ConstantInt::get(r->getType(), 0), "divzero");
+    builder->CreateCondBr(isZero, panicBB, okBB, coldWeightsTrue(*ctx));
+    builder->SetInsertPoint(panicBB);
+    builder->CreateCall(panicFn, {builder->CreateGlobalString("division by zero", "divzmsg")});
+    builder->CreateBr(okBB);
+    builder->SetInsertPoint(okBB);
+}
+
+// Coerce `main`'s return value to the i32 the C ABI requires.
 //
 // `main` is declared `i32 main(i64, i8*)` (see emitFunction), so every `return`
 // in it must produce an i32. The value's type comes from inference and is NOT
@@ -6925,8 +6947,8 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
                 default: return nullptr;
             }
         }
-        if (tt == TokenType::SLASH) return cg->builder->CreateSDiv(l, r, "div");
-        if (tt == TokenType::MODULO) return cg->builder->CreateSRem(l, r, "mod");
+        if (tt == TokenType::SLASH) { cg->emitDivByZeroCheck(r); return cg->builder->CreateSDiv(l, r, "div"); }
+        if (tt == TokenType::MODULO) { cg->emitDivByZeroCheck(r); return cg->builder->CreateSRem(l, r, "mod"); }
         return emitArithOpEmit(opTok.lexeme[0], l, r);
     }
     if (tt == TokenType::PIPE_PIPE || tt == TokenType::KW_OR) {

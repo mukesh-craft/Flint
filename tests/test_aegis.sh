@@ -11,6 +11,23 @@ TMPD="$_TMPBASE/slipstream/aegis"
 mkdir -p "$TMPD"
 pass=0; fail=0
 
+# trap <name> <expected-substring> <source> -- must compile, then panic at run
+trap() {
+  name="$1"; want="$2"; src="$3"
+  printf '%s\n' "$src" > "$TMPD/$name.fl"
+  if ! "$FLINTC" "$TMPD/$name.fl" -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
+    echo "FAIL $name: failed to compile: $(head -n1 "$TMPD/$name.err")"
+    fail=$((fail+1)); return
+  fi
+  out="$("$TMPD/$name.bin" 2>&1)"
+  if printf '%s' "$out" | grep -qF "$want"; then
+    pass=$((pass+1))
+  else
+    echo "FAIL $name: expected trap '$want', got: $(printf '%s' "$out" | head -n1)"
+    fail=$((fail+1))
+  fi
+}
+
 # reject <name> <expected-substring> <source>
 reject() {
   name="$1"; want="$2"; src="$3"
@@ -120,6 +137,31 @@ accept ok_branch_free \
     } else {
         flint_aegis_free(a)
     }
+    0
+}"
+
+# Integer division/modulo by zero is UB in LLVM, not a panic: `100 / 0`
+# silently produced a garbage exit status. Both must trap.
+trap div_zero "division by zero" \
+"fn main() -> i64 {
+    z = 0
+    print(100 / z)
+    0
+}"
+
+trap mod_zero "division by zero" \
+"fn main() -> i64 {
+    print(5 % 0)
+    0
+}"
+
+accept ok_div \
+"fn main() -> i64 {
+    a = 84
+    b = 2
+    print(a / b)
+    print(a % b)
+    print(a / 7)
     0
 }"
 
