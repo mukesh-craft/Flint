@@ -2409,3 +2409,67 @@ byte-identical.
   S6 11 node kinds fell through unchecked        -> Match/Lambda/StructLiteral/
                                                    Unwrap/Destructure added
   S7 no loop fixpoint for move state            -> revive between passes
+
+---
+
+## 2026-10-04 — FlintSpark: AI library made reachable + BLAS backend
+
+**Installed libopenblas 0.3.34** from Termux repos (`apt-cache search libtorch`
+returns nothing — libtorch has no Termux/Bionic build; see the note at the end).
+
+**The headline: 2,891 lines of AI runtime, 5 functions reachable, zero tests.**
+`flint_tensor.c` 689 + `flint_ai.c` 754 + `flint_ai_opt.c` 776. All linked
+(`src/main.cpp:267`), but the compiler registered 9 AI builtins whose signatures
+matched nothing: `fa_relu` is really `fa_relu(FArena*, FATensor*)` (2 args, not
+1), and fa_softmax / fa_dropout / fao_relu / fao_sigmoid / fao_dropout /
+fao_softmax / fa_default_arena DO NOT EXIST. Only fa_relu and fa_sigmoid are
+defined at all. So the verifier rejected every call and a link would fail.
+
+**Fixed and now registered (~60 builtins):** tensor core, elementwise, sums,
+autograd tape, Adam, SGD, MSE. Added `flt_create_1d/2d/3d` because `flt_create`
+wants an `int64_t*` and a Flint array is a vec handle — no Flint caller could
+build a tensor at all.
+
+**Autograd was structurally broken, not just unwired:**
+- `ag_get_grad` was `return NULL` and `ag_zero_grad` did nothing
+- `_acc_grad` existed with NO CALLERS — backward computed and discarded
+- backward seeded a scalar 1.0 regardless of rank
+- its work stack was two 65536-entry arrays = **1 MB of automatic storage**,
+  which overflowed the stack, so `ag_backward` aborted on EVERY call
+- **two double-frees** (found by ASan, both aborted the process): `free(grad_inputs)`
+  ran once per input, so `ag_mul(x,x)` — same id twice — double-freed; and
+  `ones` (the seed, also `grad_stack[0]`) was freed again after the loop
+- `ag_mul` sets `grad_id` itself, but there was no way to read it back;
+  re-tracking allocated a SECOND id and orphaned the node. Added `ag_grad_id`.
+
+**`double*` cannot be indexed from Flint** — `ptr[i]` is string indexing (i8 load
+guarded by `flint_str_length`), so `g[0]` on a gradient buffer read it as a
+NUL-terminated string and trapped. Added `ag_grad_at` / `ag_grad_len`.
+
+**BLAS: the `#ifdef FLINT_USE_BLAS` was defined by nothing**, so the branch was
+dead code and every matmul took the scalar triple loop. Replaced with runtime
+dispatch through a WEAK `cblas_dgemm` probe — link `-lopenblas` and it is used,
+omit it and the portable loop runs. No #define to forget.
+
+Measured same session: 64² 2.86x, 128² 9.46x, 256² 11.65x, 32x512x32 8.27x.
+
+**Leading dimension is the trap.** For a KxN B the stride is N, not K; getting
+it wrong returns plausible garbage rather than failing. The AI gate checks
+non-square shapes against the portable reference — and immediately caught a real
+bug: my first NEON dot loaded B as if contiguous when it is strided by N, wrong
+by ~3e6.
+
+**Also:** `flt_matmul_blas` was declared in the header and NEVER DEFINED (a link
+error waiting to happen). Now the deterministic reference path.
+
+**AI gate added** (`tests/test_ai.sh`, wired as `gate ai`). Nothing in the tensor
+runtime was verified before this. v1 is now 12/12.
+
+**libtorch verdict (verified, correcting an earlier claim):** PyTorch issue
+#186521 is about *Python wheels* for Termux/cp313, NOT the libtorch C++ SDK —
+it does not settle the C++ question either way. What settles it: no Termux
+package, target triple `aarch64-unknown-linux-android24` (Bionic), and ~674 MB
+free RAM of 3.6 GB. A native libtorch build is not viable here. If libtorch is
+ever wanted, the route is the pure-C AOT shim host-side only
+(`torch/csrc/inductor/aoti_torch/c/shim.h`), never vendored, never linked into
+a Termux binary.
