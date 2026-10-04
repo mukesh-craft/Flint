@@ -1099,13 +1099,13 @@ fn e_llvm_type(ty: str) -> str {
 # (num RAW[d]) -> inline constant. Sets ETYPE (2 if float else 1).
 fn e_num() -> str {
     raw = e_word()
-    mut v: str = raw
+    mut v: str = flint_str_concat(raw, "")
     mut float: i64 = 0
-    if flint_str_length(raw) == 0 {
+    if flint_str_length(v) == 0 {
         v = v
     } else {
-        if flint_str_char_at(raw, flint_str_length(raw) - 1) == 100 {
-            v = flint_str_substring(raw, 0, flint_str_length(raw) - 1)
+        if flint_str_char_at(v, flint_str_length(v) - 1) == 100 {
+            v = flint_str_substring(v, 0, flint_str_length(v) - 1)
             float = 1
         }
     }
@@ -2016,7 +2016,7 @@ fn e_match() -> str {
     }
     # Tag value: direct for tag enums, extracted for payload enums.
     # Payload enums also spill to a temp alloca (bindings bitcast it).
-    mut tagv: str = s
+    mut tagv: str = flint_str_concat(s, "")
     mut sa: str = ""
     if kk == 2 {
         sbody = e_llvm_typecode(sc)

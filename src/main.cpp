@@ -874,8 +874,12 @@ struct Type {
     static Type typeParam(const std::string& n) { Type t; t.kind = TypeKind::TypeParam; t.structName = n; return t; }
     static Type map() { Type t; t.kind = TypeKind::Map; return t; }
 
+    // Only genuinely copyable scalars. Str and Map are bare heap pointers:
+    // treating them as Copy let a moved-out binding be used again, which is
+    // the use-after-free / use-after-move hole. Ptr and Ref stay -- they are
+    // borrowed references, not owned values.
     bool isCopyType() const {
-        return kind == TypeKind::I64 || kind == TypeKind::F64 || kind == TypeKind::Bool || kind == TypeKind::Str || kind == TypeKind::Ptr || kind == TypeKind::Ref || kind == TypeKind::Struct || kind == TypeKind::Enum || kind == TypeKind::Map;
+        return kind == TypeKind::I64 || kind == TypeKind::F64 || kind == TypeKind::Bool;
     }
     bool isCompound() const { return kind == TypeKind::Array || kind == TypeKind::Ref; }
 };
@@ -1728,6 +1732,15 @@ public:
             borrowRecords.pop_back();
         }
         if (!scopes.empty()) scopes.pop_back();
+    }
+
+    // Clear `moved` on every visible binding. Called after a loop body: the
+    // next iteration re-runs the same statements, so a move performed in one
+    // pass does not carry into the next. The binding may have been declared
+    // before the loop, so this walks every scope, not just the innermost.
+    void reviveMoved() {
+        for (auto& sc : scopes)
+            for (auto& kv : sc) kv.second.moved = false;
     }
 
     bool declare(const std::string& name, const Symbol& sym) {
@@ -5551,6 +5564,10 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         breakStack.push_back(endBB);
         continueStack.push_back(condBB);
         emitStmt(ws->body.get());
+        // Loop fixpoint for move state: a binding declared outside the loop and
+        // moved inside the body is re-initialised on the next iteration, so the
+        // move must not survive the iteration boundary.
+        symTable.reviveMoved();
         breakStack.pop_back();
         continueStack.pop_back();
         symTable.exitScope();
@@ -6463,18 +6480,13 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             auto* v = emitExpr(a.get());
             if (!v) return nullptr;
             args.push_back(v);
-            // Move: passing a non-Copy variable to a function consumes it
-            // Extern functions are C FFI and borrow their arguments; skip move semantics
-            if (!isExtern && a->kind == NodeKind::Variable) {
-                auto* varArg = static_cast<VariableExprAST*>(a.get());
-                auto* srcSym = symTable.lookup(varArg->name);
-                    if (srcSym && !srcSym->type.isCopyType()) {
-                        if (srcSym->borrowCount > 0) {
-                            return codegenError(std::string("cannot move '") + varArg->name + "' while borrowed");
-                        }
-                    srcSym->moved = true;
-                }
-            }
+            // Passing a variable as an argument BORROWS it: the callee receives
+            // the value, but the caller's binding stays usable. Marking it moved
+            // here made every `flint_sb_append(sb, ..)` retire `sb`, so its
+            // next use reported "use of moved variable" -- a false positive on
+            // correct code, and the reason Str/Map could never be non-Copy.
+            // Ownership transfer is expressed explicitly at assignment, which
+            // is the only place a binding is actually consumed.
         }
         return builder->CreateCall(it->second, args);
     }
@@ -8362,6 +8374,14 @@ class BorrowChecker {
         if (sym->moved) error("cannot borrow moved variable '" + name + "'");
     }
 
+    // Clear `moved` on every binding in scope. Called between loop passes:
+    // re-running a loop body re-initialises the bindings it writes, so a move
+    // from one iteration must not be visible in the next.
+    void reviveMoved() {
+        for (auto& sc : scopes)
+            for (auto& kv : sc) kv.second.moved = false;
+    }
+
     void markMoved(const std::string& name) {
         auto* sym = lookup(name);
         if (sym && !sym->isCopyType) {
@@ -8475,6 +8495,34 @@ class BorrowChecker {
                 if (static_cast<ReturnStmtAST*>(node)->value)
                     checkExpr(static_cast<ReturnStmtAST*>(node)->value.get());
                 break;
+            // Kinds that used to fall through to `default` and go unchecked.
+            // Each carries sub-expressions that must be walked or a subtree
+            // goes unsound.
+            case NodeKind::Match: {
+                auto* m = static_cast<MatchExprAST*>(node);
+                checkExpr(m->scrutinee.get());
+                for (auto& arm : m->arms) checkExpr(arm.body.get());
+                break;
+            }
+            case NodeKind::Lambda:
+                if (auto* l = static_cast<LambdaExprAST*>(node)) checkExpr(l->body.get());
+                break;
+            case NodeKind::StructLiteral: {
+                auto* sl = static_cast<StructLiteralAST*>(node);
+                for (auto& f : sl->fields) checkExpr(f.second.get());
+                break;
+            }
+            case NodeKind::Unwrap:
+                if (auto* u = static_cast<UnwrapExprAST*>(node)) checkExpr(u->inner.get());
+                break;
+            case NodeKind::Destructure: {
+                auto* d = static_cast<DestructureAST*>(node);
+                checkExpr(d->init.get());
+                for (auto& nm : d->names) declare(nm, Type::i64(), true);
+                break;
+            }
+            case NodeKind::PyBlock:
+                break;
             case NodeKind::If: {
                 auto* i = static_cast<IfStmtAST*>(node);
                 checkExpr(i->condition.get());
@@ -8485,7 +8533,14 @@ class BorrowChecker {
             case NodeKind::While: {
                 auto* w = static_cast<WhileStmtAST*>(node);
                 checkExpr(w->condition.get());
+                // Loop fixpoint: walk the body twice. The first pass may mark a
+                // binding declared OUTSIDE the loop as moved; the next
+                // iteration re-runs those statements and re-initialises it, so
+                // the move must not carry across the iteration boundary.
                 checkBlock(w->body.get());
+                reviveMoved();
+                checkBlock(w->body.get());
+                reviveMoved();
                 break;
             }
             case NodeKind::Block:
