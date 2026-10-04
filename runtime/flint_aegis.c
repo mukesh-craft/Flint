@@ -341,17 +341,97 @@ static QBlock*  g_qblocks = NULL;
 static size_t   g_qcount = 0;
 static size_t   g_qcap   = 0;
 static size_t   g_qbytes = 0;
+static size_t   g_qhead  = 0;   // ring head: oldest quarantined block
 static int64_t g_qon    = -1;   // -1 = not yet resolved
 
 static int64_t aegis_quarantine_on(void) {
     if (g_qon < 0) {
+        // ON by default: memory safety that only applies when you know to ask
+        // for it is not a guarantee, and the measured cost is small --
+        // strrev 1.36x, fib 1.02x, sum_array 1.01x, primes unchanged. Set
+        // FLINT_AEGIS_QUARANTINE=0 to turn it off where the retained memory
+        // (bounded to AEGIS_QUARANTINE_BYTES) is unacceptable.
         const char* e = getenv("FLINT_AEGIS_QUARANTINE");
-        g_qon = (e && *e && *e != '0') ? 1 : 0;
+        g_qon = (e && e[0] == '0') ? 0 : 1;
     }
     return g_qon;
 }
 
 int64_t flint_aegis_quarantine_enabled(void) { return aegis_quarantine_on(); }
+
+// Open-addressed pointer set, sized to a power of two and grown with the
+// block table. A linear scan made check_live O(n) in the number of live
+// quarantined blocks, so a loop doing 100k small frees cost 100k*100k/2
+// comparisons -- strrev went from 1.6 ms to 16.9 s with the quarantine on.
+static void** g_qset = NULL;
+static size_t g_qset_cap = 0;   // always a power of two, or 0
+
+static size_t aegis_ptr_hash(void* p) {
+    uint64_t x = (uint64_t)(uintptr_t)p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdULL;
+    x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ULL;
+    x ^= x >> 33;
+    return (size_t)x;
+}
+
+static int aegis_qset_grow(size_t want) {
+    size_t ncap = 64;
+    while (ncap < want * 2) ncap *= 2;
+    void** ns = (void**)calloc(ncap, sizeof(void*));
+    if (!ns) return 0;
+    for (size_t i = 0; i < g_qcount; i++) {
+        size_t j = aegis_ptr_hash(g_qblocks[i].ptr) & (ncap - 1);
+        while (ns[j]) j = (j + 1) & (ncap - 1);
+        ns[j] = g_qblocks[i].ptr;
+    }
+    free(g_qset);
+    g_qset = ns;
+    g_qset_cap = ncap;
+    return 1;
+}
+
+static void aegis_qset_add(void* ptr) {
+    if (g_qcount * 2 >= g_qset_cap && !aegis_qset_grow(g_qcount + 1)) return;
+    size_t j = aegis_ptr_hash(ptr) & (g_qset_cap - 1);
+    while (g_qset[j]) {
+        if (g_qset[j] == ptr) return;   // already recorded
+        j = (j + 1) & (g_qset_cap - 1);
+    }
+    g_qset[j] = ptr;
+}
+
+// Remove without tombstones: rehash the single colliding chain.
+static void aegis_qset_del(void* ptr) {
+    if (!g_qset_cap) return;
+    size_t j = aegis_ptr_hash(ptr) & (g_qset_cap - 1);
+    while (g_qset[j]) {
+        if (g_qset[j] == ptr) {
+            g_qset[j] = NULL;
+            // Rehash the rest of this cluster so lookups stay correct.
+            size_t k = (j + 1) & (g_qset_cap - 1);
+            while (g_qset[k]) {
+                void* orphan = g_qset[k];
+                g_qset[k] = NULL;
+                size_t m = aegis_ptr_hash(orphan) & (g_qset_cap - 1);
+                while (g_qset[m]) m = (m + 1) & (g_qset_cap - 1);
+                g_qset[m] = orphan;
+                k = (k + 1) & (g_qset_cap - 1);
+            }
+            return;
+        }
+        j = (j + 1) & (g_qset_cap - 1);
+    }
+}
+
+static int aegis_qset_has(void* ptr) {
+    if (!g_qset_cap) return 0;
+    size_t j = aegis_ptr_hash(ptr) & (g_qset_cap - 1);
+    while (g_qset[j]) {
+        if (g_qset[j] == ptr) return 1;
+        j = (j + 1) & (g_qset_cap - 1);
+    }
+    return 0;
+}
 
 static void aegis_quarantine_push(void* ptr, size_t size) {
     if (g_qcount == g_qcap) {
@@ -363,15 +443,22 @@ static void aegis_quarantine_push(void* ptr, size_t size) {
     }
     g_qblocks[g_qcount].ptr = ptr;
     g_qblocks[g_qcount].size = size;
+    aegis_qset_add(ptr);
     g_qcount++;
     g_qbytes += size;
     memset(ptr, AEGIS_POISON, size);
     // Over budget: release the oldest entries. They have already been poisoned
     // and are recorded, so freeing them now cannot be observed as a UAF.
+    //
+    // The table is a ring, so releasing advances the head pointer in O(1).
+    // Shifting the whole array down instead made a loop that frees n blocks
+    // cost O(n^2): strrev spent 17 s here before this change.
     while (g_qbytes > AEGIS_QUARANTINE_BYTES && g_qcount > 1) {
-        free(g_qblocks[0].ptr);
-        g_qbytes -= g_qblocks[0].size;
-        for (size_t i = 1; i < g_qcount; i++) g_qblocks[i - 1] = g_qblocks[i];
+        size_t oldest = g_qhead;
+        aegis_qset_del(g_qblocks[oldest].ptr);
+        free(g_qblocks[oldest].ptr);
+        g_qbytes -= g_qblocks[oldest].size;
+        g_qhead = (oldest + 1) % g_qcap;
         g_qcount--;
     }
 }
@@ -384,11 +471,9 @@ void flint_aegis_quarantine_free(void* ptr, size_t size) {
 
 void flint_aegis_check_live(void* ptr, const char* what) {
     if (!ptr || !aegis_quarantine_on()) return;
-    for (size_t i = 0; i < g_qcount; i++) {
-        if (g_qblocks[i].ptr == ptr) {
-            // Report rather than corrupt: the read is about to happen.
-            flint_panic("aegis: use-after-free on a quarantined pointer");
-        }
+    if (aegis_qset_has(ptr)) {
+        // Report rather than corrupt: the read is about to happen.
+        flint_panic("aegis: use-after-free on a quarantined pointer");
     }
     (void)what;
 }

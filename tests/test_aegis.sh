@@ -179,7 +179,8 @@ quarantine_traps() { # $1=name $2=src $3=expected-output-before-panic
     echo "FAIL $name: failed to compile: $(head -n1 "$TMPD/$name.err")"
     fail=$((fail+1)); return
   fi
-  out="$(FLINT_AEGIS_QUARANTINE=1 "$TMPD/$name.bin" 2>&1)"
+  # No env var: the quarantine is on by default, so this asserts the default.
+  out="$("$TMPD/$name.bin" 2>&1)"
   if printf '%s' "$out" | grep -q "use-after-free"; then
     if printf '%s' "$out" | grep -qF "$want"; then pass=$((pass+1));
     else echo "FAIL $name: trapped but output before it was wrong"; fail=$((fail+1)); fi
@@ -219,13 +220,38 @@ quarantine_traps uaf_chan \
     0
 }" "sent"
 
-# Default (quarantine off) must still run cleanly and produce the right answer:
-# the guard costs one predictable branch and nothing else.
+# FLINT_AEGIS_QUARANTINE=0 is the documented opt-out and must still work.
 accept ok_after_free \
 "fn main() -> i64 {
     s = flint_str_concat(\"ab\", \"cd\")
     flint_println(s)
     flint_str_free(s)
+    0
+}"
+
+# The documented opt-out must still work: quarantine off, the stale read
+# completes (that is the point of the escape hatch) and valid code is fine.
+optout_ok() { # $1=name $2=src
+  name="$1"; src="$2"
+  printf '%s\n' "$src" > "$TMPD/$name.fl"
+  if ! "$FLINTC" "$TMPD/$name.fl" -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
+    echo "FAIL $name: failed to compile: $(head -n1 "$TMPD/$name.err")"
+    fail=$((fail+1)); return
+  fi
+  if FLINT_AEGIS_QUARANTINE=0 "$TMPD/$name.bin" > /dev/null 2>&1; then
+    pass=$((pass+1))
+  else
+    echo "FAIL $name: FLINT_AEGIS_QUARANTINE=0 should let the read through"
+    fail=$((fail+1))
+  fi
+}
+
+optout_ok optout_str \
+"fn main() -> i64 {
+    s = flint_str_concat(\"ab\", \"cd\")
+    flint_println(s)
+    flint_str_free(s)
+    print(flint_str_length(s))
     0
 }"
 

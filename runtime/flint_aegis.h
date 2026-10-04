@@ -57,8 +57,8 @@ void    flint_aegis_write_u8(int64_t lease, int64_t idx, int64_t val);
 // then hits poison and traps, instead of silently returning another
 // allocation's bytes.
 //
-// Off by default so the hot path costs one branch; enable with
-// FLINT_AEGIS_QUARANTINE=1 (or a --asan-style build) for debugging and tests.
+// ON by default -- see aegis_quarantine_on() for the measured cost and the
+// FLINT_AEGIS_QUARANTINE=0 opt-out.
 
 // Bytes of freed memory retained before the block is really released.
 #define AEGIS_QUARANTINE_BYTES ((size_t)8 << 20)
