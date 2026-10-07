@@ -416,6 +416,33 @@ void ag_cleanup(void) {
     ag_next_id = 0;
 }
 
+// Snapshot the input tensors' data into the node.
+//
+// Backward is a function of the operands as well as grad_out: d(ab)/da needs b,
+// and relu's derivative needs the sign of its input. The tape used to record
+// ids only, so every rule degraded to a pass-through. The copies are owned by
+// the node and freed in ag_cleanup.
+static void _ag_capture(AGNode* n, void* const* tensors, int n_tensors) {
+    int64_t total = 0, shape_total = 0;
+    for (int i = 0; i < n_tensors; i++) {
+        FlintTensor* t = (FlintTensor*)tensors[i];
+        n->value_ndims[i] = t ? t->ndim : 0;
+        total += t ? t->size : 0;
+        shape_total += t ? t->ndim : 0;
+    }
+    n->values = total > 0 ? (double*)malloc((size_t)total * sizeof(double)) : NULL;
+    n->value_shapes = shape_total > 0 ? (int64_t*)malloc((size_t)shape_total * sizeof(int64_t)) : NULL;
+    int64_t off = 0, soff = 0;
+    for (int i = 0; i < n_tensors; i++) {
+        FlintTensor* t = (FlintTensor*)tensors[i];
+        if (!t) continue;
+        memcpy(n->values + off, t->data, (size_t)t->size * sizeof(double));
+        memcpy(n->value_shapes + soff, t->shape, (size_t)t->ndim * sizeof(int64_t));
+        off += t->size;
+        soff += t->ndim;
+    }
+}
+
 void ag_record(int64_t op_type, int64_t output_id, int64_t* input_ids,
                 int n_inputs, void* extra, int extra_int) {
     AGNode* n = calloc(1, sizeof(AGNode));
@@ -432,6 +459,74 @@ void ag_record(int64_t op_type, int64_t output_id, int64_t* input_ids,
     ag_graph_last = n;
 }
 
+// Record an op together with a snapshot of its operands, which is what makes a
+// real backward rule possible.
+static void ag_record_values(int64_t op_type, int64_t output_id, int64_t* input_ids,
+                             int n_inputs, void* extra, int extra_int,
+                             void* const* tensors) {
+    ag_record(op_type, output_id, input_ids, n_inputs, extra, extra_int);
+    AGNode* n = ag_graph_last;
+    n->value_ndims = (int64_t*)calloc((size_t)n_inputs, sizeof(int64_t));
+    _ag_capture(n, tensors, n_inputs);
+}
+
+// Shape of operand i.
+static const int64_t* _ag_shape_of(const AGNode* n, int i) {
+    if (!n->value_shapes || !n->value_ndims) return NULL;
+    int64_t soff = 0;
+    for (int k = 0; k < i; k++) soff += n->value_ndims[k];
+    return n->value_shapes + soff;
+}
+
+// Element count of operand i. Derived from its recorded shape so a 1-element
+// shape gives 1 rather than the product of an empty array.
+static int64_t _ag_value_size(const AGNode* n, int i) {
+    int64_t ndim = n->value_ndims[i], sz = 1;
+    const int64_t* shape = _ag_shape_of(n, i);
+    for (int64_t d = 0; d < ndim; d++) sz *= shape[d];
+    return sz;
+}
+
+// Resolve input i's snapshot into (values pointer, ndim, shape pointer).
+static const double* _ag_operand(const AGNode* n, int i, int64_t* size_out,
+                                 int64_t* ndim_out, const int64_t** shape_out) {
+    *size_out = 0; *ndim_out = 0; *shape_out = NULL;
+    if (!n->values || !n->value_ndims || !n->value_shapes) return NULL;
+    int64_t voff = 0, soff = 0;
+    for (int k = 0; k < i; k++) {
+        voff += _ag_value_size(n, k);
+        soff += n->value_ndims[k];
+    }
+    *size_out = _ag_value_size(n, i);
+    *ndim_out = n->value_ndims[i];
+    *shape_out = n->value_shapes + soff;
+    return n->values + voff;
+}
+
+// Set the gradient that ag_backward differentiates from.
+//
+// mse_loss_grad returns a tensor of dL/dpred but does not put it on the tape,
+// so ag_backward(from) would seed with ones and ignore it entirely. This
+// records a node that passes that gradient through unchanged, so the real loss
+// gradient reaches the parameters. Without it, training optimises a made-up
+// objective.
+// Record the gradient that the next ag_backward(output_id) must START from.
+//
+// The previous design appended a disconnected AG_EMPTY node holding the value.
+// That node has no inputs, so nothing consumed it: the traversal still began at
+// ones, every rule downstream saw a seed of 1, and training moved weights the
+// WRONG WAY -- a scalar fit from 1.0 toward a target of 5 drove w down to 0.2.
+// The loss gradient was computed and thrown away every step.
+//
+// Instead stash the tensor so ag_backward can seed the traversal with it. That
+// is the one place the value can actually enter the graph.
+static FlintTensor* g_seed_tensor = NULL;
+
+void ag_seed(void* grad) {
+    FlintTensor* g = _as_tensor(grad);
+    if (!g || g->size <= 0) { g_seed_tensor = NULL; return; }
+    g_seed_tensor = g;
+}
 static AGNode* _find_node(int64_t output_id) {
     AGNode* n = ag_graph;
     while (n) { if (n->output_id == output_id) return n; n = n->next; }
@@ -476,9 +571,17 @@ void ag_backward(int64_t output_id) {
     // non-scalar output (d/dx sum(x) = 1) and reduces to the old behaviour for
     // a scalar.
     int64_t seed_n = n->extra_int > 0 ? n->extra_int : 1;
-    double* ones = (double*)malloc((size_t)seed_n * sizeof(double));
-    for (int64_t i = 0; i < seed_n; i++) ones[i] = 1.0;
-    grad_stack[stack_size] = ones;
+    double* seed = (double*)malloc((size_t)seed_n * sizeof(double));
+    if (g_seed_tensor && g_seed_tensor->size == seed_n) {
+        // ag_seed supplied dL/doutput. This is the value that must enter the
+        // graph; seeding ones instead silently trained a fabricated objective.
+        memcpy(seed, g_seed_tensor->data, (size_t)seed_n * sizeof(double));
+        g_seed_tensor = NULL;   // consumed: one seed per backward
+    } else {
+        g_seed_tensor = NULL;
+        for (int64_t i = 0; i < seed_n; i++) seed[i] = 1.0;
+    }
+    grad_stack[stack_size] = seed;
     stack_size++;
 
     while (stack_size > 0) {
@@ -501,91 +604,156 @@ void ag_backward(int64_t output_id) {
         int grad_inputs_owned = 0;
 
         switch (node->op) {
-            case AG_RELU: {
-                // grad_input = grad_out * (input > 0)
-                // input_ids[0] = input tensor's grad_id
-                // We need the input tensor value. Since we can't find it
-                // by grad_id alone, we store it in extra.
-                // Instead, we'll be practical: the gradient for relu at index i
-                // is grad_out[i] if input[i] > 0 else 0.
-                // extra_int stores the total size.
-                n_grad = node->extra_int > 0 ? node->extra_int : 1;
-                double* gi = malloc(n_grad * sizeof(double));
-                grad_inputs_owned = 1;
-                memcpy(gi, grad_out, n_grad * sizeof(double));
-                // relu gradients don't need input values for the grad itself
-                // (0 if input < 0, but we don't have the input here)
-                // This simplified version is for a demo
-                grad_inputs = gi;
-                break;
-            }
+            // Real rules. Each needs the operand values the node captured:
+            // d(ab)/da = grad * b, relu's derivative needs the sign of its
+            // input, and so on. Every one of these used to be a pass-through,
+            // which is why ag_mul returned the seed instead of 2x.
             case AG_NEG: {
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
-                double* gi = malloc(n_grad * sizeof(double));
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
                 grad_inputs_owned = 1;
                 for (int64_t i = 0; i < n_grad; i++) gi[i] = -grad_out[i];
                 grad_inputs = gi;
                 break;
             }
-            case AG_ADD: {
-                // grad_a = grad_out, grad_b = grad_out (broadcast)
+            case AG_RELU: {
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
-                grad_inputs = malloc(n_grad * sizeof(double));
+                int64_t asz = 0, and = 0; const int64_t* ash = NULL;
+                const double* av = _ag_operand(node, 0, &asz, &and, &ash);
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
                 grad_inputs_owned = 1;
-                memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
-                // Both inputs get the same gradient
-                break;
-            }
-            case AG_MUL: {
-                // grad_a = grad_out * b, grad_b = grad_out * a
-                // Without the actual tensor values, we can't compute this.
-                // For now, pass through gradient (simplified).
-                n_grad = node->extra_int > 0 ? node->extra_int : 1;
-                grad_inputs = malloc(n_grad * sizeof(double));
-                grad_inputs_owned = 1;
-                memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
-                break;
-            }
-            case AG_MATMUL: {
-                // grad_a = grad_out * b^T, grad_b = a^T * grad_out
-                // For this we need shapes, stored in extra as an int64_t array
-                // [M, K, N, 0] or similar
-                // Simplified: pass through
-                n_grad = node->extra_int > 0 ? node->extra_int : 1;
-                grad_inputs = malloc(n_grad * sizeof(double));
-                grad_inputs_owned = 1;
-                memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
-                break;
-            }
-            case AG_EXP: {
-                // grad = grad_out * exp(input)
-                n_grad = node->extra_int > 0 ? node->extra_int : 1;
-                grad_inputs = malloc(n_grad * sizeof(double));
-                grad_inputs_owned = 1;
-                memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
-                break;
-            }
-            case AG_LOG: {
-                // grad = grad_out / input
-                n_grad = node->extra_int > 0 ? node->extra_int : 1;
-                grad_inputs = malloc(n_grad * sizeof(double));
-                grad_inputs_owned = 1;
-                memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
+                for (int64_t i = 0; i < n_grad; i++)
+                    gi[i] = (av && i < asz && av[i] > 0.0) ? grad_out[i] : 0.0;
+                grad_inputs = gi;
                 break;
             }
             case AG_SIGMOID: {
-                // grad = grad_out * sigmoid(x) * (1 - sigmoid(x))
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
-                grad_inputs = malloc(n_grad * sizeof(double));
+                int64_t osz = 0, ond = 0; const int64_t* osh = NULL;
+                const double* ov = _ag_operand(node, 1 >= node->n_inputs ? 0 : 1, &osz, &ond, &osh);
+                // s'(x) = s * (1 - s); ov is the OUTPUT (input i=0), so use the
+                // output tensor's own value via the recorded operand when it is
+                // the same size, else fall back to the seed.
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
                 grad_inputs_owned = 1;
-                memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
+                for (int64_t i = 0; i < n_grad; i++) {
+                    double s = (ov && i < osz) ? 1.0 / (1.0 + exp(-ov[i])) : 1.0;
+                    gi[i] = grad_out[i] * s * (1.0 - s);
+                }
+                grad_inputs = gi;
+                break;
+            }
+            case AG_TANH: {
+                n_grad = node->extra_int > 0 ? node->extra_int : 1;
+                int64_t asz = 0, and = 0; const int64_t* ash = NULL;
+                const double* av = _ag_operand(node, 0, &asz, &and, &ash);
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
+                grad_inputs_owned = 1;
+                for (int64_t i = 0; i < n_grad; i++) {
+                    double t = (av && i < asz) ? tanh(av[i]) : 0.0;
+                    gi[i] = grad_out[i] * (1.0 - t * t);
+                }
+                grad_inputs = gi;
+                break;
+            }
+            case AG_EXP: {
+                n_grad = node->extra_int > 0 ? node->extra_int : 1;
+                int64_t asz = 0, and = 0; const int64_t* ash = NULL;
+                const double* av = _ag_operand(node, 0, &asz, &and, &ash);
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
+                grad_inputs_owned = 1;
+                for (int64_t i = 0; i < n_grad; i++)
+                    gi[i] = (av && i < asz) ? grad_out[i] * exp(av[i]) : grad_out[i];
+                grad_inputs = gi;
+                break;
+            }
+            case AG_LOG: {
+                n_grad = node->extra_int > 0 ? node->extra_int : 1;
+                int64_t asz = 0, and = 0; const int64_t* ash = NULL;
+                const double* av = _ag_operand(node, 0, &asz, &and, &ash);
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
+                grad_inputs_owned = 1;
+                for (int64_t i = 0; i < n_grad; i++) {
+                    double x = (av && i < asz) ? av[i] : 1.0;
+                    gi[i] = (x != 0.0) ? grad_out[i] / x : 0.0;
+                }
+                grad_inputs = gi;
+                break;
+            }
+            case AG_ADD: {
+                // d(a+b)/da = d(a+b)/db = 1
+                n_grad = node->extra_int > 0 ? node->extra_int : 1;
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
+                grad_inputs_owned = 1;
+                memcpy(gi, grad_out, (size_t)n_grad * sizeof(double));
+                grad_inputs = gi;
+                break;
+            }
+            case AG_MUL: {
+                // d(a*b)/da = grad * b and d(a*b)/db = grad * a. The node
+                // records both operands, so both chains are available; the
+                // per-input split happens in the propagation loop below.
+                n_grad = node->extra_int > 0 ? node->extra_int : 1;
+                int64_t bsz = 0, bnd = 0; const int64_t* bsh = NULL;
+                const double* bv = _ag_operand(node, 1, &bsz, &bnd, &bsh);
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
+                grad_inputs_owned = 1;
+                for (int64_t i = 0; i < n_grad; i++)
+                    gi[i] = (bv && i < bsz) ? grad_out[i] * bv[i] : grad_out[i];
+                grad_inputs = gi;
+                break;
+            }
+            case AG_MATMUL: {
+                // C = A(MxK) @ B(KxN). dA = grad(MxN) @ B^T (MxN * NxK = MxK),
+                // dB = A^T (KxM) @ grad (KxM * MxN = KxN). Row-major.
+                int64_t* shp = (int64_t*)node->extra;
+                int64_t M = shp ? shp[0] : 0, K = shp ? shp[1] : 0, N = shp ? shp[2] : 0;
+                int64_t asz = 0, and_ = 0; const int64_t* ash = NULL;
+                int64_t bsz = 0, bnd = 0; const int64_t* bsh = NULL;
+                const double* av = _ag_operand(node, 0, &asz, &and_, &ash);
+                const double* bv = _ag_operand(node, 1, &bsz, &bnd, &bsh);
+                if (M > 0 && K > 0 && N > 0 && av && bv) {
+                    int64_t da_sz = 0, da_nd = 0; const int64_t* da_sh = NULL;
+                    const double* da = _ag_operand(node, 0, &da_sz, &da_nd, &da_sh);
+                    int64_t out_sz = M * N;
+                    // dA into grad_inputs, dB recomputed in the split below.
+                    grad_inputs = (double*)calloc((size_t)(M * K), sizeof(double));
+                    grad_inputs_owned = 1;
+                    for (int64_t i = 0; i < M; i++)
+                        for (int64_t k = 0; k < K; k++) {
+                            double s = 0.0;
+                            for (int64_t j = 0; j < N; j++) s += grad_out[i * N + j] * bv[k * N + j];
+                            grad_inputs[i * K + k] = s;
+                        }
+                    n_grad = M * K;
+                    (void)da; (void)out_sz; (void)and_;
+                } else {
+                    n_grad = node->extra_int > 0 ? node->extra_int : 1;
+                    grad_inputs = (double*)malloc((size_t)n_grad * sizeof(double));
+                    grad_inputs_owned = 1;
+                    memcpy(grad_inputs, grad_out, (size_t)n_grad * sizeof(double));
+                }
+                break;
+            }
+            case AG_EMPTY: {
+                // Seed node: the gradient IS the value captured by ag_seed
+                // (dL/dpred), not the incoming grad_out, which the traversal
+                // sets to ones. Reading grad_out here would discard the loss
+                // gradient and train against a made-up objective.
+                n_grad = node->extra_int > 0 ? node->extra_int : 1;
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
+                grad_inputs_owned = 1;
+                if (node->values) memcpy(gi, node->values, (size_t)n_grad * sizeof(double));
+                else memcpy(gi, grad_out, (size_t)n_grad * sizeof(double));
+                grad_inputs = gi;
                 break;
             }
             default: {
                 n_grad = node->extra_int > 0 ? node->extra_int : 1;
-                grad_inputs = malloc(n_grad * sizeof(double));
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
                 grad_inputs_owned = 1;
-                memcpy(grad_inputs, grad_out, n_grad * sizeof(double));
+                memcpy(gi, grad_out, (size_t)n_grad * sizeof(double));
+                grad_inputs = gi;
                 break;
             }
         }
@@ -603,9 +771,82 @@ void ag_backward(int64_t output_id) {
         // and free the buffer once after the loop.
         for (int k = 0; k < node->n_inputs; k++) {
             AGNode* input_node = _find_node(node->input_ids[k]);
+            // Per-input gradient. `grad_inputs` is input 0's chain; a binary op
+            // needs a different chain per input (d(ab)/da uses b, d(ab)/db uses
+            // a), so input 1 gets its own buffer here rather than a copy of
+            // input 0's.
+            double* gk = grad_inputs;
+            int64_t nk = n_grad;
+            int gk_owned = 0;
+            if (k == 1 && node->n_inputs == 2) {
+                if (node->op == AG_MUL) {
+                    int64_t asz = 0, and_ = 0; const int64_t* ash = NULL;
+                    const double* av = _ag_operand(node, 0, &asz, &and_, &ash);
+                    gk = (double*)malloc((size_t)n_grad * sizeof(double));
+                    if (!gk) { gk = grad_inputs; }
+                    else {
+                        gk_owned = 1;
+                        for (int64_t i = 0; i < n_grad; i++)
+                            gk[i] = (av && i < asz) ? grad_out[i] * av[i] : grad_out[i];
+                    }
+                } else if (node->op == AG_MATMUL) {
+                    int64_t* shp = (int64_t*)node->extra;
+                    int64_t M = shp ? shp[0] : 0, K = shp ? shp[1] : 0, N = shp ? shp[2] : 0;
+                    int64_t asz = 0, and_ = 0; const int64_t* ash = NULL;
+                    const double* av = _ag_operand(node, 0, &asz, &and_, &ash);
+                    if (M > 0 && K > 0 && N > 0 && av) {
+                        nk = K * N;
+                        gk = (double*)calloc((size_t)nk, sizeof(double));
+                        if (gk) {
+                            gk_owned = 1;
+                            for (int64_t kk = 0; kk < K; kk++)
+                                for (int64_t j = 0; j < N; j++) {
+                                    double s = 0.0;
+                                    for (int64_t i2 = 0; i2 < M; i2++) s += av[i2 * K + kk] * grad_out[i2 * N + j];
+                                    gk[kk * N + j] = s;
+                                }
+                        } else { gk = grad_inputs; nk = n_grad; }
+                    } else { gk = grad_inputs; nk = n_grad; }
+                }
+            }
             if (!input_node) {
                 FlintTensor* leaf = _ag_reg_get(node->input_ids[k]);
-                if (leaf) _acc_grad(leaf, grad_inputs, n_grad);
+                if (leaf) {
+                    // Reduce to the operand's shape before accumulating.
+                    // A broadcast operand (a bias row added across every row of
+                    // an (H x N) tensor) receives the same gradient once per
+                    // position it was broadcast to, so summing is required --
+                    // without it every bias gradient came out divided by N,
+                    // which is enough to make training diverge.
+                    // Compare against the LEAF's own shape rather than the
+                    // recorded operand snapshot: when an operand was broadcast,
+                    // the snapshot already has the expanded size, so it cannot
+                    // distinguish "same shape" from "was broadcast".
+                    int64_t lsz = leaf->size;
+                    int64_t lnd = leaf->ndim;
+                    const int64_t* lsh = leaf->shape;
+                    if (lsz > 0 && lsz < nk) {
+                        // The operand's elements are repeated `reps` times each
+                        // in row-major order, so reps = nk / lsz. Reduce by
+                        // summing each run of reps -- which is exactly the
+                        // sum-over-broadcast-positions a gradient needs.
+                        int64_t reps = nk / lsz;
+                        if (reps > 1) {
+                            double* red = (double*)calloc((size_t)lsz, sizeof(double));
+                            if (red) {
+                                for (int64_t r = 0; r < lsz; r++)
+                                    for (int64_t q = 0; q < reps; q++)
+                                        red[r] += gk[r * reps + q];
+                                _acc_grad(leaf, red, lsz);
+                                free(red);
+                                if (gk_owned) free(gk);
+                                continue;
+                            }
+                        }
+                    }
+                    _acc_grad(leaf, gk, nk);
+                }
+                if (gk_owned) free(gk);
                 continue;
             }
             // Already scheduled by an earlier k with the same id: adding it
@@ -625,21 +866,19 @@ void ag_backward(int64_t output_id) {
             }
             if (stack_size < stack_cap) {
                 stack[stack_size] = input_node;
-                double* g = malloc((size_t)n_grad * sizeof(double));
-                if (!g) break;
-                memcpy(g, grad_inputs, (size_t)n_grad * sizeof(double));
+                double* g = malloc((size_t)nk * sizeof(double));
+                if (!g) { if (gk_owned) free(gk); break; }
+                memcpy(g, gk, (size_t)nk * sizeof(double));
                 grad_stack[stack_size] = g;
                 stack_size++;
             }
+            if (gk_owned) free(gk);
         }
 
         free(grad_out);
         if (grad_inputs && grad_inputs_owned) free(grad_inputs);
     }
 
-    // `ones` was pushed onto grad_stack, so the loop already freed it as
-    // grad_out. Freeing it again here was a double free that aborted
-    // ag_backward on every call.
     free(stack);
     free(grad_stack);
     #undef AG_STACK_INIT
@@ -710,7 +949,8 @@ void* ag_matmul(void* a, void* b) {
         int64_t* shapes = malloc(4 * sizeof(int64_t));
         shapes[0] = ta->shape[0]; shapes[1] = ta->shape[1];
         shapes[2] = tb->shape[1]; shapes[3] = 0;
-        ag_record(AG_MATMUL, tout->grad_id, ids, 2, shapes, (int)tout->size);
+        void* t0[2] = { ta, tb };
+        ag_record_values(AG_MATMUL, tout->grad_id, ids, 2, shapes, (int)tout->size, t0);
     }
     return out;
 }
@@ -724,7 +964,8 @@ void* ag_add(void* a, void* b) {
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
         _ag_reg_set(tout->grad_id, tout);
-        ag_record(AG_ADD, tout->grad_id, ids, 2, NULL, (int)tout->size);
+        void* t1[2] = { ta, tb };
+        ag_record_values(AG_ADD, tout->grad_id, ids, 2, NULL, (int)tout->size, t1);
     }
     return out;
 }
@@ -738,7 +979,8 @@ void* ag_mul(void* a, void* b) {
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
         _ag_reg_set(tout->grad_id, tout);
-        ag_record(AG_MUL, tout->grad_id, ids, 2, NULL, (int)tout->size);
+        void* t2[2] = { ta, tb };
+        ag_record_values(AG_MUL, tout->grad_id, ids, 2, NULL, (int)tout->size, t2);
     }
     return out;
 }
@@ -751,7 +993,36 @@ void* ag_relu(void* a) {
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
         _ag_reg_set(tout->grad_id, tout);
-        ag_record(AG_RELU, tout->grad_id, ids, 1, NULL, (int)tout->size);
+        void* t_ag_relu[1] = { ta };
+        ag_record_values(AG_RELU, tout->grad_id, ids, 1, NULL, (int)tout->size, t_ag_relu);
+    }
+    return out;
+}
+
+void* ag_tanh(void* a) {
+    FlintTensor* ta = _as_tensor(a);
+    void* out = flt_tanh(a);
+    if (ta->grad_id >= 0) {
+        int64_t ids[1] = {ta->grad_id};
+        FlintTensor* tout = _as_tensor(out);
+        tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
+        void* t_tanh[1] = { ta };
+        ag_record_values(AG_TANH, tout->grad_id, ids, 1, NULL, (int)tout->size, t_tanh);
+    }
+    return out;
+}
+
+void* ag_log(void* a) {
+    FlintTensor* ta = _as_tensor(a);
+    void* out = flt_log(a);
+    if (ta->grad_id >= 0) {
+        int64_t ids[1] = {ta->grad_id};
+        FlintTensor* tout = _as_tensor(out);
+        tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
+        void* t_log[1] = { ta };
+        ag_record_values(AG_LOG, tout->grad_id, ids, 1, NULL, (int)tout->size, t_log);
     }
     return out;
 }
@@ -764,7 +1035,8 @@ void* ag_sigmoid(void* a) {
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
         _ag_reg_set(tout->grad_id, tout);
-        ag_record(AG_SIGMOID, tout->grad_id, ids, 1, NULL, (int)tout->size);
+        void* t_ag_sigmoid[1] = { ta };
+        ag_record_values(AG_SIGMOID, tout->grad_id, ids, 1, NULL, (int)tout->size, t_ag_sigmoid);
     }
     return out;
 }
@@ -777,7 +1049,8 @@ void* ag_exp(void* a) {
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
         _ag_reg_set(tout->grad_id, tout);
-        ag_record(AG_EXP, tout->grad_id, ids, 1, NULL, (int)tout->size);
+        void* t_ag_exp[1] = { ta };
+        ag_record_values(AG_EXP, tout->grad_id, ids, 1, NULL, (int)tout->size, t_ag_exp);
     }
     return out;
 }
@@ -790,7 +1063,8 @@ void* ag_neg(void* a) {
         FlintTensor* tout = _as_tensor(out);
         tout->grad_id = ag_next_id++;
         _ag_reg_set(tout->grad_id, tout);
-        ag_record(AG_NEG, tout->grad_id, ids, 1, NULL, (int)tout->size);
+        void* t_ag_neg[1] = { ta };
+        ag_record_values(AG_NEG, tout->grad_id, ids, 1, NULL, (int)tout->size, t_ag_neg);
     }
     return out;
 }
@@ -798,6 +1072,12 @@ void* ag_neg(void* a) {
 // =========================================================================
 // Optimizers
 // =========================================================================
+// Elements allocated so far in the m/v buffers. Each parameter gets a
+// contiguous slice at its own offset; reallocating on growth would move every
+// later slice, so instead the buffers are sized for the total and the offsets
+// are recomputed from the parameter sizes each step.
+static int64_t _adam_cap_elems = 0;
+
 AdamState* adam_create(double lr) {
     AdamState* s = calloc(1, sizeof(AdamState));
     s->lr = lr; s->beta1 = 0.9; s->beta2 = 0.999; s->eps = 1e-8;
@@ -808,21 +1088,61 @@ AdamState* adam_create(double lr) {
     return s;
 }
 
+// Ensure the moment buffers can hold `total` elements.
+static void _adam_reserve(AdamState* s, int64_t total) {
+    if (total <= _adam_cap_elems && s->m) return;
+    int64_t cap = _adam_cap_elems ? _adam_cap_elems * 2 : 1024;
+    while (cap < total) cap *= 2;
+    s->m = realloc(s->m, (size_t)cap * sizeof(double));
+    s->v = realloc(s->v, (size_t)cap * sizeof(double));
+    memset(s->m, 0, (size_t)cap * sizeof(double));
+    memset(s->v, 0, (size_t)cap * sizeof(double));
+    _adam_cap_elems = cap;
+}
+
+// Total parameter elements tracked so far, used to grow the m/v buffers.
+static int64_t _adam_total = 0;
+
 void adam_add_param(AdamState* s, int64_t grad_id, int64_t size) {
     if (s->n_params >= s->capacity) {
         s->capacity *= 2;
         s->ids = realloc(s->ids, s->capacity * sizeof(int64_t));
     }
     s->ids[s->n_params++] = grad_id;
-    (void)size; // We'd store m/v per element in a real impl
+    _adam_reserve(s, (int64_t)s->capacity * (size > 0 ? size : 1));
 }
 
+// Apply the accumulated gradients to the parameters and advance the moments.
+//
+// Both optimizers were stubs: adam_step incremented t, computed a bias-
+// correction factor, threw it away and did nothing, and sgd_step was an empty
+// body. So "training" with this runtime moved no weights at all. Both now
+// perform the real update on the tensors registered by *_add_param, whose
+// gradients live in their `grad` buffers after ag_backward.
+//
+// Adam (Kingma & Ba): m = b1*m + (1-b1)*g;  v = b2*v + (1-b2)*g^2
+//                     w -= lr * mhat / (sqrt(vhat) + eps)
+// SGD with momentum: v = mu*v + g;  w -= lr * v
 void adam_step(AdamState* s) {
+    if (!s) return;
     s->t++;
-    double lr_t = s->lr * sqrt(1.0 - pow(s->beta2, s->t)) / (1.0 - pow(s->beta1, s->t));
-    (void)lr_t;
-    // Simplified: just do SGD for the demo
-    // Real Adam would use per-parameter m/v buffers
+    if (!s->m || !s->v) return;
+    double b1c = 1.0 - pow(s->beta1, s->t);
+    double b2c = 1.0 - pow(s->beta2, s->t);
+    int64_t off = 0;
+    for (int p = 0; p < s->n_params; p++) {
+        FlintTensor* w = _ag_reg_get(s->ids[p]);
+        if (!w || !w->grad) { off += w ? w->size : 0; continue; }
+        for (int64_t i = 0; i < w->size; i++) {
+            double g = w->grad[i];
+            s->m[off + i] = s->beta1 * s->m[off + i] + (1.0 - s->beta1) * g;
+            s->v[off + i] = s->beta2 * s->v[off + i] + (1.0 - s->beta2) * g * g;
+            double mhat = s->m[off + i] / b1c;
+            double vhat = s->v[off + i] / b2c;
+            w->data[i] -= s->lr * mhat / (sqrt(vhat) + s->eps);
+        }
+        off += w->size;
+    }
 }
 
 void adam_destroy(AdamState* s) { free(s->ids); free(s->m); free(s->v); free(s); }
@@ -843,7 +1163,19 @@ void sgd_add_param(SGDState* s, int64_t grad_id, int64_t size) {
     (void)size;
 }
 
-void sgd_step(SGDState* s) { (void)s; }
+void sgd_step(SGDState* s) {
+    if (!s) return;
+    for (int p = 0; p < s->n_params; p++) {
+        FlintTensor* w = _ag_reg_get(s->ids[p]);
+        if (!w || !w->grad) continue;
+        if (!s->velocities) s->velocities = (double*)calloc((size_t)w->size, sizeof(double));
+        if (!s->velocities) continue;
+        for (int64_t i = 0; i < w->size; i++) {
+            s->velocities[i] = s->momentum * s->velocities[i] + w->grad[i];
+            w->data[i] -= s->lr * s->velocities[i];
+        }
+    }
+}
 void sgd_destroy(SGDState* s) { free(s->ids); free(s->velocities); free(s); }
 
 // =========================================================================

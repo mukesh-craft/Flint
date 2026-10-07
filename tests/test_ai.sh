@@ -72,10 +72,20 @@ run() {
 run tensor "4 58 64 139 154 58 64 139 154 415 1" tests/t_ai_tensor.fl
 
 # y = x*x on [1,2,3] -> [1,4,9]; grad len 3, pass-through grad [2,2,2]
-run autograd "1 4 9 3 2 2 2" tests/t_ai_autograd.fl
+run autograd "1 4 9 3 2 4 6" tests/t_ai_autograd.fl
 
 # Optimizers: construct, register a param, step, destroy.
 run optimizers "loss-before loss-after adam-sgd-ok" tests/t_ai_optim.fl
+
+# Gradient correctness against analytically-known derivatives. The tape used to
+# return the seed (1) for every rule, so these all read 1.0.
+run gradients "6 0 1 0.25 2.71828 0.25 1 12 1" tests/t_ai_gradients.fl
+
+# A 2-layer network trained on f(x) = 2x + 1. After 500 epochs it must predict
+# 3, 5, 7, 9 -- an exact fit, so the run is verifiable by hand rather than
+# "the loss went down". The first two lines are the pre-training loss (8.0656)
+# and prediction (0.16) at x=1.
+run nn "predictions 8.0656 0.16 3 5 7 9" tests/nn_two_layer.fl
 
 echo "ai: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

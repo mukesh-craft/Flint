@@ -1,0 +1,97 @@
+# A trained 2-layer neural network, written entirely in Flint against the
+# project's own tensor / autograd / optimizer runtime.
+#
+#     y = W2 @ relu(W1 @ x + b1) + b2
+#
+# Learns f(x) = 2x + 1 over x in {1, 2, 3, 4}. A 4-unit network can represent
+# this exactly, so the expected result is checkable by hand: after training the
+# predictions should read 3, 5, 7, 9. That makes the run verifiable rather than
+# "the loss went down, probably fine".
+#
+# One sample per step keeps every matmul 2-D and obvious in shape. Only public
+# Flint builtins are used: flt_*, ag_*, adam_*.
+
+fn forward(x: ptr, w1: ptr, b1: ptr, w2: ptr, b2: ptr) -> ptr {
+    h1 = ag_matmul(w1, x)     # (H x H) @ (H x 1) -> (H x 1)
+    h2 = ag_add(h1, b1)       # (H x 1) + (H x 1)
+    h3 = ag_relu(h2)
+    o1 = ag_matmul(w2, h3)    # (1 x H) @ (H x 1) -> (1 x 1)
+    ag_add(o1, b2)            # (1 x 1) + (1 x 1)
+}
+
+fn main() -> i64 {
+    H = 4
+
+    w1 = flt_create_2d(H, H)
+    b1 = flt_create_2d(H, 1)
+    w2 = flt_create_2d(1, H)
+    b2 = flt_create_2d(1, 1)
+    flt_fill(w1, 0.20)
+    flt_fill(b1, 0.0)
+    flt_fill(w2, 0.20)
+    flt_fill(b2, 0.0)
+
+    w1id = ag_track_tensor(w1)
+    b1id = ag_track_tensor(b1)
+    w2id = ag_track_tensor(w2)
+    b2id = ag_track_tensor(b2)
+
+    opt = adam_create(0.05)
+    adam_add_param(opt, w1id, H * H)
+    adam_add_param(opt, b1id, H)
+    adam_add_param(opt, w2id, H)
+    adam_add_param(opt, b2id, 1)
+
+    # ---- prediction and loss for x = 1 before any training
+    x1 = flt_create_2d(H, 1)
+    flt_set(x1, 0, 1.0)
+    t1 = flt_create_2d(1, 1)
+    flt_set(t1, 0, 3.0)
+    p0 = forward(x1, w1, b1, w2, b2)
+    print(mse_loss(p0, t1))
+    print(flt_get(p0, 0))
+
+    # ---- train on x = 1..4 with target 2x + 1
+    mut i: i64 = 1
+    mut epoch: i64 = 0
+    while epoch < 500 {
+        i = 1
+        while i <= 4 {
+            xv = i * 1.0
+            tv = 2.0 * xv + 1.0
+
+            xin = flt_create_2d(H, 1)
+            flt_set(xin, 0, xv)
+            tgt = flt_create_2d(1, 1)
+            flt_set(tgt, 0, tv)
+
+            ag_zero_grad(w1id)
+            ag_zero_grad(b1id)
+            ag_zero_grad(w2id)
+            ag_zero_grad(b2id)
+
+            yp = forward(xin, w1, b1, w2, b2)
+            gl = mse_loss_grad(yp, tgt)
+            ag_seed(gl)
+            ag_backward(ag_grad_id(yp))
+            adam_step(opt)
+
+            i = i + 1
+        }
+        epoch = epoch + 1
+    }
+
+    # ---- evaluate every point
+    flint_println("predictions")
+    i = 1
+    while i <= 4 {
+        xq = flt_create_2d(H, 1)
+        flt_set(xq, 0, i * 1.0)
+        pq = forward(xq, w1, b1, w2, b2)
+        print(flt_get(pq, 0))
+        i = i + 1
+    }
+
+    ag_cleanup()
+    0
+}
