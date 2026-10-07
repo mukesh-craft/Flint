@@ -403,7 +403,7 @@ What exists and how to run it (file lists and line counts verified
 | `tests/` smoke tests | 5 `.fl` (`t_hello` 8, `t_arith` 14, `t_flow` 48, `t_funcs` 15, `t_types` 23) | 108 | `bash tests/run.sh ./flintc` |
 | `tests/` runners | `run.sh` 45, `run_tutorial.sh` 18, `test_registry.sh` 43 | 106 | `bash tests/test_registry.sh` |
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | loop above |
-| `benchmarks/` mirrors | same 6 workloads in C, C++, Python | 275 | `clang -O2` / `g++` / `python3` |
+| `benchmarks/` mirrors | 7 workloads in C, C++, Python | 370 | `clang -O2` / `g++` / `python3` |
 | `tutorial/` lessons | 8 (`01_hello`–`08_wrap`), each with `EXPECT` checks | 198 | `bash tests/run_tutorial.sh ./flintc` |
 | `stage1/` Flint lexer | `flint_lex.fl` + edge corpora, byte-identical to `--dump-tokens` | — | `bash tests/test_lexdiff.sh ./flintc` |
 | `agent-bench/` tasks | 5 tasks (`TASK.md` + `expected.txt` + `reference.fl` each, 136 lines) + `check.sh` 24 | 160 | `bash agent-bench/check.sh ./flintc` |

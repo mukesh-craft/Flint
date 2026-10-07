@@ -4439,6 +4439,7 @@ public:
         add("ag_grad_id",     i64Ty, {tPtr}, false);
         add("ag_grad_at",     f64Ty, {i64Ty, i64Ty}, false);
         add("ag_grad_len",    i64Ty, {i64Ty}, false);
+        add("ag_seed",        voidTy, {tPtr}, false);
         add("ag_zero_grad",   voidTy, {i64Ty}, false);
         add("ag_matmul",      tPtr, {tPtr, tPtr}, false);
         add("ag_add",         tPtr, {tPtr, tPtr}, false);

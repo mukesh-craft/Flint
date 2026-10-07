@@ -49,6 +49,15 @@ typedef struct AGNode {
     int64_t output_id;     // grad_id of output
     void* extra;           // op-specific extra data
     int extra_int;
+    // Copies of the input tensors' DATA, captured when the op was recorded.
+    // Backward needs them: d(ab)/da = grad * b, so without the operand values
+    // the tape can only pass the gradient through, which is what it did -- and
+    // why ag_mul returned the seed instead of the real derivative. `values` is
+    // n_inputs tensors laid out contiguously (each with its own shape), so the
+    // shapes are recorded alongside in value_ndims.
+    double* values;
+    int64_t* value_ndims;
+    int64_t* value_shapes; // n_inputs * value_ndims[i] entries
     struct AGNode* next;   // linked list
 } AGNode;
 
@@ -135,6 +144,7 @@ void* ag_mul(void* a, void* b);
 void* ag_relu(void* a);
 void* ag_sigmoid(void* a);
 void* ag_tanh(void* a);
+void* ag_log(void* a);
 void* ag_exp(void* a);
 void* ag_log(void* a);
 void* ag_neg(void* a);
