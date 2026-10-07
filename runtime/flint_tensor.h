@@ -148,6 +148,10 @@ void* ag_log(void* a);
 void* ag_exp(void* a);
 void* ag_log(void* a);
 void* ag_neg(void* a);
+void* ag_sub(void* a, void* b);
+void* ag_sum(void* a);
+void* ag_mean(void* a);
+void  ag_seed_scalar(int64_t output_id, double v);
 
 // =========================================================================
 // Optimizer API

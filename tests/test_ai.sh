@@ -47,6 +47,29 @@ else
   echo "SKIP blas: flint_blas.o not built"
 fi
 
+# ---- 1b. Gradient check: analytic vs central finite differences ----
+# The standard verification for an autograd tape. Every rule can pass a shape
+# and type check and still be numerically wrong; only a finite-difference
+# comparison catches that. It found a 2x error in mul, a 4x double-count from
+# processing a repeated input twice, and a seed that was silently discarded.
+if [ -f flint_tensor.o ]; then
+  if $CC_BIN -O2 tests/gradcheck.c $INC $LIB flint_tensor.o flint_blas.o \
+       ${FLINT_BLAS_EXTRA:-} -lm -o "$TMPD/gradcheck" 2>/dev/null; then
+    if "$TMPD/gradcheck" > "$TMPD/gradcheck.out" 2>&1; then
+      echo "PASS gradcheck"
+      pass=$((pass+1))
+    else
+      echo "FAIL gradcheck"
+      command grep -E "^FAIL" "$TMPD/gradcheck.out" | head -6
+      fail=$((fail+1))
+    fi
+  else
+    echo "SKIP gradcheck: compile failed"
+  fi
+else
+  echo "SKIP gradcheck: flint_tensor.o not built"
+fi
+
 # ---- 2-4. Flint-level AI tests ----
 # run <name> <expected-space-separated> <source-file>
 run() {
@@ -85,7 +108,14 @@ run gradients "6 0 1 0.25 2.71828 0.25 1 12 1" tests/t_ai_gradients.fl
 # 3, 5, 7, 9 -- an exact fit, so the run is verifiable by hand rather than
 # "the loss went down". The first two lines are the pre-training loss (8.0656)
 # and prediction (0.16) at x=1.
-run nn "predictions 8.0656 0.16 3 5 7 9" tests/nn_two_layer.fl
+run nn "8.0656 0.16 predictions 3 5 7 9" tests/nn_two_layer.fl
+
+# XOR: the standard check that a network is more than a perceptron. No linear
+# model separates it, so solving it exercises the hidden layer, the
+# nonlinearity and the backward pass together. Loss must collapse from 0.148 to
+# ~0 and every output must be on the correct side of 0.5.
+run xor "initial-loss 0.14804 final-loss 1.04316e-25 outputs 2.35756e-13 1 1 3.22242e-13" \
+    tests/xor_mlp.fl
 
 echo "ai: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

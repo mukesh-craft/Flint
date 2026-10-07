@@ -322,9 +322,13 @@ void flint_print(const char* s) {
 
 void flint_println(const char* s) {
     if (!s) return;
-    size_t len = strlen(s);
-    write(STDOUT_FILENO, s, len);
-    write(STDOUT_FILENO, "\n", 1);
+    // Was two raw write(2) calls, which bypasses stdio's buffer entirely.
+    // Every other print goes through printf, so a program mixing the two got
+    // its output reordered -- a test asserting on values could see the labels
+    // first and the numbers afterwards, which looked like a compiler bug.
+    // One stream, one buffer, one order.
+    printf("%s\n", s ? s : "(null)");
+    fflush(stdout);
 }
 
 void* flint_malloc(int64_t size) {

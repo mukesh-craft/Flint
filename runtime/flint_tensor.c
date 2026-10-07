@@ -570,7 +570,16 @@ void ag_backward(int64_t output_id) {
     // element 0. Seed one 1.0 per element, which is the correct seed for a
     // non-scalar output (d/dx sum(x) = 1) and reduces to the old behaviour for
     // a scalar.
-    int64_t seed_n = n->extra_int > 0 ? n->extra_int : 1;
+    // Width of every gradient buffer in this traversal: the OUTPUT size of the
+    // node we differentiate from. extra_int records the op's INPUT extent, so
+    // for a reduction it is the wrong number -- sum/mean emit a 1-element
+    // output. Using it made the seed look mismatched (silently falling back to
+    // ones) and sized every buffer wrong.
+    int64_t seed_n = 1;
+    {
+        FlintTensor* ot = _ag_reg_get(n->output_id);
+        if (ot && ot->size > 0) seed_n = ot->size;
+    }
     double* seed = (double*)malloc((size_t)seed_n * sizeof(double));
     if (g_seed_tensor && g_seed_tensor->size == seed_n) {
         // ag_seed supplied dL/doutput. This is the value that must enter the
@@ -583,6 +592,22 @@ void ag_backward(int64_t output_id) {
     }
     grad_stack[stack_size] = seed;
     stack_size++;
+    // Every gradient buffer in the traversal is n_seed wide; a node's total is
+    // accumulated in a buffer of that size.
+    const int64_t n_seed = seed_n;
+
+    // Accumulated incoming gradient per node, keyed by the node itself.
+    //
+    // A node can be reached by more than one path -- ag_mul(d, d) contributes
+    // two chains to the SAME node -- and each visit used to apply its own chain
+    // independently, so the leaf accumulated the combined effect several times
+    // (gradients came out 4x instead of 2x). Merging into one buffer per node,
+    // and processing the node once its total is known, is both correct and
+    // cheaper. Plain arrays keep this C99; the graph is small and short-lived.
+    AGNode**   acc_nodes = (AGNode**)malloc(sizeof(AGNode*) * 256);
+    double**   acc_grads = (double**)malloc(sizeof(double*) * 256);
+    int        acc_cap = 256;
+    int        acc_n = 0;
 
     while (stack_size > 0) {
         stack_size--;
@@ -590,6 +615,43 @@ void ag_backward(int64_t output_id) {
         double* grad_out = grad_stack[stack_size];
 
         if (!node) { free(grad_out); continue; }
+
+        // Merge this arrival into the node's running total. A node already
+        // expanded earlier in this pass must NOT be expanded again, so if it
+        // has been seen the accumulated buffer is simply updated and the node
+        // is not re-queued.
+        {
+            int slot = -1;
+            for (int q = 0; q < acc_n; q++) if (acc_nodes[q] == node) { slot = q; break; }
+            if (slot >= 0) {
+                int64_t w = n_seed;
+                {
+                    FlintTensor* ot = _ag_reg_get(node->output_id);
+                    if (ot && ot->size > 0) w = ot->size;
+                }
+                for (int64_t i = 0; i < w; i++) acc_grads[slot][i] += grad_out[i];
+                free(grad_out);
+                continue;   // already accounted for
+            }
+            if (acc_n == acc_cap) {
+                int ncap = acc_cap * 2;
+                acc_nodes = (AGNode**)realloc(acc_nodes, sizeof(AGNode*) * ncap);
+                acc_grads = (double**)realloc(acc_grads, sizeof(double*) * ncap);
+                acc_cap = ncap;
+            }
+            int64_t w = n_seed;
+            {
+                FlintTensor* ot = _ag_reg_get(node->output_id);
+                if (ot && ot->size > 0) w = ot->size;
+            }
+            double* keep = (double*)malloc((size_t)w * sizeof(double));
+            for (int64_t i = 0; i < w; i++) keep[i] = grad_out[i];
+            acc_nodes[acc_n] = node;
+            acc_grads[acc_n] = keep;
+            acc_n++;
+            free(grad_out);
+            grad_out = keep;
+        }
 
         // Find output tensor by grad_id (crude: iterate all tensors)
         // For now, compute gradients using op-specific math
@@ -678,6 +740,40 @@ void ag_backward(int64_t output_id) {
                     gi[i] = (x != 0.0) ? grad_out[i] / x : 0.0;
                 }
                 grad_inputs = gi;
+                break;
+            }
+            case AG_SUB: {
+                // d(a-b)/da = 1, d(a-b)/db = -1
+                n_grad = node->extra_int > 0 ? node->extra_int : 1;
+                double* gi = (double*)malloc((size_t)n_grad * sizeof(double));
+                grad_inputs_owned = 1;
+                memcpy(gi, grad_out, (size_t)n_grad * sizeof(double));
+                grad_inputs = gi;
+                break;
+            }
+            case AG_SUM: {
+                // d(sum x)/dx_i = 1: every element gets the incoming gradient
+                // unchanged, broadcast from the scalar output. n (the input
+                // count) is what extra_int records; the incoming gradient is
+                // one element wide.
+                int64_t n = node->extra_int > 0 ? node->extra_int : 1;
+                grad_inputs = (double*)malloc((size_t)n * sizeof(double));
+                grad_inputs_owned = 1;
+                for (int64_t i = 0; i < n; i++) grad_inputs[i] = grad_out[0];
+                n_grad = n;
+                // The chain handed downstream is n wide, which may exceed the
+                // traversal width; the accumulator is sized to n_seed.
+                break;
+            }
+            case AG_MEAN: {
+                // d(mean x)/dx_i = 1/n, with n carried in extra.
+                int64_t n = node->extra_int > 0 ? node->extra_int : 1;
+                double scale = 1.0;
+                if (node->extra) scale = ((double*)node->extra)[0];
+                grad_inputs = (double*)malloc((size_t)n * sizeof(double));
+                grad_inputs_owned = 1;
+                for (int64_t i = 0; i < n; i++) grad_inputs[i] = grad_out[0] * scale;
+                n_grad = n;
                 break;
             }
             case AG_ADD: {
@@ -779,6 +875,15 @@ void ag_backward(int64_t output_id) {
             int64_t nk = n_grad;
             int gk_owned = 0;
             if (k == 1 && node->n_inputs == 2) {
+                if (node->op == AG_SUB) {
+                    // d(a-b)/db = -1, so the second chain negates.
+                    gk = (double*)malloc((size_t)n_grad * sizeof(double));
+                    if (!gk) { gk = grad_inputs; }
+                    else {
+                        gk_owned = 1;
+                        for (int64_t i = 0; i < n_grad; i++) gk[i] = -grad_inputs[i];
+                    }
+                }
                 if (node->op == AG_MUL) {
                     int64_t asz = 0, and_ = 0; const int64_t* ash = NULL;
                     const double* av = _ag_operand(node, 0, &asz, &and_, &ash);
@@ -849,13 +954,25 @@ void ag_backward(int64_t output_id) {
                 if (gk_owned) free(gk);
                 continue;
             }
-            // Already scheduled by an earlier k with the same id: adding it
-            // again would double-count its gradient.
-            int dup = 0;
+            // A repeated input (ag_mul(d, d)) must contribute BOTH chains, but
+            // it must be traversed ONCE. Pushing the node twice made it pop
+            // twice, so _acc_grad ran twice on the same leaf and the gradient
+            // came out at 4x instead of 2x (caught by the finite-difference
+            // check). When this input was already scheduled, merge the chain
+            // into that pending buffer instead of adding a second work item.
+            int dup = -1;
             for (int j = 0; j < stack_size; j++) {
-                if (stack[j] == input_node) { dup = 1; break; }
+                if (stack[j] == input_node) { dup = j; break; }
             }
-            if (dup) continue;
+            if (dup >= 0) {
+                // The pending entry has the length its own chain needs; merge
+                // element-wise over the shorter length, which is what the
+                // same-input case always is (both chains have equal length).
+                double* pend = grad_stack[dup];
+                for (int64_t i = 0; i < n_grad && i < nk; i++) pend[i] += gk[i];
+                if (gk_owned) free(gk);
+                continue;
+            }
             if (stack_size == stack_cap && stack_cap < AG_STACK_MAX) {
                 int ncap = stack_cap * 2;
                 AGNode** ns = (AGNode**)realloc(stack, (size_t)ncap * sizeof(AGNode*));
@@ -968,6 +1085,76 @@ void* ag_add(void* a, void* b) {
         ag_record_values(AG_ADD, tout->grad_id, ids, 2, NULL, (int)tout->size, t1);
     }
     return out;
+}
+
+// d(a - b)/da = 1, d(a - b)/db = -1
+void* ag_sub(void* a, void* b) {
+    FlintTensor* ta = _as_tensor(a);
+    FlintTensor* tb = _as_tensor(b);
+    void* out = flt_sub_tt(a, b);
+    if (ta->grad_id >= 0 || tb->grad_id >= 0) {
+        int64_t ids[2] = {ta->grad_id, tb->grad_id};
+        FlintTensor* tout = _as_tensor(out);
+        tout->grad_id = ag_next_id++;
+        _ag_reg_set(tout->grad_id, tout);
+        void* t[2] = { ta, tb };
+        ag_record_values(AG_SUB, tout->grad_id, ids, 2, NULL, (int)tout->size, t);
+    }
+    return out;
+}
+
+// Sum over every element, producing a 1-element tensor so the result can stay
+// on the tape. d(sum)/dx_i = 1 for all i, so backward is a broadcast of the
+// incoming gradient -- the reduction the tape could not previously express.
+void* ag_sum(void* a) {
+    FlintTensor* ta = _as_tensor(a);
+    int64_t sz = ta->size;
+    void* out = flt_create_1d(1);
+    FlintTensor* to = _as_tensor(out);
+    double total = 0.0;
+    for (int64_t i = 0; i < sz; i++) total += ta->data[i];
+    to->data[0] = total;
+    if (ta->grad_id >= 0) {
+        to->grad_id = ag_next_id++;
+        _ag_reg_set(to->grad_id, to);
+        int64_t ids[1] = { ta->grad_id };
+        void* t[1] = { ta };
+        ag_record_values(AG_SUM, to->grad_id, ids, 1, NULL, (int)sz, t);
+    }
+    return out;
+}
+
+// Mean over every element. Same chain as sum, scaled by 1/n -- the scale is
+// carried in extra so backward applies it without needing a divide node.
+void* ag_mean(void* a) {
+    FlintTensor* ta = _as_tensor(a);
+    int64_t sz = ta->size > 0 ? ta->size : 1;
+    void* out = flt_create_1d(1);
+    FlintTensor* to = _as_tensor(out);
+    double total = 0.0;
+    for (int64_t i = 0; i < ta->size; i++) total += ta->data[i];
+    to->data[0] = total / (double)sz;
+    if (ta->grad_id >= 0) {
+        to->grad_id = ag_next_id++;
+        _ag_reg_set(to->grad_id, to);
+        int64_t ids[1] = { ta->grad_id };
+        double* extra = (double*)malloc(sizeof(double));
+        extra[0] = 1.0 / (double)sz;
+        void* t[1] = { ta };
+        ag_record_values(AG_MEAN, to->grad_id, ids, 1, extra, (int)sz, t);
+    }
+    return out;
+}
+
+// Seed the traversal with a uniform scalar. The common case is seeding a scalar
+// loss with 1.0; ag_seed takes a whole tensor, which is awkward there.
+void ag_seed_scalar(int64_t output_id, double v) {
+    void* t = flt_create_1d(1);
+    flt_set(t, 0, v);
+    _ag_reg_set(output_id, _as_tensor(t));
+    g_seed_tensor = _as_tensor(t);
+    // The seed tensor must survive until backward consumes it.
+    _ag_reg_set(output_id, _as_tensor(t));
 }
 
 void* ag_mul(void* a, void* b) {
