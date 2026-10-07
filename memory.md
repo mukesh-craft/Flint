@@ -2473,3 +2473,45 @@ free RAM of 3.6 GB. A native libtorch build is not viable here. If libtorch is
 ever wanted, the route is the pure-C AOT shim host-side only
 (`torch/csrc/inductor/aoti_torch/c/shim.h`), never vendored, never linked into
 a Termux binary.
+
+---
+
+## 2026-10-07 — XOR MLP, gradient checker, print-ordering bug
+
+**Added `tests/gradcheck.c` — analytic gradients vs central finite
+differences.** This is the standard verification (DeepLearning.AI's gradient
+checking, Cranmer's autodiff tutorial, demofox's dual-numbers post) and it
+immediately found three bugs that passed every shape and type check:
+
+1. **Repeated inputs were 4x.** `ag_mul(d,d)` records d twice; the traversal
+   popped d's node twice, so the leaf accumulated twice. Rewritten around a
+   per-node accumulator (merge arrivals into one buffer, expand a node once).
+2. **The seed was silently discarded for reductions.** Buffers were sized from
+   the op's INPUT extent, but `ag_sum` emits a 1-element OUTPUT — so the seed
+   never matched and backward fell back to ones, training a fabricated
+   objective. Size from the node's output.
+3. The second chain of a repeated input was skipped, not merged (2x off).
+
+Added `ag_sub`, `ag_sum`, `ag_mean`, `ag_seed_scalar` with real rules.
+
+**XOR solved** (`tests/xor_mlp.fl`, in the ai gate):
+    initial-loss 0.14804 -> final-loss 1.04e-25
+    outputs 2.4e-13  1  1  3.2e-13
+XOR is the right test: no linear model separates it, so it exercises the hidden
+layer, the nonlinearity and the backward pass together.
+
+**`flint_println` used two raw `write(2)` calls** while every other print went
+through `printf` — two independent buffers, so labels printed AFTER values.
+This looked exactly like a compiler bug and cost real debugging time (I chased
+a phantom "compiler reorders statements"). Fixed to one stream. **If output
+ordering looks wrong in a test, suspect two output paths before the compiler.**
+
+**Performance — measure interleaved on this device.** Timings swing ~2x with
+load (only ~600 MB free RAM here); an early 110 ms reading was noise, not a
+regression. Interleaved: Flint 45.0 ms vs C+OpenBLAS 44.4 ms at N=500 =
+**1.3% overhead**. Isolated: raw dgemm 44.5, flt_matmul 45.1, create+fill 1.65,
+destroy 1.34. The tensor layer is nearly free; the multiply IS BLAS.
+
+**Method note:** the gradient checker paid for itself immediately and is now a
+gate. A gradient that is well-typed and correctly-shaped can still be wrong by
+a constant factor; only a numerical comparison says so.
