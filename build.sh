@@ -143,6 +143,15 @@ echo "  blas:         ./flint_blas.o"
 echo "  flint_ai:     ./flint_ai.o"
 echo "  flint_ai_opt: ./flint_ai_opt.o"
 
+echo "=== Building Flint math/format/collections (parallel) ==="
+( needs_rebuild flint_math.o runtime/flint_math.c && $CC -c $CFLAGS_RT runtime/flint_math.c -o flint_math.o ) &
+( needs_rebuild flint_fmt.o runtime/flint_fmt.c && $CC -c $CFLAGS_RT runtime/flint_fmt.c -o flint_fmt.o ) &
+( needs_rebuild flint_coll.o runtime/flint_coll.c && $CC -c $CFLAGS_RT runtime/flint_coll.c -o flint_coll.o ) &
+wait
+echo "  math:         ./flint_math.o"
+echo "  fmt:          ./flint_fmt.o"
+echo "  collections:  ./flint_coll.o"
+
 echo "=== Building Flint Standard Library (parallel) ==="
 ( needs_rebuild flint_serial.o runtime/flint_serial.c && $CC -c $CFLAGS_RT runtime/flint_serial.c -o flint_serial.o ) &
 ( needs_rebuild flint_crypto.o runtime/flint_crypto.c && $CC -c $CFLAGS_RT runtime/flint_crypto.c -o flint_crypto.o ) &
