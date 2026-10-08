@@ -147,10 +147,12 @@ echo "=== Building Flint math/format/collections (parallel) ==="
 ( needs_rebuild flint_math.o runtime/flint_math.c && $CC -c $CFLAGS_RT runtime/flint_math.c -o flint_math.o ) &
 ( needs_rebuild flint_fmt.o runtime/flint_fmt.c && $CC -c $CFLAGS_RT runtime/flint_fmt.c -o flint_fmt.o ) &
 ( needs_rebuild flint_coll.o runtime/flint_coll.c && $CC -c $CFLAGS_RT runtime/flint_coll.c -o flint_coll.o ) &
+( needs_rebuild flint_nn.o runtime/flint_nn.c && $CC -c $CFLAGS_RT runtime/flint_nn.c -o flint_nn.o ) &
 wait
 echo "  math:         ./flint_math.o"
 echo "  fmt:          ./flint_fmt.o"
 echo "  collections:  ./flint_coll.o"
+echo "  nn layers:    ./flint_nn.o"
 
 echo "=== Building Flint Standard Library (parallel) ==="
 ( needs_rebuild flint_serial.o runtime/flint_serial.c && $CC -c $CFLAGS_RT runtime/flint_serial.c -o flint_serial.o ) &

@@ -266,7 +266,7 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     struct stat st;
     const char* stdLibs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o",
                              "flint_ai_opt.o", "flint_math.o", "flint_fmt.o",
-                             "flint_coll.o",
+                             "flint_coll.o", "flint_nn.o",
                              "flint_serial.o", "flint_crypto.o", "flint_net.o",
                              "flint_aegis.o", "flint_chan.o",
                              "ffi_helper.o"};
@@ -402,7 +402,7 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
     };
     if (stat("runtime.o", &st) == 0 && !loadOne("runtime.o", true)) return false;
     const char* aiObjs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o", "flint_ai_opt.o"};
-    const char* libObjs[] = {"flint_math.o", "flint_fmt.o", "flint_coll.o"};
+    const char* libObjs[] = {"flint_math.o", "flint_fmt.o", "flint_coll.o", "flint_nn.o"};
     for (auto* objName : libObjs)
         if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
     for (auto* objName : aiObjs)
@@ -4395,6 +4395,8 @@ public:
         add("flt_create_1d", tPtr, {i64Ty}, false);
         add("flt_create_2d", tPtr, {i64Ty, i64Ty}, false);
         add("flt_create_3d", tPtr, {i64Ty, i64Ty, i64Ty}, false);
+        add("flt_create_4d", tPtr, {i64Ty, i64Ty, i64Ty, i64Ty}, false);
+        add("flt_create_5d", tPtr, {i64Ty, i64Ty, i64Ty, i64Ty, i64Ty}, false);
         add("flt_destroy",  voidTy, {tPtr}, false);
         add("flt_clone",    tPtr, {tPtr}, false);
         add("flt_zeros_like", tPtr, {tPtr}, false);
@@ -4608,6 +4610,42 @@ public:
         add("flint_deque_empty",     i64Ty, {coll}, false);
         add("flint_deque_clear",     voidTy, {coll}, false);
         add("flint_deque_values",    i64Ty, {coll, llvm::PointerType::get(i64Ty, 0), i64Ty}, false);
+
+        // ──────────────────────────────────────────────────────
+        // NN LAYERS (flint_nn.o) -- convolution, pooling, normalisation,
+        // softmax/dropout, and parameter initialisation. The tensor library
+        // had primitives but no layers, so "convolution" could not be
+        // expressed at all.
+        // ──────────────────────────────────────────────────────
+        add("flt_conv2d",        tPtr, {tPtr, tPtr, tPtr, i64Ty, i64Ty}, false);
+        add("flt_maxpool2d",     tPtr, {tPtr, i64Ty, i64Ty}, false);
+        add("flt_avgpool2d",     tPtr, {tPtr, i64Ty, i64Ty}, false);
+        add("flt_global_avgpool", tPtr, {tPtr}, false);
+        add("flt_batchnorm",     tPtr, {tPtr, tPtr, tPtr, dbl}, false);
+        add("flt_layer_norm",    tPtr, {tPtr, tPtr, tPtr, dbl}, false);
+        add("flt_rms_norm",      tPtr, {tPtr, tPtr, dbl}, false);
+        add("flt_softmax",       tPtr, {tPtr}, false);
+        add("flt_dropout",       tPtr, {tPtr, dbl}, false);
+        add("flt_dropout_inplace", tPtr, {tPtr, dbl}, false);
+        add("flt_l2_reg",        dbl,  {tPtr}, false);
+        add("flt_flatten",       tPtr, {tPtr}, false);
+        add("flt_xavier_uniform", tPtr, {tPtr, dbl}, false);
+        add("flt_he_uniform",    tPtr, {tPtr, dbl}, false);
+        add("flt_data",          llvm::PointerType::get(dbl, 0), {tPtr}, false);
+        add("flt_set_at",       voidTy, {tPtr, i64Ty, dbl}, false);
+        add("flt_get_at",       dbl,    {tPtr, i64Ty}, false);
+
+        // ──────────────────────────────────────────────────────
+        // ARENA / CHECKPOINTING (flint_ai.o) -- previously implemented but
+        // never registered, so the whole layer was unreachable from Flint.
+        // fa_* takes (FArena*, FATensor*), so the arena is an explicit first
+        // argument; fa_default_arena gives one to pass.
+        // ──────────────────────────────────────────────────────
+        add("fa_default_arena",  tPtr, {}, false);
+        add("farena_used",       i64Ty, {tPtr}, false);
+        add("farena_reset",      voidTy, {tPtr}, false);
+        add("farena_init",       tPtr, {}, false);
+        add("fcheckpoint_init",  voidTy, {}, false);
 
         // BLAS backend introspection -- lets Flint report which matmul path is
         // live, which matters because it differs per build.

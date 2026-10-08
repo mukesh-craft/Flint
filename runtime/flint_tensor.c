@@ -69,6 +69,20 @@ void* flt_create_3d(int64_t n0, int64_t n1, int64_t n2) {
     return flt_create(3, shape);
 }
 
+// 4-D (N, C, H, W) is the layout convolutions and pooling work in, so it needs
+// a constructor like the others -- a Flint caller cannot pass the int64_t*
+// that flt_create takes.
+void* flt_create_4d(int64_t n0, int64_t n1, int64_t n2, int64_t n3) {
+    int64_t shape[4] = { n0, n1, n2, n3 };
+    return flt_create(4, shape);
+}
+
+// 5-D (N, C, D, H, W) for 3-D convolutions and volumes.
+void* flt_create_5d(int64_t n0, int64_t n1, int64_t n2, int64_t n3, int64_t n4) {
+    int64_t shape[5] = { n0, n1, n2, n3, n4 };
+    return flt_create(5, shape);
+}
+
 // Fill from a caller-supplied array, so a tensor can be seeded without N
 // separate flt_set calls.
 void flt_set_all(void* t, const double* vals, int64_t n) {
@@ -115,6 +129,12 @@ int64_t flt_size(void* t) { return _as_tensor(t)->size; }
 int64_t flt_ndim(void* t) { return _as_tensor(t)->ndim; }
 int64_t flt_shape(void* t, int64_t dim) { return _as_tensor(t)->shape[dim]; }
 double flt_get(void* t, int64_t idx) { return _as_tensor(t)->data[idx]; }
+
+// The backing buffer. Layers need it to write into a tensor's storage
+// directly -- an element-at-a-time flt_set loop is quadratic in overhead for
+// anything the size of a convolution weight. Valid while the tensor lives;
+// the layout is flat and row-major regardless of ndim.
+double* flt_data(void* t) { return _as_tensor(t)->data; }
 void flt_set(void* t, int64_t idx, double v) { _as_tensor(t)->data[idx] = v; }
 void flt_fill(void* t, double v) {
     FlintTensor* t_ = _as_tensor(t);

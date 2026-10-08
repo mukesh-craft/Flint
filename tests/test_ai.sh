@@ -132,5 +132,11 @@ run stdlib \
 
 run format "n=42 x=3.50 sum=99 name=flint n=7" tests/t_format.fl
 
+# The NN layers, against hand-computed values: identity-kernel conv2d over
+# 1..9, 2x2 avg/max pooling, global pooling, softmax, layer norm, flatten and
+# Glorot init. Convolution could not be expressed at all before these existed.
+run nn_layers "2 2 6 8 12 14 3.5 5.5 11.5 13.5 6 8 14 16 8.5 0.333333 -1.34164 9 1 1 1" \
+    tests/t_nn_layers.fl
+
 echo "stdlib-ai: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
