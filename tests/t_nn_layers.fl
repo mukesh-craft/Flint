@@ -1,0 +1,107 @@
+# The neural-network layers, verified against hand-computed values.
+#
+# Convolution, pooling, normalisation, softmax and parameter init were all
+# absent: the tensor library had primitives but no layers, so "convolution"
+# could not be expressed at all.
+
+fn main() -> i64 {
+    # ---- conv2d: identity kernel over 1..9, stride 1, no padding.
+    # out[o][p] = I[o][p] + I[o+1][p+1], so 6 8 / 12 14.
+    i = flt_create_4d(1, 1, 3, 3)
+    mut ki: i64 = 0
+    while ki < 9 {
+        flt_set_at(i, ki, (ki + 1) * 1.0)
+        ki = ki + 1
+    }
+
+    w = flt_create_4d(1, 1, 2, 2)
+    flt_set_at(w, 0, 1.0)
+    flt_set_at(w, 1, 0.0)
+    flt_set_at(w, 2, 0.0)
+    flt_set_at(w, 3, 1.0)
+
+    bias = flt_create_1d(1)
+    flt_set_at(bias, 0, 0.0)
+    c = flt_conv2d(i, w, bias, 1, 0)
+    print(flt_shape(c, 2))
+    print(flt_shape(c, 3))
+    print(flt_get_at(c, 0))
+    print(flt_get_at(c, 1))
+    print(flt_get_at(c, 2))
+    print(flt_get_at(c, 3))
+    # want: 2 2 / 6 8 12 14
+
+    # ---- pooling over 1..16 in a 4x4
+    a = flt_create_4d(1, 1, 4, 4)
+    mut ka: i64 = 0
+    while ka < 16 {
+        flt_set_at(a, ka, (ka + 1) * 1.0)
+        ka = ka + 1
+    }
+
+    ap = flt_avgpool2d(a, 2, 2)
+    print(flt_get_at(ap, 0))
+    print(flt_get_at(ap, 1))
+    print(flt_get_at(ap, 2))
+    print(flt_get_at(ap, 3))
+    # want: 3.5 5.5 11.5 13.5
+
+    mp = flt_maxpool2d(a, 2, 2)
+    print(flt_get_at(mp, 0))
+    print(flt_get_at(mp, 1))
+    print(flt_get_at(mp, 2))
+    print(flt_get_at(mp, 3))
+    # want: 6 8 14 16
+
+    # ---- global average pool: mean of 1..16 is 8.5
+    g = flt_global_avgpool(a)
+    print(flt_get(g, 0))
+    # want: 8.5
+
+    # ---- softmax of a uniform row: 1/3 each
+    s = flt_create_1d(3)
+    flt_set_at(s, 0, 1.0)
+    flt_set_at(s, 1, 1.0)
+    flt_set_at(s, 2, 1.0)
+    sm = flt_softmax(s)
+    print(flt_get_at(sm, 0))
+    # want: 0.333333
+
+    # ---- layer norm subtracts the mean, so the first value is negative
+    # (mean of 1..4 is 2.5, normalised 1 -> -1.3416)
+    l = flt_create_2d(1, 4)
+    mut kl: i64 = 0
+    while kl < 4 {
+        flt_set_at(l, kl, (kl + 1) * 1.0)
+        kl = kl + 1
+    }
+    one = flt_create_1d(4)
+    zero = flt_create_1d(4)
+    mut kg: i64 = 0
+    while kg < 4 {
+        flt_set_at(one, kg, 1.0)
+        flt_set_at(zero, kg, 0.0)
+        kg = kg + 1
+    }
+    ln = flt_layer_norm(l, one, zero, 0.000000000001)
+    print(flt_get_at(ln, 0))
+    # want: -1.34164
+
+    # ---- flatten keeps the element count
+    f = flt_flatten(i)
+    print(flt_size(f))
+    # want: 9
+
+    # ---- xavier init stays inside the Glorot bound
+    x = flt_create_2d(4, 4)
+    flint_srand(7)
+    flt_xavier_uniform(x, 1.0)
+    bound = flint_sqrt(6.0 / 8.0)
+    v = flt_get_at(x, 0)
+    print(flint_is_finite(v))
+    print(v <= bound)
+    print(v >= -bound)
+    # want: 1 1 1
+
+    0
+}

@@ -71,6 +71,8 @@ void*  flt_create(int64_t ndim, int64_t* shape);
 void*  flt_create_1d(int64_t n0);
 void*  flt_create_2d(int64_t n0, int64_t n1);
 void*  flt_create_3d(int64_t n0, int64_t n1, int64_t n2);
+void*  flt_create_4d(int64_t n0, int64_t n1, int64_t n2, int64_t n3);
+void*  flt_create_5d(int64_t n0, int64_t n1, int64_t n2, int64_t n3, int64_t n4);
 void   flt_set_all(void* t, const double* vals, int64_t n);
 void   flt_destroy(void* t);
 void*  flt_clone(void* t);
@@ -79,6 +81,9 @@ int64_t flt_size(void* t);
 int64_t flt_ndim(void* t);
 int64_t flt_shape(void* t, int64_t dim);
 double flt_get(void* t, int64_t idx);
+// Backing buffer, row-major and flat regardless of ndim. Valid while the
+// tensor lives. Layers write through this instead of looping flt_set.
+double* flt_data(void* t);
 void   flt_set(void* t, int64_t idx, double v);
 void   flt_fill(void* t, double v);
 void   flt_copy(void* dst, void* src);
