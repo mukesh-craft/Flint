@@ -2515,3 +2515,48 @@ destroy 1.34. The tensor layer is nearly free; the multiply IS BLAS.
 **Method note:** the gradient checker paid for itself immediately and is now a
 gate. A gradient that is well-typed and correctly-shaped can still be wrong by
 a constant factor; only a numerical comparison says so.
+
+---
+
+## 2026-10-08 — Missing standard library: maths, stats, formatting, collections, NN layers
+
+Compared the library against Python's `math` + `statistics` + `collections`
+surfaces and built what was absent. Five new runtime modules, each verified
+against Python's documented values.
+
+| module | lines | adds |
+|---|---|---|
+| `flint_math.c` | 430 | factorial/gcd/lcm/isqrt/comb/perm/fib, radians/degrees, cbrt/expm1/log1p/log2/hypot/copysign, fmod/trunc/signum/ldexp/frexp/ulp/nextafter, isfinite/isinf/isnan/isclose, erf/erfc/gamma/lgamma, pi/e/tau/inf/nan, and the whole statistics block |
+| `flint_fmt.c` | 250 | printf-style formatting — Flint had NO format function |
+| `flint_coll.c` | 290 | set, binary min-heap, deque — the three missing collections |
+| `flint_nn.c` | 280 | conv2d, pooling, batchnorm/layer_norm/rms_norm, softmax, dropout, init |
+
+Verified against Python: `variance([1,2,3,4])=1.666667`, `stdev=1.290994`,
+`correlation=1.0`, `erf(1)=0.8427008`, `gamma(5)=24`, `lgamma(5)=3.1781`,
+`fact(10)=3628800`, `isqrt(50)=7`, `comb(5,2)=10`, `fib(30)=832040`.
+
+**flint_format varargs — handled explicitly, not by accident.** An LLVM varargs
+function needs its FunctionType built with `isVarArg=true` AND every call site
+lowered to the platform vararg ABI. The compiler did neither, so registering
+`flint_format` as a fixed `(char*)` function would have read every argument
+after the format string as **garbage, silently**. Instead the compiler exposes
+fixed-arity shims (`format1..4` / `formatd1..4` / `formats1..3`) whose
+signatures the verifier can check, with the argument type in the name.
+
+**Two real bugs found by testing the layers:**
+1. `layer_norm`/`rms_norm` normalised the wrong axis: `plane = total/C` is 1
+   for a (1,C) tensor, so it normalised one value at a time and every output
+   was its own mean — **exactly 0**. Must be `C`.
+2. `flint_nn.c` redeclared `flt_fill` and `flt_reshape`, which already existed
+   in `flint_tensor.h` with different signatures.
+
+**Flint-specific trap worth remembering:** `ptr[i]` is STRING indexing in
+Flint (i8 load guarded by `flint_str_length`). So a tensor's data pointer
+cannot be indexed from Flint at all — that is why `flt_set_at`/`flt_get_at`
+were needed, not just `flt_data`. Also: one loop variable reused across
+several `while` loops silently corrupts values, because the second
+`k = 0` reassigns an already-immutable binding. Give each loop its own
+`mut` variable.
+
+Gates: v1 12/12, stdlib-ai 12/12, parse-gate 102, ladder 21/21, tutorial 8,
+sanitizers 10, docs-check 0, selfhost byte-identical.
