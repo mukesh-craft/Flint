@@ -1,0 +1,12 @@
+fn main() -> i64 {
+    r = flint_formatd2("n=%d x=%.2f", 3.5, 42)
+    print(r)
+    flint_str_free(r)
+    r2 = flint_format1("sum=%d", 99)
+    print(r2)
+    flint_str_free(r2)
+    r3 = flint_formats2("name=%s n=%d", "flint", 7)
+    print(r3)
+    flint_str_free(r3)
+    0
+}

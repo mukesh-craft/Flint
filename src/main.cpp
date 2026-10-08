@@ -265,7 +265,8 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     // Include standard library .o files if they exist
     struct stat st;
     const char* stdLibs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o",
-                             "flint_ai_opt.o",
+                             "flint_ai_opt.o", "flint_math.o", "flint_fmt.o",
+                             "flint_coll.o",
                              "flint_serial.o", "flint_crypto.o", "flint_net.o",
                              "flint_aegis.o", "flint_chan.o",
                              "ffi_helper.o"};
@@ -401,6 +402,9 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
     };
     if (stat("runtime.o", &st) == 0 && !loadOne("runtime.o", true)) return false;
     const char* aiObjs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o", "flint_ai_opt.o"};
+    const char* libObjs[] = {"flint_math.o", "flint_fmt.o", "flint_coll.o"};
+    for (auto* objName : libObjs)
+        if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
     for (auto* objName : aiObjs)
         if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
     const char* stdObjs[] = {"flint_serial.o", "flint_crypto.o", "flint_net.o",
@@ -4464,6 +4468,146 @@ public:
         // Loss
         add("mse_loss",      f64Ty, {tPtr, tPtr}, false);
         add("mse_loss_grad", tPtr, {tPtr, tPtr}, false);
+
+        // ──────────────────────────────────────────────────────
+        // MATH (flint_math.o) — integer maths, angle conversion, special
+        // functions, fp classification, and descriptive statistics.
+        // ──────────────────────────────────────────────────────
+        auto dbl = llvm::Type::getDoubleTy(*ctx);
+        add("flint_pi",   dbl, {}, false);
+        add("flint_e",    dbl, {}, false);
+        add("flint_tau",  dbl, {}, false);
+        add("flint_inf",  dbl, {}, false);
+        add("flint_nan",  dbl, {}, false);
+        add("flint_factorial", i64Ty, {i64Ty}, false);
+        add("flint_gcd_i64", i64Ty, {i64Ty, i64Ty}, false);
+        add("flint_lcm_i64", i64Ty, {i64Ty, i64Ty}, false);
+        add("flint_isqrt",    i64Ty, {i64Ty}, false);
+        add("flint_comb",     i64Ty, {i64Ty, i64Ty}, false);
+        add("flint_perm",     i64Ty, {i64Ty, i64Ty}, false);
+        add("flint_fib",      i64Ty, {i64Ty}, false);
+        add("flint_radians", dbl, {dbl}, false);
+        add("flint_degrees", dbl, {dbl}, false);
+        add("flint_cbrt",   dbl, {dbl}, false);
+        add("flint_expm1",  dbl, {dbl}, false);
+        add("flint_log1p",  dbl, {dbl}, false);
+        add("flint_log2",   dbl, {dbl}, false);
+        add("flint_hypot2", dbl, {dbl, dbl}, false);
+        add("flint_hypot3", dbl, {dbl, dbl, dbl}, false);
+        add("flint_copysign", dbl, {dbl, dbl}, false);
+        add("flint_fmod",   dbl, {dbl, dbl}, false);
+        add("flint_trunc",  dbl, {dbl}, false);
+        add("flint_signum", dbl, {dbl}, false);
+        add("flint_sign_i64", i64Ty, {i64Ty}, false);
+        add("flint_ldexp",  dbl, {dbl, i64Ty}, false);
+        add("flint_frexp",  dbl, {dbl, llvm::PointerType::get(dbl, 0)}, false);
+        add("flint_is_finite", i64Ty, {dbl}, false);
+        add("flint_is_inf",    i64Ty, {dbl}, false);
+        add("flint_is_nan",    i64Ty, {dbl}, false);
+        add("flint_is_close",  i64Ty, {dbl, dbl, dbl, dbl}, false);
+        add("flint_ulp",       dbl, {dbl}, false);
+        add("flint_nextafter", dbl, {dbl, dbl}, false);
+        add("flint_erf",    dbl, {dbl}, false);
+        add("flint_erfc",   dbl, {dbl}, false);
+        add("flint_gamma",  dbl, {dbl}, false);
+        add("flint_lgamma", dbl, {dbl}, false);
+
+        // Statistics over a vec handle
+        auto coll = llvm::PointerType::get(*ctx, 0);
+        add("flint_stat_mean",  i64Ty, {coll}, false);
+        add("flint_stat_count", i64Ty, {coll}, false);
+        add("flint_stat_min",   i64Ty, {coll}, false);
+        add("flint_stat_max",   i64Ty, {coll}, false);
+        add("flint_stat_median",   i64Ty, {coll}, false);
+        add("flint_stat_median_f", dbl,  {coll}, false);
+        add("flint_stat_mode",     i64Ty, {coll}, false);
+        add("flint_stat_variance",  dbl,  {coll}, false);
+        add("flint_stat_pvariance", dbl,  {coll}, false);
+        add("flint_stat_stdev",     dbl,  {coll}, false);
+        add("flint_stat_pstdev",    dbl,  {coll}, false);
+        add("flint_stat_geometric_mean", dbl, {coll}, false);
+        add("flint_stat_harmonic_mean",  dbl, {coll}, false);
+        add("flint_stat_percentile", dbl, {coll, dbl}, false);
+        add("flint_stat_skewness",  dbl, {coll}, false);
+        add("flint_stat_kurtosis",  dbl, {coll}, false);
+        add("flint_stat_covariance", dbl, {coll, coll}, false);
+        add("flint_stat_correlation", dbl, {coll, coll}, false);
+        add("flint_stat_linear_regression", i64Ty,
+            {coll, coll, llvm::PointerType::get(dbl, 0), llvm::PointerType::get(dbl, 0)}, false);
+
+        // Streaming accumulator
+        add("flint_accum_new",     coll, {}, false);
+        add("flint_accum_push",    voidTy, {coll, dbl}, false);
+        add("flint_accum_mean",    dbl,  {coll}, false);
+        add("flint_accum_variance", dbl, {coll}, false);
+        add("flint_accum_stdev",   dbl,  {coll}, false);
+        add("flint_accum_min",     dbl,  {coll}, false);
+        add("flint_accum_max",     dbl,  {coll}, false);
+        add("flint_accum_count",   i64Ty, {coll}, false);
+        add("flint_accum_free",    voidTy, {coll}, false);
+
+        // ──────────────────────────────────────────────────────
+        // STRING FORMATTING (flint_fmt.o) — printf-style. The single most
+        // used missing piece: without it every program concatenated with
+        // flint_i64_to_string.
+        //
+        // flint_format is variadic, so it cannot go through add(): an LLVM
+        // varargs function needs its FunctionType built with isVarArg=true and
+        // every call site lowered with the platform's vararg ABI (a register
+        // save area on AArch64). Declaring it as a fixed (char*) function would
+        // silently pass garbage for the arguments after the format string, so it
+        // is registered as a fixed-arity shim instead:
+        //   flint_format2(fmt, a, b)  up to 4 arguments
+        // which covers essentially every formatting call and keeps the call
+        // sites type-checked by the verifier.
+        add("flint_format1", i8PtrTy, {i8PtrTy, i64Ty}, false);
+        add("flint_format2", i8PtrTy, {i8PtrTy, i64Ty, i64Ty}, false);
+        add("flint_format3", i8PtrTy, {i8PtrTy, i64Ty, i64Ty, i64Ty}, false);
+        add("flint_format4", i8PtrTy, {i8PtrTy, i64Ty, i64Ty, i64Ty, i64Ty}, false);
+        // Double-precision variant, for %f/%e/%g.
+        add("flint_formatd1", i8PtrTy, {i8PtrTy, dbl}, false);
+        add("flint_formatd2", i8PtrTy, {i8PtrTy, dbl, i64Ty}, false);
+        add("flint_formatd3", i8PtrTy, {i8PtrTy, dbl, i64Ty, i64Ty}, false);
+        add("flint_formatd4", i8PtrTy, {i8PtrTy, dbl, i64Ty, i64Ty, i64Ty}, false);
+        // String-argument variant: flint_formats(fmt, s, ...).
+        add("flint_formats1", i8PtrTy, {i8PtrTy, i8PtrTy}, false);
+        add("flint_formats2", i8PtrTy, {i8PtrTy, i8PtrTy, i64Ty}, false);
+        add("flint_formats3", i8PtrTy, {i8PtrTy, i8PtrTy, i64Ty, i64Ty}, false);
+
+        // ──────────────────────────────────────────────────────
+        // COLLECTIONS (flint_coll.o) — set, priority queue, deque.
+        // ──────────────────────────────────────────────────────
+        add("flint_set_new",     coll, {}, false);
+        add("flint_set_free",    voidTy, {coll}, false);
+        add("flint_set_add",     i64Ty, {coll, i64Ty}, false);
+        add("flint_set_has",     i64Ty, {coll, i64Ty}, false);
+        add("flint_set_remove",  i64Ty, {coll, i64Ty}, false);
+        add("flint_set_len",     i64Ty, {coll}, false);
+        add("flint_set_clear",   voidTy, {coll}, false);
+        add("flint_set_values",  i64Ty, {coll, llvm::PointerType::get(i64Ty, 0), i64Ty}, false);
+
+        add("flint_heap_new",    coll, {}, false);
+        add("flint_heap_free",   voidTy, {coll}, false);
+        add("flint_heap_push",   voidTy, {coll, i64Ty}, false);
+        add("flint_heap_pop",    i64Ty, {coll}, false);
+        add("flint_heap_peek",   i64Ty, {coll}, false);
+        add("flint_heap_len",    i64Ty, {coll}, false);
+        add("flint_heap_empty",  i64Ty, {coll}, false);
+        add("flint_heap_clear",  voidTy, {coll}, false);
+        add("flint_heap_sorted", i64Ty, {coll, llvm::PointerType::get(i64Ty, 0), i64Ty}, false);
+
+        add("flint_deque_new",       coll, {}, false);
+        add("flint_deque_free",      voidTy, {coll}, false);
+        add("flint_deque_push_back", voidTy, {coll, i64Ty}, false);
+        add("flint_deque_push_front",voidTy, {coll, i64Ty}, false);
+        add("flint_deque_pop_back",  i64Ty, {coll}, false);
+        add("flint_deque_pop_front", i64Ty, {coll}, false);
+        add("flint_deque_front",     i64Ty, {coll}, false);
+        add("flint_deque_back",      i64Ty, {coll}, false);
+        add("flint_deque_len",       i64Ty, {coll}, false);
+        add("flint_deque_empty",     i64Ty, {coll}, false);
+        add("flint_deque_clear",     voidTy, {coll}, false);
+        add("flint_deque_values",    i64Ty, {coll, llvm::PointerType::get(i64Ty, 0), i64Ty}, false);
 
         // BLAS backend introspection -- lets Flint report which matmul path is
         // live, which matters because it differs per build.

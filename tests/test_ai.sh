@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# AI gate: the tensor/autograd/optimizer runtime is 2,900 lines of C that
-# nothing exercised before -- there was no AI gate, so a change there shipped
-# completely unverified. This checks, in order:
+# Standard library + AI gate.
+#
+# The tensor/autograd/optimizer runtime is 2,900 lines of C that nothing
+# exercised before -- there was no gate, so a change there shipped completely
+# unverified. The gate has since grown to cover the maths, statistics,
+# collection and formatting libraries for the same reason.
+#
+# This checks, in order:
 #
 #   1. blas_check: the live matmul path agrees with the portable reference on
 #      non-square shapes (catches a wrong leading dimension, which returns
@@ -117,5 +122,15 @@ run nn "8.0656 0.16 predictions 3 5 7 9" tests/nn_two_layer.fl
 run xor "initial-loss 0.14804 final-loss 1.04316e-25 outputs 2.35756e-13 1 1 3.22242e-13" \
     tests/xor_mlp.fl
 
-echo "ai: $pass passed, $fail failed"
+# ---- standard library: maths, statistics, collections, formatting ----
+# These were the largest gaps in the library: no format function at all, no
+# set/priority-queue/deque, and a maths module missing everything except the
+# transcendentals.
+run stdlib \
+  "3628800 6 12 7 10 832040 180 3 5 0.842701 24 0 1 2 2 1 4 1.66667 1.29099 3.7 5 2.13809 2 1 1 1 3 0 3 0 3" \
+  tests/t_stdlib.fl
+
+run format "n=42 x=3.50 sum=99 name=flint n=7" tests/t_format.fl
+
+echo "stdlib-ai: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
