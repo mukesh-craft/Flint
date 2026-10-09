@@ -2560,3 +2560,49 @@ several `while` loops silently corrupts values, because the second
 
 Gates: v1 12/12, stdlib-ai 12/12, parse-gate 102, ladder 21/21, tutorial 8,
 sanitizers 10, docs-check 0, selfhost byte-identical.
+
+---
+
+## 2026-10-09 — f32 tensor support
+
+Every tensor operation is now dtype-aware. A tensor carries a `FlintDType` and
+exactly one of `data` (f64) / `data32` (f32); the other is NULL, so a wrong
+width is a NULL, not a reinterpretation.
+
+| N | f64 | f32 | speedup |
+|---|---|---|---|
+| 100 | 1.04 ms | 0.34 ms | 3.02x |
+| 256 | 5.60 ms | 3.12 ms | 1.80x |
+| 500 | 41.7 ms | 22.3 ms | 1.86x |
+| 1000 | 324 ms | 163 ms | 1.99x |
+
+Footprint is exactly half at every size (1M elements: 4 MB vs 8 MB).
+
+**Three decisions that keep this from doubling the codebase:**
+- f32 tensors **compute in double and narrow on store**. exp/tanh/sigmoid keep
+  double precision where it matters, and there is one implementation of each
+  math function, not two.
+- The autograd **tape stays f64** whatever the tensors are. Widening f32 to
+  double is exact and the rules only ever read the snapshot as doubles.
+- The **NN layers widen in and narrow out** around the existing f64 body, rather
+  than duplicating each layer -- so there is still one set of index arithmetic
+  to keep correct.
+
+`flt_data` returns NULL for an f32 tensor on purpose: it makes "wrong width"
+a NULL dereference rather than silently writing f32 through a `double*`.
+
+**Third stale-artifact trap this session.** The f32 work segfaulted
+*intermittently* -- identical source, same command, sometimes fine. It was a
+stale `flint_tensor.o` from an intermediate edit: it already had the f32
+symbols, so `nm` showed them and it looked current, but `cmp` against a fresh
+compile of the source showed it differed. `build.sh`'s mtime check did not
+catch it. **When an edit "changes nothing", compare the object against a fresh
+compile (`cmp`) rather than trusting `nm` or mtimes.**
+
+Also: two bugs found by testing, both of which would have silently corrupted
+f64 too -- `_binary_op` freed the broadcast shape before `_alloc` copied it
+(every binary-op result had a garbage size), and `flt_set_at` wrote through
+`flt_data` which is NULL for f32.
+
+Gates: v1 12/12, stdlib-ai 13/13, parse-gate 103, ladder 21/21, tutorial 8,
+sanitizers 10, docs-check 0, selfhost byte-identical.
