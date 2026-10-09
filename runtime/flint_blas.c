@@ -29,6 +29,16 @@ extern void cblas_dgemm(int Order, int TransA, int TransB,
                         double beta, double* C, int ldc)
     __attribute__((weak));
 
+// Single precision, resolved the same weak way. A build linked against
+// OpenBLAS gets the tuned sgemm; one without it falls back to the portable
+// loop, so f32 never becomes a link error.
+extern void cblas_sgemm(int Order, int TransA, int TransB,
+                        int M, int N, int K,
+                        float alpha, const float* A, int lda,
+                        const float* B, int ldb,
+                        float beta, float* C, int ldc)
+    __attribute__((weak));
+
 #define CBLAS_ROW_MAJOR 101
 #define CBLAS_NO_TRANS   111
 
@@ -128,4 +138,40 @@ void flint_blas_matmul(int64_t M, int64_t K, int64_t N,
 void flint_blas_matmul_reference(int64_t M, int64_t K, int64_t N,
                                  const double* A, const double* B, double* C) {
     _matmul_portable(M, K, N, A, B, C);
+}
+// ---- f32 ----------------------------------------------------------------
+// Accumulate in float to match BLAS semantics and to keep the result honest
+// about single precision; the portable reference does the same so the two
+// paths can be compared directly.
+
+static void _matmul_f32_portable(int64_t M, int64_t K, int64_t N,
+                                 const float* A, const float* B, float* C) {
+    for (int64_t i = 0; i < M; i++) {
+        for (int64_t j = 0; j < N; j++) {
+            float sum = 0.0f;
+            for (int64_t k = 0; k < K; k++) sum += A[i * K + k] * B[k * N + j];
+            C[i * N + j] = sum;
+        }
+    }
+}
+
+void flint_blas_matmul_f32(int64_t M, int64_t K, int64_t N,
+                           const float* A, const float* B, float* C) {
+    if (M <= 0 || N <= 0) return;
+    _resolve();
+    if (g_available && cblas_sgemm) {
+        cblas_sgemm(CBLAS_ROW_MAJOR, CBLAS_NO_TRANS, CBLAS_NO_TRANS,
+                    (int)M, (int)N, (int)K,
+                    1.0f, A, (int)K,
+                    B, (int)N,
+                    0.0f, C, (int)N);
+        g_calls++;
+        return;
+    }
+    _matmul_f32_portable(M, K, N, A, B, C);
+}
+
+void flint_blas_matmul_f32_reference(int64_t M, int64_t K, int64_t N,
+                                     const float* A, const float* B, float* C) {
+    _matmul_f32_portable(M, K, N, A, B, C);
 }

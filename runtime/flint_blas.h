@@ -37,6 +37,15 @@ void flint_blas_disable(void);
 void flint_blas_matmul(int64_t M, int64_t K, int64_t N,
                        const double* A, const double* B, double* C);
 
+// f32 variant. On aarch64 this is where the real win is: half the bytes
+// through memory and, with OpenBLAS, a tuned single-precision kernel.
+// The leading dimensions are the same trap as the f64 path -- for a KxN B the
+// stride is N, not K.
+void flint_blas_matmul_f32(int64_t M, int64_t K, int64_t N,
+                           const float* A, const float* B, float* C);
+void flint_blas_matmul_f32_reference(int64_t M, int64_t K, int64_t N,
+                                     const float* A, const float* B, float* C);
+
 // Portable triple loop, always. The test gate compares the live path against
 // this so a BLAS build that disagrees fails instead of shipping.
 void flint_blas_matmul_reference(int64_t M, int64_t K, int64_t N,

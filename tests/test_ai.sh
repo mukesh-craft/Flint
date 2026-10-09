@@ -138,5 +138,11 @@ run format "n=42 x=3.50 sum=99 name=flint n=7" tests/t_format.fl
 run nn_layers "2 2 6 8 12 14 3.5 5.5 11.5 13.5 6 8 14 16 8.5 0.333333 -1.34164 9 1 1 1" \
     tests/t_nn_layers.fl
 
+# f32 tensors: half the memory and ~2x the matmul speed. Values are small
+# integers so every product is exact in single precision and the expected
+# output is checkable by hand rather than against a tolerance.
+run f32 "1 24 1 2 2 58 64 139 154 58 154 1 2 12 1 0.731059 21 3.5 0 6 1 6 0 4000000 8000000" \
+    tests/t_f32.fl
+
 echo "stdlib-ai: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

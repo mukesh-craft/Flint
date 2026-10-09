@@ -15,10 +15,18 @@ extern void flint_panic(const char*);
 
 // Tensors are opaque handles here; a 4-D view is unpacked from the shape.
 static int64_t sh(void* t, int64_t d) { return flt_shape(t, d); }
+// flt_data returns NULL for an f32 tensor (so a double* cannot be forced onto
+// f32 storage). The layers read through this instead, which widens for the
+// duration of one elementwise operation and is exact.
 static double* dat(void* t) { return (double*)flt_data(t); }
 
+// Read element i as double, whatever the storage is.
+static double at(void* t, int64_t i) {
+    return flt_is_f32(t) ? (double)flt_data_f32(t)[i] : flt_data(t)[i];
+}
+
 // ------------------------------------------------------------------ conv2d
-void* flt_conv2d(void* in, void* w, void* bias, int64_t stride, int64_t padding) {
+static void* conv2d_f64(void* in, void* w, void* bias, int64_t stride, int64_t padding) {
     if (!in || !w) return NULL;
     int64_t N = sh(in, 0), IC = sh(in, 1), IH = sh(in, 2), IW = sh(in, 3);
     int64_t OC = sh(w, 0), KH = sh(w, 2), KW = sh(w, 3);
@@ -68,7 +76,7 @@ void* flt_conv2d(void* in, void* w, void* bias, int64_t stride, int64_t padding)
 
 // ------------------------------------------------------------------ pooling
 // Shared walk for max and average pooling over the last two dims.
-static void* pool2d(void* in, int64_t k, int64_t stride, int want_max) {
+static void* pool2d_f64(void* in, int64_t k, int64_t stride, int want_max) {
     if (!in || k <= 0) return NULL;
     int64_t N = sh(in, 0), C = sh(in, 1), H = sh(in, 2), W = sh(in, 3);
     int64_t OH = (H - k) / stride + 1;
@@ -98,10 +106,10 @@ static void* pool2d(void* in, int64_t k, int64_t stride, int want_max) {
     return out;
 }
 
-void* flt_maxpool2d(void* in, int64_t k, int64_t stride) { return pool2d(in, k, stride, 1); }
-void* flt_avgpool2d(void* in, int64_t k, int64_t stride) { return pool2d(in, k, stride, 0); }
+// maxpool/avgpool public wrappers are at the end of this file, so they can
+// convert an f32 input around the shared f64 body.
 
-void* flt_global_avgpool(void* in) {
+static void* global_avgpool_f64(void* in) {
     if (!in) return NULL;
     int64_t N = sh(in, 0), C = sh(in, 1), H = sh(in, 2), W = sh(in, 3);
     if (H <= 0 || W <= 0) return NULL;
@@ -219,7 +227,7 @@ void* flt_rms_norm(void* in, void* gamma, double eps) {
 }
 
 // ------------------------------------------------------------- activations
-void* flt_softmax(void* in) {
+static void* softmax_f64(void* in) {
     if (!in) return NULL;
     int64_t nd = flt_ndim(in);
     if (nd < 1) return NULL;
@@ -293,7 +301,10 @@ void flt_set_at(void* t, int64_t idx, double v) {
         flint_panic(msg);
         return;
     }
-    dat(t)[idx] = v;
+    // flt_data returns NULL for an f32 tensor, so element access branches on
+    // dtype rather than going through it.
+    if (flt_is_f32(t)) flt_data_f32(t)[idx] = (float)v;
+    else                dat(t)[idx] = v;
 }
 
 double flt_get_at(void* t, int64_t idx) {
@@ -306,7 +317,7 @@ double flt_get_at(void* t, int64_t idx) {
         flint_panic(msg);
         return 0.0;
     }
-    return dat(t)[idx];
+    return flt_is_f32(t) ? (double)flt_data_f32(t)[idx] : dat(t)[idx];
 }
 
 // --------------------------------------------------------------- init
@@ -336,4 +347,59 @@ void* flt_he_uniform(void* t, double scale) {
     if (fan_in <= 0) fan_in = 1;
     fill_uniform(t, scale * sqrt(6.0 / (double)fan_in));
     return t;
+}
+// =========================================================================
+// Public layer entry points.
+//
+// Each widens an f32 input, runs the existing f64 body, and narrows the result
+// back to f32. One implementation of each layer, and f32 still halves the
+// memory held by activations plus the bytes crossing into the next matmul.
+// =========================================================================
+void* flt_conv2d(void* in, void* w, void* bias, int64_t stride, int64_t padding) {
+    int f32 = flt_is_f32(in);
+    void* iw = f32 ? flt_to_f64(in) : in;
+    void* ww = flt_is_f32(w) ? flt_to_f64(w) : w;
+    void* bw = (bias && flt_is_f32(bias)) ? flt_to_f64(bias) : bias;
+    void* r = conv2d_f64(iw, ww, bw, stride, padding);
+    if (f32) flt_destroy(iw);
+    if (ww != w) flt_destroy(ww);
+    if (bw != bias) flt_destroy(bw);
+    if (f32 && r) { void* n = flt_to_f32(r); flt_destroy(r); r = n; }
+    return r;
+}
+
+void* flt_maxpool2d(void* in, int64_t k, int64_t stride) {
+    int f32 = flt_is_f32(in);
+    void* w = f32 ? flt_to_f64(in) : in;
+    void* r = pool2d_f64(w, k, stride, 1);
+    if (f32) flt_destroy(w);
+    if (f32 && r) { void* n = flt_to_f32(r); flt_destroy(r); r = n; }
+    return r;
+}
+
+void* flt_avgpool2d(void* in, int64_t k, int64_t stride) {
+    int f32 = flt_is_f32(in);
+    void* w = f32 ? flt_to_f64(in) : in;
+    void* r = pool2d_f64(w, k, stride, 0);
+    if (f32) flt_destroy(w);
+    if (f32 && r) { void* n = flt_to_f32(r); flt_destroy(r); r = n; }
+    return r;
+}
+
+void* flt_global_avgpool(void* in) {
+    int f32 = flt_is_f32(in);
+    void* w = f32 ? flt_to_f64(in) : in;
+    void* r = global_avgpool_f64(w);
+    if (f32) flt_destroy(w);
+    if (f32 && r) { void* n = flt_to_f32(r); flt_destroy(r); r = n; }
+    return r;
+}
+
+void* flt_softmax(void* in) {
+    int f32 = flt_is_f32(in);
+    void* w = f32 ? flt_to_f64(in) : in;
+    void* r = softmax_f64(w);
+    if (f32) flt_destroy(w);
+    if (f32 && r) { void* n = flt_to_f32(r); flt_destroy(r); r = n; }
+    return r;
 }
