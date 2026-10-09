@@ -92,64 +92,183 @@ void flt_set_all(void* t, const double* vals, int64_t n) {
     for (int64_t i = 0; i < k; i++) tt->data[i] = vals[i];
 }
 
-void* flt_create(int64_t ndim, int64_t* shape) {
+// Allocate with no element type yet; callers fill in one of data/data32.
+static FlintTensor* _alloc(int64_t ndim, int64_t* shape, int is_f32) {
     FlintTensor* t = calloc(1, sizeof(FlintTensor));
     t->ndim = ndim;
     t->shape = _shape_copy(ndim, shape);
     t->size = _calc_size(ndim, shape);
-    t->data = calloc((size_t)t->size, sizeof(double));
+    t->dtype = is_f32 ? FLT_F32 : FLT_F64;
+    if (is_f32) t->data32 = calloc((size_t)t->size, sizeof(float));
+    else        t->data = calloc((size_t)t->size, sizeof(double));
     t->device = DEVICE_CPU;
     t->grad = NULL;
     t->grad_id = -1;
     return t;
 }
 
+void* flt_create(int64_t ndim, int64_t* shape) {
+    return _alloc(ndim, shape, 0);
+}
+
+void* flt_empty(int64_t ndim, int64_t* shape, int32_t is_f32) {
+    return _alloc(ndim, shape, is_f32 ? 1 : 0);
+}
+
+// ---- f32 constructors, mirroring the f64 rank-specific helpers ----
+void* flt_create_f32_1d(int64_t n0) {
+    int64_t shape[1] = { n0 };
+    return _alloc(1, shape, 1);
+}
+void* flt_create_f32_2d(int64_t n0, int64_t n1) {
+    int64_t shape[2] = { n0, n1 };
+    return _alloc(2, shape, 1);
+}
+void* flt_create_f32_3d(int64_t n0, int64_t n1, int64_t n2) {
+    int64_t shape[3] = { n0, n1, n2 };
+    return _alloc(3, shape, 1);
+}
+void* flt_create_f32_4d(int64_t n0, int64_t n1, int64_t n2, int64_t n3) {
+    int64_t shape[4] = { n0, n1, n2, n3 };
+    return _alloc(4, shape, 1);
+}
+
+int64_t flt_is_f32(void* t) {
+    FlintTensor* t_ = _as_tensor(t);
+    return (t_ && t_->dtype == FLT_F32) ? 1 : 0;
+}
+
+float* flt_data_f32(void* t) {
+    FlintTensor* t_ = _as_tensor(t);
+    return (t_ && t_->dtype == FLT_F32) ? t_->data32 : NULL;
+}
+
+int64_t flt_bytes(void* t) {
+    FlintTensor* t_ = _as_tensor(t);
+    if (!t_) return 0;
+    return t_->size * (int64_t)(t_->dtype == FLT_F32 ? sizeof(float) : sizeof(double));
+}
+
+// ---- casts ----
+// Widening and narrowing both go through double, which is exact for f32 -> f64
+// and round-to-nearest for f64 -> f32.
+void* flt_to_f32(void* t) {
+    FlintTensor* s = _as_tensor(t);
+    if (!s) return NULL;
+    if (s->dtype == FLT_F32) return flt_clone(t);
+    FlintTensor* r = _alloc(s->ndim, s->shape, 1);
+    for (int64_t i = 0; i < s->size; i++) r->data32[i] = (float)s->data[i];
+    return r;
+}
+
+void* flt_to_f64(void* t) {
+    FlintTensor* s = _as_tensor(t);
+    if (!s) return NULL;
+    if (s->dtype == FLT_F64) return flt_clone(t);
+    FlintTensor* r = _alloc(s->ndim, s->shape, 0);
+    for (int64_t i = 0; i < s->size; i++) r->data[i] = (double)s->data32[i];
+    return r;
+}
+
 void flt_destroy(void* t) {
     if (!t) return;
     FlintTensor* t_ = _as_tensor(t);
     if (t_->grad) free(t_->grad);
+    // Exactly one of these is set, by dtype. free(NULL) is a no-op, so both
+    // can be called unconditionally.
     free(t_->data);
+    free(t_->data32);
     free(t_->shape);
     free(t_);
 }
 
+// Clone preserves the element type: copying an f32 tensor into f64 storage
+// would silently quadruple its footprint and change what flt_is_f32 reports.
 void* flt_clone(void* t) {
     FlintTensor* src = _as_tensor(t);
-    FlintTensor* dst = flt_create(src->ndim, src->shape);
-    memcpy(dst->data, src->data, (size_t)src->size * sizeof(double));
+    FlintTensor* dst = _alloc(src->ndim, src->shape, src->dtype == FLT_F32);
+    if (src->dtype == FLT_F32) memcpy(dst->data32, src->data32, (size_t)src->size * sizeof(float));
+    else                    memcpy(dst->data, src->data, (size_t)src->size * sizeof(double));
     return dst;
 }
 
 void* flt_zeros_like(void* t) {
     FlintTensor* src = _as_tensor(t);
-    return flt_create(src->ndim, src->shape);
+    return _alloc(src->ndim, src->shape, src->dtype == FLT_F32);
+}
+
+void* flt_zeros_like_f32(void* t) {
+    FlintTensor* src = _as_tensor(t);
+    return _alloc(src->ndim, src->shape, 1);
+}
+
+void* flt_clone_f32(void* t) {
+    FlintTensor* src = _as_tensor(t);
+    FlintTensor* dst = _alloc(src->ndim, src->shape, 1);
+    if (src->dtype == FLT_F32) memcpy(dst->data32, src->data32, (size_t)src->size * sizeof(float));
+    else                    for (int64_t i = 0; i < src->size; i++) dst->data32[i] = (float)src->data[i];
+    return dst;
 }
 
 int64_t flt_size(void* t) { return _as_tensor(t)->size; }
 int64_t flt_ndim(void* t) { return _as_tensor(t)->ndim; }
 int64_t flt_shape(void* t, int64_t dim) { return _as_tensor(t)->shape[dim]; }
-double flt_get(void* t, int64_t idx) { return _as_tensor(t)->data[idx]; }
+
+// Widening read: an f32 value returned as double is exact, so a caller that
+// ignores flt_is_f32 still gets the right number for f32 tensors.
+double flt_get(void* t, int64_t idx) {
+    FlintTensor* t_ = _as_tensor(t);
+    return (t_->dtype == FLT_F32) ? (double)t_->data32[idx] : t_->data[idx];
+}
 
 // The backing buffer. Layers need it to write into a tensor's storage
 // directly -- an element-at-a-time flt_set loop is quadratic in overhead for
 // anything the size of a convolution weight. Valid while the tensor lives;
-// the layout is flat and row-major regardless of ndim.
-double* flt_data(void* t) { return _as_tensor(t)->data; }
-void flt_set(void* t, int64_t idx, double v) { _as_tensor(t)->data[idx] = v; }
+// the layout is flat and row-major regardless of ndim. NULL for an f32
+// tensor: use flt_data_f32 there, so a layer cannot write f32 through a
+// double* and corrupt the buffer.
+double* flt_data(void* t) {
+    FlintTensor* t_ = _as_tensor(t);
+    return (t_->dtype == FLT_F32) ? NULL : t_->data;
+}
+// Writes route by the DESTINATION's dtype: flt_set on an f32 tensor narrows,
+// which is what the caller means by setting an f32 element.
+void flt_set(void* t, int64_t idx, double v) {
+    FlintTensor* t_ = _as_tensor(t);
+    if (!t_) return;
+    if (t_->dtype == FLT_F32) t_->data32[idx] = (float)v;
+    else                    t_->data[idx] = v;
+}
 void flt_fill(void* t, double v) {
     FlintTensor* t_ = _as_tensor(t);
-    for (int64_t i = 0; i < t_->size; i++) t_->data[i] = v;
+    if (!t_) return;
+    if (t_->dtype == FLT_F32) { float fv = (float)v; for (int64_t i = 0; i < t_->size; i++) t_->data32[i] = fv; }
+    else                    { for (int64_t i = 0; i < t_->size; i++) t_->data[i] = v; }
 }
 void flt_copy(void* dst, void* src) {
     FlintTensor* d = _as_tensor(dst);
     FlintTensor* s = _as_tensor(src);
+    if (!d || !s) return;
     int64_t n = d->size < s->size ? d->size : s->size;
-    memcpy(d->data, s->data, (size_t)n * sizeof(double));
+    // Convert element-wise when the widths differ; a raw memcpy between an
+    // f32 and an f64 buffer would reinterpret every 4 bytes as 8.
+    if (d->dtype == FLT_F32 && s->dtype == FLT_F32) {
+        memcpy(d->data32, s->data32, (size_t)n * sizeof(float));
+    } else if (d->dtype == FLT_F32) {
+        for (int64_t i = 0; i < n; i++) d->data32[i] = (float)s->data[i];
+    } else if (s->dtype == FLT_F32) {
+        for (int64_t i = 0; i < n; i++) d->data[i] = (double)s->data32[i];
+    } else {
+        memcpy(d->data, s->data, (size_t)n * sizeof(double));
+    }
 }
 void flt_randn(void* t) {
     FlintTensor* t_ = _as_tensor(t);
-    for (int64_t i = 0; i < t_->size; i++)
-        t_->data[i] = (double)rand() / RAND_MAX * 2.0 - 1.0;
+    if (!t_) return;
+    for (int64_t i = 0; i < t_->size; i++) {
+        double v = (double)rand() / RAND_MAX * 2.0 - 1.0;
+        if (t_->dtype == FLT_F32) t_->data32[i] = (float)v; else t_->data[i] = v;
+    }
 }
 void flt_rand(void* t) {
     FlintTensor* t_ = _as_tensor(t);
@@ -165,12 +284,6 @@ void flt_uniform(void* t, double lo, double hi) {
 // =========================================================================
 // Element-wise unary ops (return new tensor)
 // =========================================================================
-static void* _unary_op(void* a, double (*f)(double)) {
-    FlintTensor* ta = _as_tensor(a);
-    FlintTensor* r = flt_create(ta->ndim, ta->shape);
-    for (int64_t i = 0; i < ta->size; i++) r->data[i] = f(ta->data[i]);
-    return r;
-}
 
 static double _neg(double x) { return -x; }
 static double _exp(double x) { return exp(x); }
@@ -180,36 +293,90 @@ static double _relu(double x) { return x > 0 ? x : 0; }
 static double _sigmoid(double x) { return 1.0 / (1.0 + exp(-x)); }
 static double _tanh_(double x) { return tanh(x); }
 
-void* flt_neg(void* a) { return _unary_op(a, _neg); }
-void* flt_exp(void* a) { return _unary_op(a, _exp); }
-void* flt_log(void* a) { return _unary_op(a, _log); }
-void* flt_sqrt(void* a) { return _unary_op(a, _sqrt); }
+// Elementwise ops, generated for both element types from one body.
+//
+// The f32 path computes in double and narrows on store: exp/tanh/sigmoid keep
+// double precision where it matters (the final value) and there is still only
+// one implementation of each math function to keep correct.
+#define DEF_UNARY(NAME, FN)                                                   \
+    static void* NAME(void* a) {                                              \
+        FlintTensor* ta = _as_tensor(a);                                      \
+        if (!ta) return NULL;                                                 \
+        FlintTensor* r = _alloc(ta->ndim, ta->shape, ta->dtype == FLT_F32);     \
+        if (ta->dtype == FLT_F32) {                                           \
+            for (int64_t i = 0; i < ta->size; i++)                            \
+                r->data32[i] = (float)FN((double)ta->data32[i]);               \
+        } else {                                                              \
+            for (int64_t i = 0; i < ta->size; i++)                            \
+                r->data[i] = FN(ta->data[i]);                                 \
+        }                                                                     \
+        return r;                                                             \
+    }
+
+DEF_UNARY(flt_neg_impl, _neg)
+DEF_UNARY(flt_exp_impl, _exp)
+DEF_UNARY(flt_log_impl, _log)
+DEF_UNARY(flt_sqrt_impl, _sqrt)
+DEF_UNARY(flt_relu_impl, _relu)
+DEF_UNARY(flt_sigmoid_impl, _sigmoid)
+DEF_UNARY(flt_tanh_impl, _tanh_)
+
+void* flt_neg(void* a)     { return flt_neg_impl(a); }
+void* flt_exp(void* a)     { return flt_exp_impl(a); }
+void* flt_log(void* a)     { return flt_log_impl(a); }
+void* flt_sqrt(void* a)    { return flt_sqrt_impl(a); }
+void* flt_relu(void* a)    { return flt_relu_impl(a); }
+void* flt_sigmoid(void* a) { return flt_sigmoid_impl(a); }
+void* flt_tanh(void* a)    { return flt_tanh_impl(a); }
+
+
 void* flt_pow(void* a, double e) {
     FlintTensor* ta = _as_tensor(a);
-    FlintTensor* r = flt_create(ta->ndim, ta->shape);
-    for (int64_t i = 0; i < ta->size; i++) r->data[i] = pow(ta->data[i], e);
+    if (!ta) return NULL;
+    FlintTensor* r = _alloc(ta->ndim, ta->shape, ta->dtype == FLT_F32);
+    if (ta->dtype == FLT_F32) {
+        for (int64_t i = 0; i < ta->size; i++)
+            r->data32[i] = (float)pow((double)ta->data32[i], e);
+    } else {
+        for (int64_t i = 0; i < ta->size; i++) r->data[i] = pow(ta->data[i], e);
+    }
     return r;
 }
-void* flt_relu(void* a) { return _unary_op(a, _relu); }
-void* flt_sigmoid(void* a) { return _unary_op(a, _sigmoid); }
-void* flt_tanh(void* a) { return _unary_op(a, _tanh_); }
 
 // =========================================================================
 // In-place activations
 // =========================================================================
+// In-place: compute in double, narrow on store, matching the out-of-place ops.
 void flt_relu_inplace(void* a) {
     FlintTensor* t = _as_tensor(a);
-    for (int64_t i = 0; i < t->size; i++)
-        if (t->data[i] < 0) t->data[i] = 0;
+    if (!t) return;
+    if (t->dtype == FLT_F32) {
+        for (int64_t i = 0; i < t->size; i++)
+            if (t->data32[i] < 0.0f) t->data32[i] = 0.0f;
+    } else {
+        for (int64_t i = 0; i < t->size; i++)
+            if (t->data[i] < 0) t->data[i] = 0;
+    }
 }
 void flt_sigmoid_inplace(void* a) {
     FlintTensor* t = _as_tensor(a);
-    for (int64_t i = 0; i < t->size; i++)
-        t->data[i] = 1.0 / (1.0 + exp(-t->data[i]));
+    if (!t) return;
+    if (t->dtype == FLT_F32) {
+        for (int64_t i = 0; i < t->size; i++)
+            t->data32[i] = (float)(1.0 / (1.0 + exp(-(double)t->data32[i])));
+    } else {
+        for (int64_t i = 0; i < t->size; i++)
+            t->data[i] = 1.0 / (1.0 + exp(-t->data[i]));
+    }
 }
 void flt_tanh_inplace(void* a) {
     FlintTensor* t = _as_tensor(a);
-    for (int64_t i = 0; i < t->size; i++) t->data[i] = tanh(t->data[i]);
+    if (!t) return;
+    if (t->dtype == FLT_F32) {
+        for (int64_t i = 0; i < t->size; i++) t->data32[i] = (float)tanh((double)t->data32[i]);
+    } else {
+        for (int64_t i = 0; i < t->size; i++) t->data[i] = tanh(t->data[i]);
+    }
 }
 
 // =========================================================================
@@ -221,11 +388,22 @@ static void* _binary_op(void* a, void* b, double (*f)(double, double)) {
     int64_t out_ndim;
     int64_t* bs = _broadcast_shape(ta->ndim, ta->shape, tb->ndim, tb->shape, &out_ndim);
     if (!bs) { fprintf(stderr, "error: shapes not broadcastable\n"); return NULL; }
-    FlintTensor* r = flt_create(out_ndim, bs);
+    // Type promotion: f32 only when BOTH sides are f32. Mixing widths widens,
+    // which is what every numeric library does and what keeps a stray f32 from
+    // silently truncating an f64 operand.
+    int out_f32 = (ta->dtype == FLT_F32 && tb->dtype == FLT_F32);
+    // _alloc COPIES the shape, so bs must still be live here -- freeing it
+    // first gave every result tensor a freed/garbage shape (size 0).
+    FlintTensor* r = _alloc(out_ndim, bs, out_f32);
     free(bs);
-    // Use simple flat broadcasting
-    for (int64_t i = 0; i < r->size; i++)
-        r->data[i] = f(ta->data[i % ta->size], tb->data[i % tb->size]);
+    if (!r) return NULL;
+    for (int64_t i = 0; i < r->size; i++) {
+        double av = (ta->dtype == FLT_F32) ? (double)ta->data32[i % ta->size] : ta->data[i % ta->size];
+        double bv = (tb->dtype == FLT_F32) ? (double)tb->data32[i % tb->size] : tb->data[i % tb->size];
+        double res = f(av, bv);
+        if (out_f32) r->data32[i] = (float)res;
+        else        r->data[i] = res;
+    }
     return r;
 }
 
@@ -255,9 +433,43 @@ void* flt_matmul(void* a, void* b) {
     if (tb->shape[0] != K) { fprintf(stderr, "matmul: shape mismatch\n"); return NULL; }
 
     int64_t shape[2] = {M, N};
-    FlintTensor* out = flt_create(2, shape);
+    // Mixed input promotes to f64 rather than truncating one operand.
+    int out_f32 = (ta->dtype == FLT_F32 && tb->dtype == FLT_F32);
+    FlintTensor* out = _alloc(2, shape, out_f32);
     if (!out) return NULL;
-    flint_blas_matmul(M, K, N, ta->data, tb->data, out->data);
+    if (out_f32) {
+        // Convert into f32 buffers and run sgemm. Reusing the input buffers is
+        // not safe (they are const and belong to the caller), so this
+        // allocates two scratch copies -- matmul is dominated by the kernel
+        // for any size worth calling it on.
+        float* A = (float*)malloc((size_t)(M * K) * sizeof(float));
+        float* B = (float*)malloc((size_t)(K * N) * sizeof(float));
+        if (!A || !B) { free(A); free(B); return NULL; }
+        for (int64_t i = 0; i < M * K; i++)
+            A[i] = (ta->dtype == FLT_F32) ? ta->data32[i] : (float)ta->data[i];
+        for (int64_t i = 0; i < K * N; i++)
+            B[i] = (tb->dtype == FLT_F32) ? tb->data32[i] : (float)tb->data[i];
+        flint_blas_matmul_f32(M, K, N, A, B, out->data32);
+        free(A); free(B);
+    } else {
+        // Widen any f32 operand, then run dgemm.
+        const double *Ad = ta->data, *Bd = tb->data;
+        double* Aw = NULL; double* Bw = NULL;
+        if (ta->dtype == FLT_F32) {
+            Aw = (double*)malloc((size_t)(M * K) * sizeof(double));
+            if (!Aw) return NULL;
+            for (int64_t i = 0; i < M * K; i++) Aw[i] = (double)ta->data32[i];
+            Ad = Aw;
+        }
+        if (tb->dtype == FLT_F32) {
+            Bw = (double*)malloc((size_t)(K * N) * sizeof(double));
+            if (!Bw) { free(Aw); return NULL; }
+            for (int64_t i = 0; i < K * N; i++) Bw[i] = (double)tb->data32[i];
+            Bd = Bw;
+        }
+        flint_blas_matmul(M, K, N, Ad, Bd, out->data);
+        free(Aw); free(Bw);
+    }
     return out;
 }
 
@@ -275,9 +487,35 @@ void* flt_matmul_blas(void* a, void* b) {
     if (tb->shape[0] != K) { fprintf(stderr, "matmul_blas: shape mismatch\n"); return NULL; }
 
     int64_t shape[2] = {M, N};
-    FlintTensor* out = flt_create(2, shape);
+    int out_f32 = (ta->dtype == FLT_F32 && tb->dtype == FLT_F32);
+    FlintTensor* out = _alloc(2, shape, out_f32);
     if (!out) return NULL;
-    flint_blas_matmul_reference(M, K, N, ta->data, tb->data, out->data);
+    if (out_f32) {
+        float* A = (float*)malloc((size_t)(M * K) * sizeof(float));
+        float* B = (float*)malloc((size_t)(K * N) * sizeof(float));
+        if (!A || !B) { free(A); free(B); return NULL; }
+        for (int64_t i = 0; i < M * K; i++) A[i] = (float)(ta->dtype == FLT_F32 ? ta->data32[i] : ta->data[i]);
+        for (int64_t i = 0; i < K * N; i++) B[i] = (float)(tb->dtype == FLT_F32 ? tb->data32[i] : tb->data[i]);
+        flint_blas_matmul_f32_reference(M, K, N, A, B, out->data32);
+        free(A); free(B);
+    } else {
+        const double *Ad = ta->data, *Bd = tb->data;
+        double *Aw = NULL, *Bw = NULL;
+        if (ta->dtype == FLT_F32) {
+            Aw = (double*)malloc((size_t)(M * K) * sizeof(double));
+            if (!Aw) return NULL;
+            for (int64_t i = 0; i < M * K; i++) Aw[i] = (double)ta->data32[i];
+            Ad = Aw;
+        }
+        if (tb->dtype == FLT_F32) {
+            Bw = (double*)malloc((size_t)(K * N) * sizeof(double));
+            if (!Bw) { free(Aw); return NULL; }
+            for (int64_t i = 0; i < K * N; i++) Bw[i] = (double)tb->data32[i];
+            Bd = Bw;
+        }
+        flint_blas_matmul_reference(M, K, N, Ad, Bd, out->data);
+        free(Aw); free(Bw);
+    }
     return out;
 }
 
@@ -286,8 +524,13 @@ void* flt_matmul_blas(void* a, void* b) {
 // =========================================================================
 double flt_sum(void* a) {
     FlintTensor* ta = _as_tensor(a);
-    double s = 0;
-    for (int64_t i = 0; i < ta->size; i++) s += ta->data[i];
+    if (!ta) return 0.0;
+    // Accumulate in double for both element types: the sum is where f32
+    // storage most often loses precision, and the accumulator is not the thing
+    // being stored, so widening it is free.
+    double s = 0.0;
+    if (ta->dtype == FLT_F32) { for (int64_t i = 0; i < ta->size; i++) s += (double)ta->data32[i]; }
+    else                    { for (int64_t i = 0; i < ta->size; i++) s += ta->data[i]; }
     return s;
 }
 
@@ -303,8 +546,9 @@ void* flt_reshape(void* a, int64_t ndim, int64_t* shape) {
     FlintTensor* ta = _as_tensor(a);
     int64_t sz = _calc_size(ndim, shape);
     if (sz != ta->size) { fprintf(stderr, "reshape: size mismatch\n"); return NULL; }
-    FlintTensor* r = flt_create(ndim, shape);
-    memcpy(r->data, ta->data, (size_t)ta->size * sizeof(double));
+    FlintTensor* r = _alloc(ndim, shape, ta->dtype == FLT_F32);
+    if (ta->dtype == FLT_F32) memcpy(r->data32, ta->data32, (size_t)ta->size * sizeof(float));
+    else                    memcpy(r->data, ta->data, (size_t)ta->size * sizeof(double));
     return r;
 }
 
@@ -317,7 +561,7 @@ void* flt_transpose(void* a, int64_t dim0, int64_t dim1) {
     int64_t tmp = new_shape[dim0];
     new_shape[dim0] = new_shape[dim1];
     new_shape[dim1] = tmp;
-    FlintTensor* r = flt_create(ta->ndim, new_shape);
+    FlintTensor* r = _alloc(ta->ndim, new_shape, ta->dtype == FLT_F32);
     free(new_shape);
     // Copy with transposed indexing
     int64_t* src_strides = malloc(ta->ndim * sizeof(int64_t));
@@ -342,7 +586,8 @@ void* flt_transpose(void* a, int64_t dim0, int64_t dim1) {
         int64_t dst_i = 0;
         for (int64_t d = 0; d < r->ndim; d++)
             dst_i += tmp_idx[d] * dst_strides[d];
-        r->data[dst_i] = ta->data[i];
+        if (ta->dtype == FLT_F32) r->data32[dst_i] = ta->data32[i];
+        else                    r->data[dst_i] = ta->data[i];
     }
     free(tmp_idx); free(src_strides); free(dst_strides);
     return r;
@@ -356,7 +601,11 @@ double mse_loss(void* pred, void* target) {
     FlintTensor* t = _as_tensor(target);
     int64_t n = p->size < t->size ? p->size : t->size;
     double s = 0;
-    for (int64_t i = 0; i < n; i++) { double d = p->data[i] - t->data[i]; s += d * d; }
+    for (int64_t i = 0; i < n; i++) {
+        double pv = (p->dtype == FLT_F32) ? (double)p->data32[i] : p->data[i];
+        double tv = (t->dtype == FLT_F32) ? (double)t->data32[i] : t->data[i];
+        double d = pv - tv; s += d * d;
+    }
     return s / n;
 }
 
@@ -365,8 +614,16 @@ void* mse_loss_grad(void* pred, void* target) {
     FlintTensor* t = _as_tensor(target);
     int64_t n = p->size;
     double scale = 2.0 / n;
-    FlintTensor* g = flt_create(p->ndim, p->shape);
-    for (int64_t i = 0; i < n; i++) g->data[i] = (p->data[i] - t->data[i]) * scale;
+    // The gradient tensor matches the PREDICTION's dtype, so a chain ending in
+    // an f32 forward pass produces f32 gradients all the way back.
+    FlintTensor* g = _alloc(p->ndim, p->shape, p->dtype == FLT_F32);
+    if (!g) return NULL;
+    for (int64_t i = 0; i < n; i++) {
+        double pv = (p->dtype == FLT_F32) ? (double)p->data32[i] : p->data[i];
+        double tv = (t->dtype == FLT_F32) ? (double)t->data32[i] : t->data[i];
+        double gv = (pv - tv) * scale;
+        if (g->dtype == FLT_F32) g->data32[i] = (float)gv; else g->data[i] = gv;
+    }
     return g;
 }
 
@@ -456,7 +713,16 @@ static void _ag_capture(AGNode* n, void* const* tensors, int n_tensors) {
     for (int i = 0; i < n_tensors; i++) {
         FlintTensor* t = (FlintTensor*)tensors[i];
         if (!t) continue;
-        memcpy(n->values + off, t->data, (size_t)t->size * sizeof(double));
+        // The tape stays f64 whatever the tensor is: the snapshot is read by
+        // the backward rules as doubles, and widening an f32 value is exact, so
+        // this loses nothing while keeping one implementation of every rule.
+        // A raw memcpy of an f32 buffer into this would reinterpret 4-byte
+        // floats as 8-byte doubles and produce silent garbage.
+        if (t->dtype == FLT_F32) {
+            for (int64_t k = 0; k < t->size; k++) n->values[off + k] = (double)t->data32[k];
+        } else {
+            memcpy(n->values + off, t->data, (size_t)t->size * sizeof(double));
+        }
         memcpy(n->value_shapes + soff, t->shape, (size_t)t->ndim * sizeof(int64_t));
         off += t->size;
         soff += t->ndim;
