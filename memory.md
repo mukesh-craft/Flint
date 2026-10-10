@@ -2653,3 +2653,58 @@ corruption EARLIER in the file rather than bisecting forward.
 
 Gates: v1 12/12, stdlib-ai 15/15, parse-gate 104, fixpoint 104, lexdiff 103,
 ladder 21/21, tutorial 8, sanitizers 10, docs-check 0, selfhost byte-identical.
+---
+
+## 2026-10-10 — Value model, TOML and YAML (part of the ecosystem gap list)
+
+**flint_value.c** — one dynamic-value model (null/bool/i64/f64/str/array/object)
+shared by every config format, so TOML and JSON are walked with the same code.
+JSON's model was private to flint_serial.c, so anything else would have had to
+reinvent it. Includes path lookup, typed accessors that return a default rather
+than coercing silently, an encoder, deep clone, and an ITERATIVE free (a deeply
+nested config would otherwise recurse per level, and a hostile document can be
+deliberately deep).
+
+**flint_toml.c** — TOML v1.0.0: tables, arrays of tables, dotted keys, inline
+tables, arrays, all four integer forms with underscores, floats with inf/nan,
+basic/literal/multi-line strings with line-continuation folding, and the four
+date/time forms normalised to RFC 3339.
+
+**flint_yaml.c** — block mappings and sequences, the same-indent rule, flow
+collections, literal and folded block scalars with chomping, full type set,
+comments, document marker. Tags/directives/anchors/merge keys are REJECTED with
+a line and column rather than silently mis-parsed.
+
+Ten bugs found by testing, all of which had produced a WRONG TREE while still
+reporting success — the dangerous class of parser bug:
+
+- `flint_value_obj_set` grew keys and values from ONE shared capacity counter,
+  so the first insert allocated keys but not values, then wrote through NULL.
+- `_descend` stored values under the key `""`, losing every field.
+- The same function wrapped the FINAL key in a table: `a = 1` became {a:{a:1}}.
+- `_key_part` reported a dot without consuming it, breaking every dotted key.
+- `_inline_table`/`_array` were entered with the cursor still on the bracket;
+  the array case recursed until the stack died.
+- `inf`/`nan` were unreachable — the scan took `i` and `n` but not `f`.
+- `_split_kv` truncates the line at the `:` in place, so a YAML flow value was
+  read from a string that no longer contained it.
+- A YAML flow collection had no stopping point and consumed every later key.
+- `_block_scalar` consumed its body but the caller resumed past the header.
+- The YAML single-quote loop tested for the closing quote before the `''`
+  escape, so `it''s` came back as `it`.
+
+**A design note worth keeping:** keys written after a `[[table]]` header belong
+to that table until the next header. That is TOML's rule; the parser was RIGHT
+and my first test document was wrong. Worth stating, because that is exactly the
+kind of thing that gets "fixed" in the wrong place.
+
+**Method:** every one of these was found by a test that asserted on the parsed
+TREE, not by reading the code. Each parser looked plausible and produced
+confident nonsense. Write the assertion first.
+
+Gates: v1 12/12, stdlib-ai 17/17, parse-gate 104, ladder 21/21, selfhost
+byte-identical.
+
+**Still on the gap list:** timezone-aware datetime, async/event loop,
+iterators or generators, compression, a test framework with assertions and
+mocking, coverage, a linter.
