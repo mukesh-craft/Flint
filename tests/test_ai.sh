@@ -186,6 +186,26 @@ else
   echo "SKIP toml_check: flint_toml.o not built"
 fi
 
+# The YAML parser: block mappings and sequences, the same-indent rule, flow
+# collections, block scalars, quoting, typing, and the error cases.
+if [ -f flint_yaml.o ]; then
+  if $CC_BIN -O1 tests/yaml_check.c $INC $LIB flint_value.o flint_yaml.o \
+       -lm -o "$TMPD/yaml_check" 2>/dev/null; then
+    if "$TMPD/yaml_check" > "$TMPD/yaml_check.out" 2>&1; then
+      echo "PASS yaml_check"
+      pass=$((pass+1))
+    else
+      echo "FAIL yaml_check"
+      command grep -E "^FAIL" "$TMPD/yaml_check.out" | head -6
+      fail=$((fail+1))
+    fi
+  else
+    echo "SKIP yaml_check: compile failed"
+  fi
+else
+  echo "SKIP yaml_check: flint_yaml.o not built"
+fi
+
 # The utility layer reached from Flint, not just from C: sorting, binary
 # search, atomics, a mutex, an rwlock, the CSPRNG and CLI parsing.
 run util "1 9 2 -1 15 12 1 99 1 rwlock-ok 1 1 rng-ok 1 0 cli-ok" \
