@@ -267,7 +267,7 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     const char* stdLibs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o",
                              "flint_ai_opt.o", "flint_math.o", "flint_fmt.o",
                              "flint_coll.o", "flint_nn.o", "flint_util.o",
-                             "flint_value.o", "flint_toml.o",
+                             "flint_value.o", "flint_toml.o", "flint_yaml.o",
                              "flint_serial.o", "flint_crypto.o", "flint_net.o",
                              "flint_aegis.o", "flint_chan.o",
                              "ffi_helper.o"};
@@ -4759,6 +4759,7 @@ public:
         add("flint_value_free",     voidTy, {tPtr}, false);
         add("flint_value_clone",    tPtr,    {tPtr}, false);
         add("flint_toml_parse",     tPtr,    {i8PtrTy}, false);
+        add("flint_yaml_parse",    tPtr,    {i8PtrTy}, false);
 
         // BLAS backend introspection -- lets Flint report which matmul path is
         // live, which matters because it differs per build.
