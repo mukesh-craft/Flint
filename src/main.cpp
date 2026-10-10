@@ -267,6 +267,7 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     const char* stdLibs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o",
                              "flint_ai_opt.o", "flint_math.o", "flint_fmt.o",
                              "flint_coll.o", "flint_nn.o", "flint_util.o",
+                             "flint_value.o", "flint_toml.o",
                              "flint_serial.o", "flint_crypto.o", "flint_net.o",
                              "flint_aegis.o", "flint_chan.o",
                              "ffi_helper.o"};
@@ -4724,6 +4725,40 @@ public:
         add("flint_cli_positional", i8PtrTy, {tPtr, i64Ty}, false);
         add("flint_cli_usage",  i8PtrTy, {tPtr}, false);
         add("flint_cli_free",   voidTy, {tPtr}, false);
+
+        // ──────────────────────────────────────────────────────
+        // DYNAMIC VALUES + TOML (flint_value.o / flint_toml.o).
+        // One value model shared by every config/interchange format, so a TOML
+        // and a JSON document are walked with the same code.
+        // ──────────────────────────────────────────────────────
+        add("flint_value_null",  tPtr, {}, false);
+        add("flint_value_bool",  tPtr, {i64Ty}, false);
+        add("flint_value_i64",   tPtr, {i64Ty}, false);
+        add("flint_value_f64",   tPtr, {dbl}, false);
+        add("flint_value_str",   tPtr, {i8PtrTy}, false);
+        add("flint_value_arr",   tPtr, {}, false);
+        add("flint_value_obj",   tPtr, {}, false);
+        add("flint_value_arr_add", voidTy, {tPtr, tPtr}, false);
+        add("flint_value_obj_set", voidTy, {tPtr, i8PtrTy, tPtr}, false);
+        add("flint_value_obj_get", tPtr,  {tPtr, i8PtrTy}, false);
+        add("flint_value_obj_has", i64Ty, {tPtr, i8PtrTy}, false);
+        add("flint_value_len",    i64Ty, {tPtr}, false);
+        add("flint_value_at",     tPtr,  {tPtr, i64Ty}, false);
+        add("flint_value_key_at", i8PtrTy, {tPtr, i64Ty}, false);
+        add("flint_value_value_at", tPtr, {tPtr, i64Ty}, false);
+        add("flint_value_as_i64",  i64Ty,  {tPtr, i64Ty}, false);
+        add("flint_value_as_f64",  dbl,    {tPtr, dbl}, false);
+        add("flint_value_as_bool", i64Ty,  {tPtr, i64Ty}, false);
+        add("flint_value_as_str",  i8PtrTy, {tPtr, i8PtrTy}, false);
+        add("flint_value_path",      tPtr,    {tPtr, i8PtrTy}, false);
+        add("flint_value_path_i64",  i64Ty,   {tPtr, i8PtrTy, i64Ty}, false);
+        add("flint_value_path_str",  i8PtrTy, {tPtr, i8PtrTy, i8PtrTy}, false);
+        add("flint_value_encode",    i8PtrTy, {tPtr, i64Ty}, false);
+        add("flint_value_to_string", i8PtrTy, {tPtr}, false);
+        add("flint_value_free_string", voidTy, {i8PtrTy}, false);
+        add("flint_value_free",     voidTy, {tPtr}, false);
+        add("flint_value_clone",    tPtr,    {tPtr}, false);
+        add("flint_toml_parse",     tPtr,    {i8PtrTy}, false);
 
         // BLAS backend introspection -- lets Flint report which matmul path is
         // live, which matters because it differs per build.
