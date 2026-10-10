@@ -2708,3 +2708,41 @@ byte-identical.
 **Still on the gap list:** timezone-aware datetime, async/event loop,
 iterators or generators, compression, a test framework with assertions and
 mocking, coverage, a linter.
+---
+
+## 2026-10-10 — Documentation accuracy, and a JIT performance gap
+
+**Docs said things that were false.** REQUIREMENTS.md documented
+`./flintc --target <triple> program.fl`; CHANGELOG.md 0.22.0 listed
+`--emit-header` and a WASM target. Verified none of the four appears in
+src/main.cpp, and README already said so correctly -- so the docs contradicted
+each other. Both corrected. This had been flagged in a review two sessions
+running; "still there" was accurate, and the fix is to make the false claim
+unrepeatable rather than re-noting it.
+
+**README now documents the eight new modules** (a Standard library section and
+a Machine learning section), each carrying the caveat that cost real debugging
+time: the printf variadic ABI, `ag_grad_id` vs `ag_track_tensor`, `ag_seed`,
+`flt_matmul_blas` as the deterministic reference, TOML's `[[table]]` rule.
+
+**Writing the docs found a real gap:** every example was compiled and run, and
+`ag_seed_scalar` — implemented in C, used by the gradient checker — was never
+registered as a builtin. It was unreachable from Flint. Now registered.
+
+**JIT matmul was 11x slower than AOT and looked fine.** `flint_blas.o` reaches
+`cblas_dgemm` through a WEAK symbol, so the BLAS path is taken only when the
+library is loaded. The AOT link line adds `-lopenblas`; the JIT never did, so
+every JIT matmul took the portable triple loop -- correct answers, no warning.
+Fixed with `dlopen(RTLD_GLOBAL)`. N=200: 517 ms -> 11 ms (AOT is 7 ms).
+`flint_blas_available()` is the tell: it returned 0 in JIT.
+
+**Lesson worth keeping:** two of these three defects (the JIT BLAS gap, the
+unregistered builtin) were INVISIBLE because the code produced correct results.
+A weak-symbol fallback and a missing registration both fail silently. When
+something is "just slow" or "should work", assert which path actually ran.
+
+**The CI note from the review is right and reproducible:** `v1_gate_check.sh`
+reports 2 failures (differential, driver) on a clean tree because the self-host
+binaries are absent. Run `bash tests/test_selfhost.sh` once first; then 12/12.
+
+Gates: v1 12/12, stdlib-ai 17/17, selfhost byte-identical, docs-check 0.
