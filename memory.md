@@ -2606,3 +2606,50 @@ f64 too -- `_binary_op` freed the broadcast shape before `_alloc` copied it
 
 Gates: v1 12/12, stdlib-ai 13/13, parse-gate 103, ladder 21/21, tutorial 8,
 sanitizers 10, docs-check 0, selfhost byte-identical.
+
+---
+
+## 2026-10-10 — f32 gradient checker + the utility layer
+
+**f32 gradient check added** (tests/gradcheck.c now covers both element types).
+It found two real bugs:
+1. `ag_sum`/`ag_mean` read `ta->data`, which is NULL for an f32 tensor — any
+   f32 tape using a reduction segfaulted.
+2. My own first f32 reference perturbed `b` AND `w[i]` in the same call,
+   measuring a two-variable derivative. Caught because the f64 pass, which had
+   been passing, started failing.
+
+**f32 needs its own tolerance and step, not a copy of the f64 numbers.** f32 has
+~7 digits: `h` must clear the single-precision noise floor (1e-2, not 1e-6) and
+the tolerance is sized to the format (~2e-3). Comparing an f32 gradient against
+an f64 reference measures the *format change*, not the gradient. Now 5/5 both
+types, agreeing to ~2e-6 — at f32's limit.
+
+**Ecosystem audit vs the standard checklist** (what was missing, now added):
+- sorting / binary search — absent; `flint_vec` was unsorted with no way to
+  order or search it
+- synchronisation — `flint_thread_create` existed with NO mutex, condvar, rwlock
+  or atomics, so threads could not protect shared state at all
+- CSPRNG — `flint_rand_f64` is a plain LCG, wrong for keys/tokens/nonces
+- CLI parsing — every program hand-rolled argv arithmetic
+- `flint_get_argv` — Flint could see one argument but never the array, so a
+  declarative parser was uncallable from Flint
+- range predicates — added both forms; the integer one matters and its absence
+  pushed every call site into a type error
+
+**Still missing** (next in order of how much they block adoption): YAML/TOML
+parsers, Unicode/UTF-8 handling, timezone-aware datetime, async/event loop,
+iterators or generators, compression, a test framework with assertions and
+mocking, a coverage tool, and a linter. Tooling present but thin: `flint-fmt`,
+`flint-lsp`, `flint-doc`, registry-based `flint.toml` — no unit-test runner,
+no coverage, no LSP tests. The AI layers are now registered; the f32 forward
+path is verified and the f32 tape is verified.
+
+**Debugging note:** the util module failed to compile with a single-character
+typo (`s[4;` instead of `s[4];`) that produced an error 200 lines away, and
+binary-searching the file kept "passing" because truncation cut mid-function.
+When the error is on a line that is provably valid in isolation, suspect
+corruption EARLIER in the file rather than bisecting forward.
+
+Gates: v1 12/12, stdlib-ai 15/15, parse-gate 104, fixpoint 104, lexdiff 103,
+ladder 21/21, tutorial 8, sanitizers 10, docs-check 0, selfhost byte-identical.
