@@ -5,7 +5,7 @@ server. Native binaries via LLVM, Rust-like ownership plus generational
 leases, Python-style ergonomics, batteries-included tooling.
 
 > Every command below was executed against this tree on Termux AArch64
-> on 2026-09-24. Anything not verified is marked as such — see Status.
+> on 2026-10-10. Anything not verified is marked as such — see Status.
 
 ## Quick Start
 
@@ -29,12 +29,18 @@ bash build.sh
 New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 (`bash tests/run_tutorial.sh ./flintc` checks your answers — 8/8 green).
 
-## Status (2026-09-24, verified on Termux AArch64)
+## Status (2026-10-10, verified on Termux AArch64)
 
-- **V1 gate 17/17 green** (`bash tests/v1_gate_check.sh ./flintc --full`):
+- **V1 gate 12/12 green** (`bash tests/v1_gate_check.sh ./flintc`):
   self-host bootstrap A/B/C + stable promotion (fixed point
-  byte-identical), stage-3 ladder 21/21, tutorial 8/8, differential,
-  sanitizers, opt-identity, registry, driver — see `memory.md`
+  byte-identical), stage-3 ladder 21/21, tutorial 8/8, parse-gate 104,
+  sanitizers 10, opt-identity 11, differential, driver, registry, aegis,
+  stdlib — see `memory.md`
+- **Standard library + AI gate 17/17 green**
+  (`bash tests/test_ai.sh ./flintc`): BLAS correctness on both paths,
+  gradient check (f64 + f32 vs finite differences), TOML, YAML, tensor,
+  autograd, optimizers, per-rule gradients, a trained 2-layer net, XOR, NN
+  layers, f32, the utility layer, formatting, and the standard library
 - **Self-hosted** — lexer/parser/emitter are Flint programs
   (`stage1-3/*.fl`); C++ `flintc` bootstraps them, then they compile
   themselves
@@ -184,6 +190,96 @@ fn add(a: i64, b: i64) -> i64 {
 # import "calc"   (auto-fetches on first build; flint.lock pins revisions)
 # flintc --offline ...             # never touch the network
 
+## Machine learning
+
+Tensors, a tape-based autograd, optimizers and layers, in f64 **or f32**.
+All reachable from Flint. Verified by `bash tests/test_ai.sh ./flintc`.
+
+### Tensors — `flt_*`
+
+`flt_create` / `flt_create_1d` / `_2d` / `_3d` / `_4d` / `_5d` ·
+`flt_zeros_like` `flt_clone` `flt_destroy` · `flt_size` `flt_ndim` `flt_shape`
+`flt_get` `flt_set` `flt_fill` `flt_copy` `flt_set_all` `flt_get_at`
+`flt_set_at` `flt_data` `flt_randn` `flt_uniform`.
+
+```flint
+a = flt_create_2d(2, 3)          # f64
+b = flt_create_f32_2d(2, 3)       # f32: half the memory, ~2x the matmul
+print(flt_bytes(a))              # 48
+print(flt_bytes(b))              # 24
+```
+
+Elementwise `flt_neg exp log sqrt pow relu sigmoid tanh` ·
+`flt_add_tt sub_tt mul_tt div_tt` · `flt_matmul` `flt_matmul_blas` ·
+`flt_sum` `flt_mean` `flt_reshape` `flt_transpose` · in-place
+`flt_relu_inplace` `flt_sigmoid_inplace` `flt_tanh_inplace`.
+
+> `flt_matmul_blas` is the **deterministic reference** (portable loop, never
+> BLAS). It is what the gate compares the live BLAS path against, and it returns
+> the same answer with no floating-point variance. `flt_matmul` is the fast one.
+
+### f32
+
+`flt_to_f32` / `flt_to_f64` / `flt_is_f32` convert. A tensor is one of the two
+widthes; `flt_data` returns NULL for an f32 tensor so a `double*` cannot be
+forced onto f32 storage (`flt_data_f32` is the f32 accessor).
+
+Measured on this device, N=500: **f64 41.7 ms → f32 22.3 ms (1.86×)**, and
+exactly half the footprint. f32 **computes in double and narrows on store**, so
+`exp`/`tanh`/`sigmoid` keep double precision in the last place it matters.
+Mixed-width binary ops promote to f64.
+
+### Autograd — `ag_*`
+
+`ag_init` `ag_cleanup` `ag_track_tensor` `ag_grad_id` `ag_grad_at`
+`ag_grad_len` `ag_zero_grad` · `ag_matmul` `ag_add` `ag_sub` `ag_mul` `ag_sum`
+`ag_mean` `ag_relu` `ag_sigmoid` `ag_tanh` `ag_exp` `ag_log` `ag_neg` ·
+`ag_backward` `ag_seed` `ag_seed_scalar`.
+
+```flint
+ag_init()
+x = flt_create_1d(3)
+xid = ag_track_tensor(x)
+a = ag_mul(x, x)
+ag_seed_scalar(ag_grad_id(a), 1.0)
+ag_backward(ag_grad_id(a))
+print(ag_grad_at(xid, 0))    # 0 (d(x*x)/dx at 0)
+```
+
+> Two things to know. `ag_grad_id(a)` names the node the op recorded —
+> re-tracking with `ag_track_tensor` allocates a *second* id and orphans the
+> node, so `ag_backward` finds nothing. And a loss gradient that is not itself
+> on the tape must be attached with `ag_seed`, or `ag_backward` begins at ones
+> and trains a fabricated objective.
+
+### Layers — `flint_nn.c`
+
+`flt_conv2d` (NCHW, stride, padding, optional bias) · `flt_maxpool2d`
+`flt_avgpool2d` `flt_global_avgpool` · `flt_batchnorm` `flt_layer_norm`
+`flt_rms_norm` · `flt_softmax` `flt_dropout` `flt_l2_reg` `flt_flatten` ·
+`flt_xavier_uniform` `flt_he_uniform`.
+
+### Optimizers and loss
+
+`adam_create` `_add_param` `_step` `_destroy` · `sgd_create` (with momentum)
+`_add_param` `_step` `_destroy` · `mse_loss` `mse_loss_grad`.
+
+### Verified models
+
+- `tests/nn_two_layer.fl` — trains on `f(x) = 2x+1`; predicts exactly
+  **3, 5, 7, 9** (an exact fit, so the run is checkable by hand rather than
+  "the loss went down")
+- `tests/xor_mlp.fl` — **XOR solved**, loss 0.148 → 1e-25. The standard check
+  that a network is more than a perceptron
+- `tests/gradcheck.c` — analytic gradients vs **central finite differences**,
+  for f64 and f32. This is what proves the tape is right: a gradient can pass
+  every type and shape check and still be numerically wrong. It found a 2× error
+  in mul, a 4× double-count from processing a repeated input twice, and a seed
+  that was silently discarded.
+
+> Not present: model serialisation. Saving weights means writing the tensor
+> yourself.
+
 ## Build
 
 ```bash
@@ -297,6 +393,108 @@ variable annotations, and channel method-call syntax — use the plain
 `flint_chan_*` functions above. Aegis leases stay memory-safe across
 threads (generational checks) but do NOT prevent data races — use
 channels for handoff.
+
+## Standard library
+
+13 runtime modules, ~12,900 lines of C, all reachable from Flint as `flint_*`
+builtins. Verified by `bash tests/test_ai.sh ./flintc` (17/17) and the
+`stdlib` gate in `tests/v1_gate_check.sh`.
+
+### Maths and statistics — `flint_math.c`
+
+`sin cos tan asin acos atan atan2 sinh cosh tanh sqrt exp log log10 pow`
+`cbrt expm1 log1p log2 hypot copysign` · `fmod trunc signum ldexp frexp`
+`ulp nextafter` · `isfinite isinf isnan isclose` · `erf erfc gamma lgamma` ·
+constants `pi e tau inf nan`.
+
+```flint
+print(flint_factorial(10))      # 3628800
+print(flint_gcd_i64(12, 18))     # 6
+print(flint_degrees(flint_pi()))  # 180
+print(flint_gamma(5.0))         # 24
+```
+
+Descriptive statistics take a `vec` of i64 and return a scalar:
+`mean median min max mode percentile` · `variance pvariance stdev pstdev`
+`geometric_mean harmonic_mean skewness kurtosis covariance correlation`
+`linear_regression`. `flint_accum_*` is a Welford streaming accumulator for
+statistics that arrive one value at a time.
+
+### Formatting — `flint_fmt.c`
+
+`flint_format` is printf-style: flags `- + space 0`, width, precision, `*`,
+and `%d %i %u %f %F %e %E %g %G %s %c %p %%`.
+
+```flint
+r = flint_formatd2("n=%d x=%.2f", 3.5, 42)
+print(r)   # n=42 x=3.50
+flint_str_free(r)
+```
+
+> **Note:** an LLVM variadic function needs `isVarArg` plus every call site
+> lowered to the platform's variadic ABI, which the compiler does not do. Rather
+> than register a fixed `(char*)` signature and read the arguments after the
+> format string as **garbage**, the compiler exposes fixed-arity shims
+> (`flint_format1..4`, `flint_formatd1..4`, `flint_formats1..3`) whose
+> signatures the verifier checks.
+
+### Collections — `flint_coll.c` (new) and `runtime.c`
+
+Existing: `vec` (dynamic array), `sb` (string builder), `map`, `chan`.
+
+Added: `flint_sort_i64` / `flint_sort_desc_i64` (quicksort with median-of-three,
+depth-limited, heapsort fallback) · `flint_sort_i64_stable` (merge sort) ·
+`flint_bsearch_i64` · `flint_set_*` (open-addressed hash set) ·
+`flint_heap_*` (binary min-heap / priority queue) · `flint_deque_*` (ring
+buffer, O(1) both ends).
+
+### Synchronisation and randomness — `flint_util.c`
+
+`flint_mutex_*` (plain and recursive) · `flint_cond_*` · `flint_rwlock_*` ·
+`flint_atomic_*` (get/set/add/sub/CAS on a heap cell, so a counter cannot be
+copied by value and lose the lock) · `flint_rng_*` (xoshiro256\*\*, seeded from
+`/dev/urandom`).
+
+> `flint_rand_f64` is a plain LCG: fine for jitter, **wrong for keys, tokens
+> and nonces**. `flint_rng_below` rejection-samples, because `u64 % n` biases
+> toward low values.
+
+### Command-line parsing — `flint_util.c`
+
+`flint_cli_new` / `_flag` / `_opt` / `_parse` / `_get_str` / `_get_i64` /
+`_has` / `_positional` / `_usage`. Supports `--name=v` and `--name v`, bundled
+short flags, and `--`. An **unknown option is an error**, not a silent default —
+a typo must not become a default.
+
+```flint
+cli: ptr = flint_cli_new("prog")
+flint_cli_flag(cli, "verbose", 118, 0)     # 'v'
+flint_cli_opt(cli, "output", 111, 0)       # 'o'
+flint_cli_parse(cli, flint_arg_count(), flint_get_argv())
+print(flint_cli_get_str(cli, "output"))
+```
+
+### Config formats — `flint_value.c`, `flint_toml.c`, `flint_yaml.c`
+
+One dynamic-value model (`flint_value_*`) shared by every format, so TOML and
+JSON are walked with the same code: `flint_value_obj_get`, `flint_value_path`
+(`"server.http.port"`), typed accessors that return a default on a type
+mismatch rather than coercing, `flint_value_encode`, `flint_value_clone`,
+`flint_value_free`.
+
+`flint_toml_parse` — TOML v1.0.0: tables, arrays of tables, dotted keys, inline
+tables, all four integer forms with underscores, floats with `inf`/`nan`,
+basic/literal/multi-line strings with line-continuation folding, and the four
+date/time forms normalised to RFC 3339.
+
+`flint_yaml_parse` — block mappings and sequences (including a sequence at the
+same indent as its key), flow collections, literal `|` and folded `>` block
+scalars with chomping, plain/quoted scalars, comments, document marker. Tags,
+directives, anchors and merge keys are **rejected with a line and column**
+rather than silently mis-parsed.
+
+> Keys written after a `[[table]]` header belong to that table until the next
+> header. That is TOML's rule, and it surprises people.
 
 ## Libraries and WASM (not available)
 

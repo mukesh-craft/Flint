@@ -15,8 +15,11 @@ Windows notes: link programs with `-lws2_32 -lpthread` (added automatically by
 `flintc` for Windows targets); `flint_regex_*` return err-flagged stubs
 (no POSIX engine); MSVC needs the remaining thread shim (PORT notes in code).
 
-Cross-compilation: `./flintc --target <triple> program.fl -o program.o`
-(e.g. `--target x86_64-unknown-linux-gnu` on ARM). JIT always runs host code.
+**Cross-compilation is not implemented.** There is no `--target` flag, so the
+previously documented `./flintc --target <triple> program.fl -o program.o` does
+not work. `flintc` targets the host triple only, which is why the table above
+records a Windows build as reached by cross-linking from ARM with an external
+toolchain rather than by a compiler flag. See README.md "Not implemented".
 
 ## Requirements
 

@@ -4463,6 +4463,10 @@ public:
         add("ag_grad_at",     f64Ty, {i64Ty, i64Ty}, false);
         add("ag_grad_len",    i64Ty, {i64Ty}, false);
         add("ag_seed",        voidTy, {tPtr}, false);
+        // ag_seed_scalar is the common case (a scalar loss differentiated with
+        // d/dloss = 1) and was implemented in C but never registered, so it was
+        // unreachable from Flint.
+        add("ag_seed_scalar", voidTy, {i64Ty, llvm::Type::getDoubleTy(*ctx)}, false);
         add("ag_zero_grad",   voidTy, {i64Ty}, false);
         add("ag_matmul",      tPtr, {tPtr, tPtr}, false);
         add("ag_add",         tPtr, {tPtr, tPtr}, false);
