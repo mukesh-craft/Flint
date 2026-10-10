@@ -62,6 +62,14 @@ int64_t flint_is_finite(double x);
 int64_t flint_is_inf(double x);
 int64_t flint_is_nan(double x);
 int64_t flint_is_close(double a, double b, double rel_tol, double abs_tol);
+// Inclusive integer range test. The idiom needed after any random draw, and
+// for validating parsed input -- returning i64 from a comparison invites an
+// accidental use of the value rather than the predicate.
+int64_t flint_is_in_range(double v, double lo, double hi);
+// Integer form. Most range checks are on a count, an index or a random draw,
+// all of which are i64 -- and routing those through the double form was a type
+// error at every call site.
+int64_t flint_i64_in_range(int64_t v, int64_t lo, int64_t hi);
 double flint_ulp(double x);
 double flint_nextafter(double x, double y);
 

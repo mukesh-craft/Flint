@@ -138,11 +138,37 @@ run format "n=42 x=3.50 sum=99 name=flint n=7" tests/t_format.fl
 run nn_layers "2 2 6 8 12 14 3.5 5.5 11.5 13.5 6 8 14 16 8.5 0.333333 -1.34164 9 1 1 1" \
     tests/t_nn_layers.fl
 
+# The utility layer: sorting (including the pathological inputs), binary
+# search, atomics, mutex/rwlock/condvar, the CSPRNG, and CLI parsing. C level,
+# because these are runtime primitives rather than codegen behaviour.
+if [ -f flint_util.o ]; then
+  if $CC_BIN -O2 tests/util_check.c $INC $LIB flint_util.o runtime.o flint_aegis.o \
+       -lm -o "$TMPD/util_check" 2>/dev/null; then
+    if "$TMPD/util_check" > "$TMPD/util_check.out" 2>&1; then
+      echo "PASS util_check"
+      pass=$((pass+1))
+    else
+      echo "FAIL util_check"
+      command grep -E "^FAIL" "$TMPD/util_check.out" | head -6
+      fail=$((fail+1))
+    fi
+  else
+    echo "SKIP util_check: compile failed"
+  fi
+else
+  echo "SKIP util_check: flint_util.o not built"
+fi
+
 # f32 tensors: half the memory and ~2x the matmul speed. Values are small
 # integers so every product is exact in single precision and the expected
 # output is checkable by hand rather than against a tolerance.
 run f32 "1 24 1 2 2 58 64 139 154 58 154 1 2 12 1 0.731059 21 3.5 0 6 1 6 0 4000000 8000000" \
     tests/t_f32.fl
+
+# The utility layer reached from Flint, not just from C: sorting, binary
+# search, atomics, a mutex, an rwlock, the CSPRNG and CLI parsing.
+run util "1 9 2 -1 15 12 1 99 1 rwlock-ok 1 1 rng-ok 1 0 cli-ok" \
+    tests/t_util.fl
 
 echo "stdlib-ai: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
