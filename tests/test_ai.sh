@@ -165,6 +165,27 @@ fi
 run f32 "1 24 1 2 2 58 64 139 154 58 154 1 2 12 1 0.731059 21 3.5 0 6 1 6 0 4000000 8000000" \
     tests/t_f32.fl
 
+# The TOML parser, against every construct a config file uses plus five error
+# cases. C level: a parse bug should be reported as a parse failure, not as a
+# confusing value-model result.
+if [ -f flint_toml.o ]; then
+  if $CC_BIN -O1 tests/toml_check.c $INC $LIB flint_value.o flint_toml.o \
+       -lm -o "$TMPD/toml_check" 2>/dev/null; then
+    if "$TMPD/toml_check" > "$TMPD/toml_check.out" 2>&1; then
+      echo "PASS toml_check"
+      pass=$((pass+1))
+    else
+      echo "FAIL toml_check"
+      command grep -E "^FAIL" "$TMPD/toml_check.out" | head -6
+      fail=$((fail+1))
+    fi
+  else
+    echo "SKIP toml_check: compile failed"
+  fi
+else
+  echo "SKIP toml_check: flint_toml.o not built"
+fi
+
 # The utility layer reached from Flint, not just from C: sorting, binary
 # search, atomics, a mutex, an rwlock, the CSPRNG and CLI parsing.
 run util "1 9 2 -1 15 12 1 99 1 rwlock-ok 1 1 rng-ok 1 0 cli-ok" \
