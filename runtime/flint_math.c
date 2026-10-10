@@ -128,6 +128,17 @@ int64_t flint_is_close(double a, double b, double rel_tol, double abs_tol) {
     return diff <= rel_tol * scale ? 1 : 0;
 }
 
+int64_t flint_is_in_range(double v, double lo, double hi) {
+    // Reject NaN explicitly: every comparison with NaN is false, so a naive
+    // !(v < lo || v > hi) would wrongly accept it.
+    if (isnan(v)) return 0;
+    return (v >= lo && v <= hi) ? 1 : 0;
+}
+
+int64_t flint_i64_in_range(int64_t v, int64_t lo, int64_t hi) {
+    return (v >= lo && v <= hi) ? 1 : 0;
+}
+
 double flint_ulp(double x) {
     // Next representable double away from zero; DBL_EPSILON is the gap at 1.0.
     if (isnan(x) || isinf(x)) return x;

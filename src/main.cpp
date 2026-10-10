@@ -266,7 +266,7 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     struct stat st;
     const char* stdLibs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o",
                              "flint_ai_opt.o", "flint_math.o", "flint_fmt.o",
-                             "flint_coll.o", "flint_nn.o",
+                             "flint_coll.o", "flint_nn.o", "flint_util.o",
                              "flint_serial.o", "flint_crypto.o", "flint_net.o",
                              "flint_aegis.o", "flint_chan.o",
                              "ffi_helper.o"};
@@ -402,7 +402,8 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
     };
     if (stat("runtime.o", &st) == 0 && !loadOne("runtime.o", true)) return false;
     const char* aiObjs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o", "flint_ai_opt.o"};
-    const char* libObjs[] = {"flint_math.o", "flint_fmt.o", "flint_coll.o", "flint_nn.o"};
+    const char* libObjs[] = {"flint_math.o", "flint_fmt.o", "flint_coll.o",
+                            "flint_nn.o", "flint_util.o"};
     for (auto* objName : libObjs)
         if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
     for (auto* objName : aiObjs)
@@ -4522,6 +4523,8 @@ public:
         add("flint_is_inf",    i64Ty, {dbl}, false);
         add("flint_is_nan",    i64Ty, {dbl}, false);
         add("flint_is_close",  i64Ty, {dbl, dbl, dbl, dbl}, false);
+        add("flint_is_in_range", i64Ty, {dbl, dbl, dbl}, false);
+        add("flint_i64_in_range", i64Ty, {i64Ty, i64Ty, i64Ty}, false);
         add("flint_ulp",       dbl, {dbl}, false);
         add("flint_nextafter", dbl, {dbl, dbl}, false);
         add("flint_erf",    dbl, {dbl}, false);
@@ -4662,6 +4665,65 @@ public:
         add("farena_reset",      voidTy, {tPtr}, false);
         add("farena_init",       tPtr, {}, false);
         add("fcheckpoint_init",  voidTy, {}, false);
+
+        // ──────────────────────────────────────────────────────
+        // UTILITY (flint_util.o) — sorting, binary search, synchronisation,
+        // a CSPRNG, and CLI parsing. flint_vec was unsorted with no way to
+        // order or search it, flint_thread_create existed with no way to
+        // protect shared state, and every program hand-rolled argv.
+        // ──────────────────────────────────────────────────────
+        add("flint_sort_i64",     i64Ty, {coll}, false);
+        add("flint_sort_desc_i64", i64Ty, {coll}, false);
+        add("flint_bsearch_i64",  i64Ty, {coll, i64Ty}, false);
+        add("flint_bsearch_desc_i64", i64Ty, {coll, i64Ty}, false);
+
+        add("flint_mutex_new",   tPtr, {}, false);
+        add("flint_mutex_lock",  i64Ty, {tPtr}, false);
+        add("flint_mutex_trylock", i64Ty, {tPtr}, false);
+        add("flint_mutex_unlock", i64Ty, {tPtr}, false);
+        add("flint_mutex_free",  voidTy, {tPtr}, false);
+
+        add("flint_cond_new",      tPtr, {}, false);
+        add("flint_cond_wait",     i64Ty, {tPtr, tPtr}, false);
+        add("flint_cond_signal",   i64Ty, {tPtr}, false);
+        add("flint_cond_broadcast", i64Ty, {tPtr}, false);
+        add("flint_cond_free",     voidTy, {tPtr}, false);
+
+        add("flint_rwlock_new",    tPtr, {}, false);
+        add("flint_rwlock_rdlock", i64Ty, {tPtr}, false);
+        add("flint_rwlock_wrlock", i64Ty, {tPtr}, false);
+        add("flint_rwlock_unlock", i64Ty, {tPtr}, false);
+        add("flint_rwlock_free",   voidTy, {tPtr}, false);
+
+        add("flint_atomic_new", i64Ty, {i64Ty}, false);
+        add("flint_atomic_get", i64Ty, {tPtr}, false);
+        add("flint_atomic_set", i64Ty, {tPtr, i64Ty}, false);
+        add("flint_atomic_add", i64Ty, {tPtr, i64Ty}, false);
+        add("flint_atomic_sub", i64Ty, {tPtr, i64Ty}, false);
+        add("flint_atomic_cas", i64Ty, {tPtr, i64Ty, i64Ty}, false);
+        add("flint_atomic_free", voidTy, {tPtr}, false);
+
+        // flint_rand_f64 is a plain LCG: fine for jitter, wrong for keys,
+        // tokens and nonces. This is xoshiro256** seeded from the OS.
+        add("flint_rng_seed_from_os", tPtr, {}, false);
+        add("flint_rng_below",   i64Ty, {tPtr, i64Ty}, false);
+        add("flint_rng_i64_range", i64Ty, {tPtr, i64Ty, i64Ty}, false);
+        add("flint_rng_free",   voidTy, {tPtr}, false);
+
+        add("flint_get_argv", i8PtrTy, {}, false);
+        add("flint_cli_new",    tPtr, {i8PtrTy}, false);
+        add("flint_cli_flag",   voidTy, {tPtr, i8PtrTy, i64Ty, i64Ty}, false);
+        add("flint_cli_opt",    voidTy, {tPtr, i8PtrTy, i64Ty, i64Ty}, false);
+        add("flint_cli_short_for", i8Ty, {tPtr, i8PtrTy}, false);
+        add("flint_cli_parse",  i64Ty, {tPtr, i64Ty, llvm::PointerType::get(i8PtrTy, 0)}, false);
+        add("flint_cli_ok",     i64Ty, {tPtr}, false);
+        add("flint_cli_error",  i8PtrTy, {tPtr}, false);
+        add("flint_cli_get_str", i8PtrTy, {tPtr, i8PtrTy}, false);
+        add("flint_cli_get_i64", i64Ty, {tPtr, i8PtrTy}, false);
+        add("flint_cli_has",    i64Ty, {tPtr, i8PtrTy}, false);
+        add("flint_cli_positional", i8PtrTy, {tPtr, i64Ty}, false);
+        add("flint_cli_usage",  i8PtrTy, {tPtr}, false);
+        add("flint_cli_free",   voidTy, {tPtr}, false);
 
         // BLAS backend introspection -- lets Flint report which matmul path is
         // live, which matters because it differs per build.

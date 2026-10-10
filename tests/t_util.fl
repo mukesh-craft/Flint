@@ -1,0 +1,76 @@
+# The utility layer reached from Flint: sorting, binary search, atomics, a
+# mutex, the CSPRNG and CLI parsing.
+
+fn main() -> i64 {
+    # ---- sort a vector
+    v = flint_vec_new()
+    flint_vec_push(v, 5)
+    flint_vec_push(v, 3)
+    flint_vec_push(v, 9)
+    flint_vec_push(v, 1)
+    flint_sort_i64(v)
+    print(flint_vec_get(v, 0))
+    print(flint_vec_get(v, 3))
+    # want: 1 / 9
+
+    print(flint_bsearch_i64(v, 5))
+    print(flint_bsearch_i64(v, 42))
+    # want: 1 / -1
+
+    # ---- atomics
+    c: ptr = flint_atomic_new(10)
+    flint_atomic_add(c, 5)
+    print(flint_atomic_get(c))
+    flint_atomic_sub(c, 3)
+    print(flint_atomic_get(c))
+    print(flint_atomic_cas(c, 12, 99))
+    print(flint_atomic_get(c))
+    # want: 15 / 12 / 1 / 99
+
+    # ---- mutex
+    m: ptr = flint_mutex_new()
+    flint_mutex_lock(m)
+    flint_mutex_unlock(m)
+    print(flint_mutex_trylock(m))
+    flint_mutex_unlock(m)
+    flint_mutex_free(m)
+    # want: 1
+
+    # ---- rwlock
+    rw: ptr = flint_rwlock_new()
+    flint_rwlock_rdlock(rw)
+    flint_rwlock_unlock(rw)
+    flint_rwlock_wrlock(rw)
+    flint_rwlock_unlock(rw)
+    flint_rwlock_free(rw)
+    flint_println("rwlock-ok")
+    # want: rwlock-ok
+
+    # ---- CSPRNG: seeded from the OS, so two streams must differ
+    r1: ptr = flint_rng_seed_from_os()
+    r2: ptr = flint_rng_seed_from_os()
+    ra = flint_rng_below(r1, 10)
+    rb = flint_rng_below(r2, 10)
+    # OS-seeded, so the values differ every run: assert the property, not the
+    # numbers, or the gate would be flaky.
+    print(flint_i64_in_range(ra, 0, 9))
+    print(flint_i64_in_range(rb, 0, 9))
+    flint_println("rng-ok")
+    # want: 1 1 rng-ok
+
+    # ---- CLI parsing over this program's own argv
+    cli: ptr = flint_cli_new("t_util")
+    flint_cli_flag(cli, "verbose", 118, 0)
+    flint_cli_opt(cli, "output", 111, 0)
+    rc = flint_cli_parse(cli, flint_arg_count(), flint_get_argv())
+    print(flint_cli_ok(cli))
+    print(flint_cli_has(cli, "verbose"))
+    flint_println("cli-ok")
+    # want: 1 / 0 / cli-ok  (no --verbose was passed)
+
+    flint_cli_free(cli)
+    flint_rng_free(r1)
+    flint_rng_free(r2)
+    flint_atomic_free(c)
+    0
+}

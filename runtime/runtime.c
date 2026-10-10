@@ -122,6 +122,12 @@ char* flint_get_arg(int64_t i) {
     return flint_g_argv[i];
 }
 
+// The whole argv as a char**, so a declarative CLI parser can consume it.
+// Without this, flint_cli_parse could not be called from Flint at all: the
+// program could see one argument at a time but never the array the parser
+// needs, which is why every CLI program hand-rolled index arithmetic.
+char** flint_get_argv(void) { return flint_g_argv; }
+
 char* flint_str_concat(const char* a, const char* b) {
     flint_aegis_check_live((void*)a, "str_concat");
     flint_aegis_check_live((void*)b, "str_concat");

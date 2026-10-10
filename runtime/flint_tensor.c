@@ -1397,8 +1397,10 @@ void* ag_sum(void* a) {
     int64_t sz = ta->size;
     void* out = flt_create_1d(1);
     FlintTensor* to = _as_tensor(out);
+    // Read through flt_get: ta->data is NULL for an f32 tensor, and
+    // accumulating through the widening accessor is exact.
     double total = 0.0;
-    for (int64_t i = 0; i < sz; i++) total += ta->data[i];
+    for (int64_t i = 0; i < sz; i++) total += flt_get(ta, i);
     to->data[0] = total;
     if (ta->grad_id >= 0) {
         to->grad_id = ag_next_id++;
@@ -1418,7 +1420,7 @@ void* ag_mean(void* a) {
     void* out = flt_create_1d(1);
     FlintTensor* to = _as_tensor(out);
     double total = 0.0;
-    for (int64_t i = 0; i < ta->size; i++) total += ta->data[i];
+    for (int64_t i = 0; i < ta->size; i++) total += flt_get(ta, i);
     to->data[0] = total / (double)sz;
     if (ta->grad_id >= 0) {
         to->grad_id = ag_next_id++;
