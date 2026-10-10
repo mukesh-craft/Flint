@@ -402,6 +402,31 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
         return true;
     };
     if (stat("runtime.o", &st) == 0 && !loadOne("runtime.o", true)) return false;
+    // OpenBLAS for the JIT path too. flint_blas.o reaches cblas_dgemm through a
+    // WEAK symbol, so unless the library itself is loaded the probe resolves to
+    // NULL and every matmul silently takes the portable triple loop -- which is
+    // why JIT matmul was ~11x slower than the AOT path while looking correct.
+    {
+        const char* blasLib = nullptr;
+        char cand[512];
+        const char* pfx = getenv("PREFIX");
+        if (pfx) {
+            snprintf(cand, sizeof cand, "%s/lib/libopenblas.so", pfx);
+            if (stat(cand, &st) == 0) blasLib = cand;
+        }
+        if (!blasLib) {
+            const char* named[] = { "libopenblas.so", "libopenblas.so.0", nullptr };
+            for (int i = 0; named[i] && !blasLib; i++)
+                if (stat(named[i], &st) == 0) blasLib = named[i];
+        }
+        if (blasLib) {
+            // Loaded with plain dlopen rather than through the JIT: LLJIT's
+            // addObjectFile takes relocatable objects, and cblas_dgemm is a WEAK
+            // reference that only resolves if the shared library is loaded.
+            void* h = dlopen(blasLib, RTLD_NOW | RTLD_GLOBAL);
+            (void)h;   // non-fatal: matmul falls back to the portable loop
+        }
+    }
     const char* aiObjs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o", "flint_ai_opt.o"};
     const char* libObjs[] = {"flint_math.o", "flint_fmt.o", "flint_coll.o",
                             "flint_nn.o", "flint_util.o"};

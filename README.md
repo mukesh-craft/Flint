@@ -218,6 +218,13 @@ Elementwise `flt_neg exp log sqrt pow relu sigmoid tanh` ·
 > BLAS). It is what the gate compares the live BLAS path against, and it returns
 > the same answer with no floating-point variance. `flt_matmul` is the fast one.
 
+> `flt_blas_available()` and `flt_blas_backend()` report which path is live.
+> Both AOT and JIT use OpenBLAS when it is installed. (JIT did not, for a
+> while: `flint_blas.o` reaches `cblas_dgemm` through a weak symbol, and the JIT
+> never loaded the library, so every matmul silently took the portable loop —
+> correct answers, ~11x slower. `flint_blas_available()` returning 0 in JIT mode
+> is the tell.)
+
 ### f32
 
 `flt_to_f32` / `flt_to_f64` / `flt_is_f32` convert. A tensor is one of the two
