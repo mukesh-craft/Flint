@@ -25,7 +25,7 @@ Tier rules are adapted from the Rust target-tier policy (see memory.md
 | 2 | macOS (Apple silicon + Intel) | 🟡 builds via CI | CI `macos-15` job builds; **promotion to T1 needs a full-gate run there** (smoke/tutorial/lexdiff/parse/emit/differential), not just a build. Not runnable from this device. Deps: Xcode CLT + `brew install llvm` (`REQUIREMENTS.md`). |
 | 3 | Windows x86_64 (MinGW / LLVM-MinGW) | 🟡 cross-link proven | v0.20: all 8 runtime files + `src/flint_os.cpp` compile for x86_64-windows; a real `hello.exe` (COFF-x86-64) was cross-linked from ARM. `flint_regex_*` are err-flagged stubs (no POSIX engine) — the named T3 gap. Promotion to T2 needs a fully-green native CI run. Link needs `-lws2_32 -lpthread` (added automatically for Windows targets). |
 | 3 | Windows (MSVC native) | 📋 blocked | Needs the native thread shim (`PORT` notes in code); pthreads path only covers MinGW. |
-| 3 | WASM/WASI (`wasm32-unknown-unknown` / `wasm32-wasi`) | ❌ not available | No `--target` flag exists (`README.md:301-306`); the module triple is hardcoded to the Android host (`src/main.cpp:3736`), so **WASM objects cannot be emitted today** — the earlier "objects emit" premise no longer holds in this tree. Full execution additionally needs: a WASI sysroot + libc, `_start` linkage, and a runner (`wasmtime`/`wasmer`/`node`). None are vendored (policy: never vendor SDKs). See "WASI hello probe" below. |
+| 3 | WASM/WASI (`wasm32-unknown-unknown` / `wasm32-wasi`) | 🟡 emit works, execution blocked | `--target <triple>` now exists (2026-10-17): modules emit with the target's canonical triple + datalayout (`tests/test_target.sh`), including real WASM object files. Execution additionally needs: a WASI sysroot + libc + crt1.o (absent on device, policy: never vendor SDKs), `_start` linkage, and a runner (`node`/`wasmtime`). See "WASI hello probe". |
 
 The human-readable install table per OS lives in `REQUIREMENTS.md`
 ("Platform Support", "Required Packages"); this file is the normative
@@ -40,9 +40,10 @@ tier definition, that file is the install how-to.
    green (build + smoke + registry at minimum), publish the result;
    keep MSVC at T3 until the thread shim lands, then promote on the
    same rule.
-3. **WASM T3→T2:** needs compiler work first — a `--target` flag (or
-   equivalent triple control), `_start` + libc linkage, then one WASI
-   hello executing end-to-end under a runner, plus `--target`
+3. **WASM T3→T2:** `--target` shipped (2026-10-17, emit stage, canonical
+   triple+datalayout verified; objects emit). Still needed: `_start` +
+   WASI sysroot/libc linkage, then one WASI hello executing end-to-end
+   under a runner, plus `--target`
    execution tests per triple. The exact missing pieces and the
    commands that would run elsewhere are recorded below.
 
@@ -80,7 +81,7 @@ TMPD="$_TMPBASE/slipstream/<gate>"
   `$HOME/.cache/flintc` is still shared — after any killed run,
   `rm -rf ~/.cache/flintc` before retrying.
 
-## WASI hello probe (2026-10-01 — execution `[Unverified]`)
+## WASI hello probe (2026-10-01 — execution `[Unverified]`; 2026-10-17 update below)
 
 Attempted: emit a `print("hello from wasi")` program and link it with
 `_start` for a WASI target. Result: stopped at the FIRST missing
@@ -102,6 +103,18 @@ piece — the compiler cannot target WASM at all:
    `cannot open crt1.o`, `unable to find library -lc`, and
    `cannot open .../lib/wasm32-unknown-wasi/libclang_rt.builtins.a`.
    No `wasmtime`/`wasmer` either (`command -v` rc=1 for both).
+
+**2026-10-17 — piece 1 CLOSED (`--target` shipped, emit stage).**
+`flintc file.fl --target <triple> -o out.ll|out.o` now emits
+host-independent IR with the target's canonical triple + datalayout
+(fetched from a real TargetMachine, not hand-written strings).
+Verified byte-identical to clang's own canonical datalayouts for
+x86_64-pc-linux-gnu and wasm32-unknown-wasi, and the wasm .o carries
+real WASM object magic (`006130a6d01...` checked in
+`tests/test_target.sh`, 9 checks). `--target` with no `-o` refuses
+loudly: ORC JIT is host-triple only. Piece 3 remains the blocker for
+EXECUTION (no WASI sysroot/crt1.o/-lc/runner here); everything in
+this section above piece 1 is historical record.
 
 Commands that would run elsewhere (once triple control + sysroot +
 runner exist — do NOT run here, prerequisites absent):

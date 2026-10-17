@@ -2746,3 +2746,508 @@ reports 2 failures (differential, driver) on a clean tree because the self-host
 binaries are absent. Run `bash tests/test_selfhost.sh` once first; then 12/12.
 
 Gates: v1 12/12, stdlib-ai 17/17, selfhost byte-identical, docs-check 0.
+
+## 2026-10-10 — timezone library: tested, failed, fixed
+
+**The timezone module (runtime/flint_time.c, new/untracked) was verified
+against the libc oracle before being trusted: POSIX TZ strings as an
+independent implementation of the same IANA rules (tzdb-2026e, rules
+re-checked rule-by-rule), weekly sweeps 2025-2027 plus exact transition
+edges. Baseline: 8641 checks, 143 failures. After: 8817 checks
+(tests/time_check.c), 0 failures, ASan/UBSan clean.**
+
+What the harness found (all fixed, none survived):
+1. **Fixed-date DST transitions drift up to 6 days/year.** The table said
+   "US: Mar 8 / Nov 1" every year; truth is 2nd-Sun-Mar / 1st-Sun-Nov.
+   Replaced with yearly-recurrence rules (month, nth-weekday, min-day for
+   Chile's "Sun>=2"), transition instants computed in UTC via the
+   pre-transition offset. EU rules anchor at 01:00 UTC, so London/Dublin
+   need different wall hours than Paris/Athens (01:00/02:00 vs 02:00/03:00
+   vs 03:00/04:00) — one shared EU rule was an hour off for the +0 zones.
+2. **Data bugs:** Denver fixed -7 (has US DST), Adelaide missing (has DST),
+   NZ started DST in October instead of last-Sunday-September, Guam +9
+   instead of +10, Cairo used EU dates instead of last-Fri-Apr/last-Thu-Oct,
+   Casablanca used pre-2018 EU rules (IANA: fixed +0 since 2026-09-20).
+   New zones: Havana, Santiago, Kathmandu (+5:45), Chatham (+12:45, :45
+   transitions), Lord Howe (+10:30, 30-min DST), Adelaide, Kyiv, Tehran,
+   Amman, Mexico City, Istanbul, Darwin-via-ACST.
+3. **UTC-day frame near transitions:** offsets were classified by UTC
+   day-of-year against local transition dates — wrong for hours around
+   every spring/fall instant. Now instant comparison.
+4. **Truncation, not floor, for pre-1970 epochs** in the offset path
+   (gmtime already floored; the DST path did not).
+5. **`flint_time_parse` ignored `zone`.** Now applies it when the text
+   carries no offset (fall-back ambiguity → second occurrence, documented).
+6. **`%Z` printed "DST".** Real abbrevs now (EDT/BST/CEST/AEDT/NZDT/CHADT…).
+7. **Struct-by-value FFI returns segfaulted every dt call.** The C
+   functions returned FlintDateTime by value while registered as pointer
+   returns — t_time.fl could never have run. Aligned to the documented
+   opaque-pointer design (malloc'd returns + flint_dt_free/flint_tz_free).
+8. **t_time.fl's own offset-wins expectation was wrong** (09:00 vs 09:30:15
+   slip) — it was never gated, so nobody noticed. Fixed + wired.
+9. **Duplicate `flint_time_format`:** runtime.c's 1-arg strftime-now
+   collided with the 3-arg civil version at link. Old one had zero
+   callers; removed + deregistered.
+10. **Header promised `flint_tzdata()`**, which does not exist. Rewritten
+    truthfully, with the known limits stated (IST=India, Ramadan
+    suspensions unmodellable, pre-1970 DST rules absent).
+
+Known limits kept visible, not fixed: Morocco needs yearly decrees;
+`flint_time_parse` documents its ambiguity rule; JIT cannot run util-linked
+programs (missing `__aarch64_*` compiler-rt symbols in the JIT process —
+pre-existing, affects t_util.fl identically, separate task).
+
+Gates: stdlib-ai 19 passed, 0 failed (new time_check + time); smoke 20/20;
+aegis 16/16; docs-check 0; selfhost untouched.
+---
+
+## 2026-10-10 — MASTER PLAN (red-teamed)
+
+Method per item: steelman (strongest case) → attack (cost, blast radius,
+cheaper alternative incl. doing nothing; objections ranked
+blocker/serious/minor) → verdict keep/modify/drop/replace. Spot-checks
+(grep 2026-10-10, Termux AArch64, branch inline-bounds-check):
+builtins 510 `add("` (paper §4 says 484 — stale count, refresh on
+submission); no `as` keyword (`as` = assembler path only, main.cpp:10382);
+generics EXIST (`genericFunctions`, `generateGenericInstance`,
+`typeParams`, main.cpp:4094-5163 — inventory item (3) half-false);
+`flint_tz_info` in C (flint_time.c:410, flint_time.h:106) but
+UNREGISTERED (registration list :4806-:4825 lacks it); no
+`Asia/Jerusalem` in flint_time.c (header :21 documents absence);
+Casablanca fixed +0 w/ Ramadan note (:244-248); pre-1970 unmodelled
+(header :24); races admitted (README:401); `_unchecked` gated on
+`releaseMode` (:4381-4383, CLI default safe :9975/:10011-10012);
+gradcheck.c:83-87 covers exactly mul/add/sub/sum; no ONNX hits; no
+DIBuilder hits; no `.vscode/`; no `--target` (v0.17 feature lost —
+suspected wipe-class loss like AegisChecker); no i8-quant path;
+COMPATIBILITY.md:13 gate + D1-D4 all OPEN verified verbatim;
+stage3/ladder 45 files, test_selfhost.sh + docs_check.sh present;
+LLVM 21.1.8 (`llvm-config`); quarantine ON by default (memory.md
+2026-10-04, opt-out `FLINT_AEGIS_QUARANTINE=0`); `fcheckpoint_init`
+exists = activation checkpointing (memory), NOT weight serialization.
+
+### PHASE 0 — hygiene (before anything; effort S, axis Maturity/Process)
+- **0a Commit or shelve the stack.** Steelman: 7 modified + 7 untracked
+files; stale-artifact confusion already bit 3x. Attack: committing is
+user-gated (minor — `git status` discipline suffices for now). Verdict
+KEEP: rebuild + full v1 gate solo + `rm -rf ~/.cache/flintc` after kills
+before trusting any number. Gate: v1_gate --full (needs selfhost first —
+CI note verified 2026-10-10). §7.1 gate test applies to every phase below.
+
+### PHASE 1 — P0 correctness (gates ALL perf per COMPATIBILITY.md:13; §7(1) ADOPT)
+- **D1 for-array C++ miscompile (segfault).** Steelman: segfault on valid
+code caps Correctness at 7; self-host output proves the design, and the
+C++ fault is localized to the desugar/bounds region — but root cause is
+still open (COMPATIBILITY.md:30).
+Attack: touches parse+codegen both LLVM paths + differential manifest
+(serious — 21-golden churn risk); alternative "loud error not fix" is
+cheaper but keeps a valid program uncompilable (minor loss). Verdict KEEP
+as FIX-REF, effort M. Gate: tests/test_differential.sh + new corpus entry.
+Axis: Correctness 7→8+.
+- **D2 bare `len()`.** Steelman: specified G3/G6 behavior, self-host proves
+it; C++ just lacks the builtin. Attack: trivial blast radius (serious?
+no — additive registration, minor). Verdict KEEP, effort S. Gate:
+differential. Axis: Correctness.
+- **D4 `s[1]` GEP crash.** Steelman: compiler crash, self-host returns 101
+bounds-checked — fix known-shape. Attack: GEP typing touches 4 inline
+sites incl. R1 shapes (serious — re-verify bounds traps byte-identical).
+Verdict KEEP, effort M. Gate: differential + ladder 21/21. Axis: Correctness.
+- **D3 `fa_len` message.** Steelman: convergent rejection already; only the
+message is corrupt. Attack: near-zero risk (minor). Verdict KEEP, effort S.
+Gate: differential `both_may_reject` message check. Axis: Correctness/DX.
+- Ordering inside Phase 1: D2+D3 (S, additive) → D1 → D4 (M, codegen).
+
+### PHASE 2 — surface syntax (gated on Phase C fixed-point + 21 goldens per §7.1b)
+- **(1) `as` casts.** Steelman: `(i%100) as f64` failing blocks numeric
+code; every ADOPTION cost (tensor fills, gradcheck drivers) pays it.
+Attack: new keyword + parse both modes + codegen
+(sitofp/fptosi/trunc/bitcast) + checker + self-host parity (serious blast:
+lexer/parser token contract must change together — 2026-09-14 `+=` hang
+lesson); cheaper alternative: named builtins (`i64_to_f64` exists
+already!) — but casts compose in expressions, builtins don't (blocker to
+deferral). Suggested order "first" REJECTED as stated: goes AFTER P0 per
+gating rule, first within Phase 2. Verdict KEEP, effort M. Gate:
+test_selfhost.sh Phase C byte-identical + ladder 21/21 + new goldens.
+Axis: Ergonomics.
+- **(2) tensor literals.** Steelman: everything via extern+C+flt_create_2d
+is the steepest AI-ergonomics cliff. Attack: literal shape/dtype inference
++ nested-literal codegen + self-host parity (serious); minimal slice —
+rank-1/2 f64-only literal desugaring to existing `flt_create_*`+`flt_set_at`
+(minor risk, no runtime change). Verdict KEEP NARROWED to f64 rank≤2
+slice; f32/i8 literal suffixes deferred. Effort M. Gate: test_ai.sh +
+ladder. Axis: Ergonomics/AI-ML.
+- **(3) "no generics/traits" → SPLIT.** Generics EXIST (monomorphized;
+verified above) — DROP, no work, paper §2.1 Liu-warning noted for future.
+Traits/protocols: steelman says ecosystem needs them; attack says whole
+checker interaction surface + Liu et al. rot risk (blocker) — DEFER with
+reason (no design, no corpus). Axis: none moved.
+
+### PHASE 3 — training readiness (paper's thesis; §7 items reconciled)
+All Phase-3 Performance-axis work (observability, i8 spike) is gated on
+Phase 1 closure (zero open P0s per COMPATIBILITY.md:13), like Phase 5.
+- **Observability, NOT tiering (§7(2) ADOPT verbatim).** Steelman: JIT
+silently ran portable loop 11x slower once — counters plus per-call path
+labels make the next silent-slow path visible the same day, not
+discovered by accident. Attack: counters
++ per-call backend labels via `flint_blas_available` probe is additive
+(minor); tiering would need a second compile tier that doesn't exist
+(blocker to tiering — correctly excluded). Verdict KEEP narrowed slice,
+effort M (counters on both BLAS/portable branches with thread-safety
+scope, a Flint-callable path-label builtin + self-host entry + docs,
+JIT-vs-AOT assertions in test_ai.sh). Gate: test_ai.sh + documented path labels. Axis: Performance
+(honesty, not speed).
+- **Gradcheck widening (§7(3) ADOPT).** Steelman: only mul/add/sub/sum
+finite-differenced; matmul/mean/relu/sigmoid ride on e2e tests. Attack: one
+rule at a time is bounded (serious only if rushed — tolerance/step per
+dtype, f32 lesson 2026-10-10). Verdict KEEP, order matmul→mean→relu→
+sigmoid, effort M. Gate: tests/gradcheck.c 5/5 per dtype. Axis: AI-ML
+correctness.
+- **Model serialization/checkpoint FORMAT (new — §7 omission, justified).**
+Steelman: training readiness 4/10 cannot persist weights; ExecuTorch also
+lacks it (§2.3) so this is parity-plus, and fine-tune checkpoints are the
+niche's artifact. Attack: format design (dtype+shape+data+version,
+writer/reader, round-trip gate) is M with minor blast (runtime-only, no
+codegen). Cheaper alternative (dump via existing serial) lacks versioning
+(serious for compat). Verdict KEEP (added to §7 with reason), effort M.
+Gate: new test_ai round-trip (save→load→bit-identical + version-reject).
+Axis: AI-ML/Maturity. Suggested order "second" ACCEPTED as Phase-3 head
+after observability.
+- **i8 quantized path → SPIKE then decide.** Steelman: mobile-VLM norm is
+8-bit (paper §2.3: Llama-Mobile 8-bit activations). Attack: needs QAT/FP
+source story + mixed-precision rules (FlexiQ/SliM-LLM precedent); full path
+is L with serious checker/blast surface; a matmul-only s8 spike measures
+the ceiling first (minor). Verdict MODIFY to S-spike (defer full on <2x
+measured or >5% accuracy cost). Gate: spike benchmark vs f32. Axis:
+Performance (deferred).
+
+### PHASE 4 — time module (bounded table work beats research programs)
+- **`flint_tz_info` registration — the 3-line win.** Steelman: C done,
+header done, only `add()` + self-host `e_rt_sig` missing. Attack: ~zero
+blast (minor); note the gate (`t_time.fl` run) needs the JIT compiler-rt
+gap (17) fixed first for its JIT half, and the void-with-`FlintZone*`-
+outparam shape needs an expressibility check against the struct-by-value
+FFI precedent. Verdict KEEP, effort S. Gate: t_time.fl run. Axis: Stdlib.
+- **Asia/Jerusalem.** Steelman: header documents the hole; Israel rules are
+fixed-pattern (Fri/Sun-based), one table entry + tzdata + time_check cases.
+Attack: minor code (data-only) but the verification is M — rule research
+against tzdb plus transition-edge cases in tests/time_check.c in the style
+of the 8817-check harness. Verdict KEEP, effort M — do BEFORE any
+capabilities work (Jerusalem S vs capabilities L is the cost-effectiveness
+argument). Gate: tests/time_check.c 0-fail. Axis: Stdlib.
+- **Casablanca/Ramadan + pre-1970 DST → DEFER with reason.** Yearly decrees
+and historical rules are data-unmodellable by fixed rules (documented
+limits flint_time.h:20-24); doing them wrong is worse than documenting
+(blocker to correctness). Keep documented. Axis: none.
+- **t_time.fl JIT compiler-rt gap.** Steelman: pre-existing, also breaks
+t_util.fl; util-linked JIT silently unusable. Attack: link compiler-rt
+builtins into JIT process or re-route lowering (M, serious — JIT loader
+surface). Verdict KEEP, effort M. Gate: t_time.fl + t_util.fl JIT green.
+Axis: Portability/Tooling.
+
+### PHASE 5 — perf, safety-hardening, tooling (all gated on zero open P0s)
+- **Runtime sets: KEEP AS-IS, no work.** Data-race freedom: DEFER (needs
+thread/ownership model; README admission stays). `_unchecked` gating:
+correct — DROP from plan. Quarantine: already on-by-default; remaining work
+is §7.2-Item-1 strictness measurement (budget/poison/configure + aegis
+gate) — ADOPT narrowed, effort S/M. Gate: test_aegis.sh 16/16. Axis: Safety.
+- **§7.2-Item-2 arenas narrowed: ADOPT as sequenced** (one matmul temporary
+→ farena scope + reset assert, §7(2) labels separate effects, ai+selfhost
+gates). Effort S. **Item-3 liveness-sensitive join: ADOPT** (behind existing
+error strings, ladder+aegis as fleet corpus, divergences to
+COMPATIBILITY.md). Effort M. Residual obligations (FFI/int-launder/
+unchecked/races uncovered) carried into paper claims. Axis: Safety/Perf.
+- **DWARF before VS Code extension (REPLACE suggested order).** Steelman for
+ext: adoption lever (Mojo lesson §2.4). Attack on ext-first: TS packaging +
+marketplace + phone-hostile verification = M/L with serious maintenance
+tail; DWARF line tables via DIBuilder is standard API, moderate work, and
+serves EVERY editor/lldb user (minor blast: additive AOT emission +
+`--debug` implying `--no-strip`, both new subtasks: the flag does not
+exist yet). Verdict: DWARF effort M first (gate: CI ubuntu/macos job maps
+one Flint frame to source via gdb/lldb — no gdb/lldb exists on the Termux
+dev phone, so this gate never runs on-device), extension deferred to
+adoption phase (gate when taken: bundled LSP + per-editor docs). Suggested
+"extension third" OVERRIDDEN with reason. Axis: Tooling.
+- **`--target` restoration.** Steelman: v0.17 shipped it, docs corrected
+2026-10-10; cross-compilation is a §1 non-goal exception worth re-adding
+boundedly (flag + validation + triple flow). Attack: suspected wipe-loss
+means re-implementation against current backend (M, serious — CGU/link
+flow). Verdict KEEP, effort M. Gate: x86_64 object on ARM host
+(readobj-confirmed, v0.17 precedent). Axis: Portability.
+- **ONNX export: DEFER, and the deferral is CORRECT.** Niche claim is
+no-artifact-compiler training (§2.3); ONNX is interop-out, not readiness;
+costs a spec-conformance surface for no readiness movement before native
+checkpoints exist (export would serve the inspectable-weights clause —
+revisit on external demand).
+
+### PHASE 6 — docs & process (cheap, submission-blocking)
+- **CHANGELOG time/numpy/matmul entries: effort S** (untracked
+benchmarks/matmul_np.py is the numpy mirror — confirm + log). Gate:
+docs_check.sh 0 fails. Axis: Docs.
+- **§7(4) NIST rigor + §7(5) SLSA ladder: ADOPT sequenced** — benchmark
+methodology (ranges, interleaving discipline) before provenance climb
+(zero→provenance); Mojo stability doc as versioning model. Effort S/M.
+Gate: §5.1 ranges + SLSA level documented. Axis: Maturity.
+- **§7(6) PoisonCap evaluation: ADOPT as evaluation-only** (no CHERI
+hardware on phones per §7.1 layer test — method precedent, not port).
+Effort S. Axis: Safety (directional).
+- **Paper third-party re-fetch (item 22): pre-submission GATE, not a phase**
+— §2 lead + §9 already flag drift risk; re-verify scores, dates, API
+surfaces, survey characterizations (~25 URLs, unstable web, half-day
+minimum). Effort M (external). Gate: every URL +
+access date refreshed. Axis: Docs.
+
+### DROPPED / DEFERRED (one-line reasons)
+- Generics work: DROPPED — C++ path has an i64-only monomorphization
+stub (examples/generics.fl passes; f64 instantiation is a loud rc=1
+error; self-host rejects with "generics need G6"); full generics need a
+design first, and Liu-et-al. rot risk (§2.1) argues against rushing one.
+No work now.
+- Traits: DEFERRED — no design; trait×lifetime interactions rot checkers.
+- Data-race freedom: DEFERRED — needs thread ownership model; admission stays.
+- `_unchecked` changes: DROPPED — gating already correct.
+- Full i8 quant: DEFERRED past spike — needs QAT story; spike decides.
+- ONNX export: DEFERRED — interop-out, no readiness movement before
+native checkpoints exist (would serve inspectable-weights; revisit on
+external demand).
+- Casablanca/Ramadan rules, pre-1970 DST: DEFERRED — unmodellable by fixed
+rules; documented limits beat wrong tables.
+- VS Code extension: DEFERRED past DWARF — heavier, phone-hostile to verify.
+- Valen/Pure-Borrow/Hylo/HW-PoisonCap/meta-tracing JIT/Austral-end-state/
+Polonius-reuse: NOT FEASIBLE per §7.2 (adopted verbatim).
+- Tiered JIT: EXCLUDED per §7(2) — single ORC compile stands; observability only.
+
+### §7 RECONCILIATION (adopt / correct / supersede)
+(1) D1/D2 first: ADOPT (+D3/D4 bundled, same gate). (2) Observability-not-
+tiering: ADOPT verbatim. (3) Gradcheck widening: ADOPT (order matmul first).
+(4) NIST rigor: ADOPT (methodology before provenance). (5) SLSA ladder:
+ADOPT (process-level, before code-level capabilities). (6) PoisonCap:
+ADOPT as evaluation-only. §7.1 four tests (layer/fixed-point/gate/
+one-device): ADOPT as entry criteria for every phase above. §7.2 Item 1
+(quarantine strictness): ADOPT narrowed (already on-by-default; measure +
+configure). Item 2 (arenas narrowed): ADOPT sequenced. Item 3 (liveness
+join): ADOPT (ladder+aegis as corpus). OMISSION CORRECTED: weight
+checkpoint format added (Phase 3, reason recorded). SUGGESTED ORDER
+OVERRIDDEN: syntax (Phase 2) follows P0 (gating rule); checkpoint follows
+observability+gradcheck-start (paper order); DWARF precedes extension
+(leverage-per-effort). Builtin count 484→510 refreshed. Out of scope for
+this red-team pass (prior verdicts stand): Cranelift LOW, MTE watch-only,
+R6/R7 sequenced post-P0, and the rest of the 2026-09-13 SPEED tail.
+
+## 2026-10-17 — item-22 third-party re-fetch: COMPLETE, content spot-verified
+
+All 34 unique URLs of docs/RESEARCH-PAPER-DRAFT.md re-fetched (yesterday:
+2026-10-17): 30× HTTP 200; 2 ACM DOIs live via doi.org 302 (dl.acm.org
+bot-blocks scripted reads — annotated in the draft); ecoop.org hangs from
+this network (server-side; only URL not re-verified — both stamps marked
+[Unverified on 2026-10-17], dates intentionally NOT bumped). Content
+spot-checks vs claims: Rust blog Polonius-on-nightly Aug 4 2026 intact;
+Mojo stability.md (semver/@stable/ABI-unstable) unchanged; ONNX Runtime
+two-phase training doc unchanged; ExecuTorch README inference-first +
+versioned .pte contract intact; 11 arXiv page titles all match their
+cited claims (incl. Llama-Mobile 2.7-bit, Pure Borrow, PoisonCap,
+Reconsidering-Custom-Memory-Allocation reconsideration). Access dates
+bumped 2026-10-10 → 2026-10-17 on the 28 verified stamps. Pre-submission
+content gap that remains (recorded, not blocked): paywalled effect sizes
+(CACM 48%→57%) and mlsys PDF pages stay "cited, not independently
+verified".
+
+## 2026-10-17 — RUST-INJECTION ADVICE: verified, resolved (external suggestion)
+
+Two sourced-advice blocks proposed injecting Rust: (a) runtime/stdlib,
+ optimization passes, tooling/LSP; (b) fuzz pipeline, package manager,
+ async runtime, target lowering. Each claim checked against the repo
+ (grep + probes, 2026-10-17). Store outcome, not flattery.
+
+Repo facts answered (their two questions):
+- Memory model: NO GC, no RC — manual with compile-time ownership/move
+  borrow checks (README:68) + runtime Aegis generational leases/quarantine
+  (W^X-style, ON by default). Borrow checker is compile-time; Aegis is
+  compile-time passes (AegisChecker, restored 2026-10) + runtime checks in
+  emitted IR (inline bounds/panic split, quarantine).
+- Compiler: Flint self-host pipeline emits LLVM IR DIRECTLY (stage1 lex ->
+  stage2 parse -> stage3 emit, byte-identical fixed point, 21 goldens);
+  NO C/C++ transpile stage. The canonical flintc (C++/LLVM 21) remains the
+  registry + JIT; self-host covers the compile pipeline for the supported
+  surface (per-aspect ledger: this is a fixed-point discipline, not a
+  verified "95%" number — the 95% framing is unmeasured, do not use it in
+  docs).
+
+Claim-by-claim verdicts:
+1. "C++ and Rust both emit LLVM IR, interoperate seamlessly" — PARTIALLY
+   TRUE at object/LTO level, but the load-bearing question is toolchain
+   availability: VERIFIED cargo/rustc NOT installed on the build device
+   (which/cargo -> nothing). Advice assumes a host with rustc; Termux
+   rust exists via pkg but would add a second bootstrap toolchain that
+   contradicts the scored moat (single-binary, no external toolchain;
+   ecosystem 2.5 pain is REAL but buying it with a cargo dep swaps one
+   weakness for another).
+2. "Runtime/stdlib in Rust (#[no_mangle] extern C, link .a)" — CONCEPT
+   SOUND (C ABI is the boundary runtime already uses: flint_* symbols +
+   clang link @263-276). But on-device it stalls without rustc; and the
+   Rust in stdlib today would replace C runtime that the eight gates
+   already verify. Verdict: DEFER until toolchain + reproducible artifacts
+   exist on host; revisit only for modules where C is the bottleneck,
+   never for JIT-resolvable atoms (they must stay in runtime.o loaded by
+   addObjectFile main.cpp:404-440).
+3. "Custom LLVM opt passes via llvm-sys" — RULED OUT: experimental
+   llvm-sys + custom passes contradicts §7(2) (single ORC compile, no
+   tiering) and the §7.1 gate (no added hidden compiler stages). Aegis/
+   borrow pass evolution stays in-tree C++ until the ledger's DWARF item.
+4. "tower-lsp tooling" — REAL need (tooling 4.5) but sequenced AFTER
+   DWARF per red-team; rust would be a second concern at once. LSP could
+   equally be a flintc feature (JSON diagnostics): no code exists yet.
+5. "Rust differential fuzzer / cargo-fuzz" — the DIFFERENTIAL HARNESS
+   ALREADY EXISTS (tests/test_differential.sh, manifest, 11 files, plus
+   the session-driven adversarial hunt). Risk of libFuzzer-on-Android
+   availability unverified; a generator script (any language, even .fl
+   itself) needs no new toolchain: CHEAPER alternative preferred.
+6. "Rust package manager / build tool" — SUPERSEDED by build.sh +
+   spawnLinker (main.cpp:255) which already: builds stdlibs on demand,
+   probes OpenBLAS, links pyruntime, --link flag support. A SAT-resolver
+   package manager is a REGISTRY IDEA (ecosystem), toolchain-inolved —
+   recorded as want-not-now; decision language: adopt the FEATURE
+   (dependency resolution) not the LANGUAGE (Rust).
+7. "Rust async runtime / work-stealing pool" — flint_chan.c (CSP) +
+   async G7 already exist in C; parallel-for works (benchmarks). Rust
+   tokio dep on Android compiles huge; races remain a documented DEFER.
+8. "Target-lowering engine in Rust" — MISDIRECTED: --target was a v0.17
+   flintc feature that got lost (ledger item 20); it is plain C++ work in
+   main.cpp, no Rust involved.
+9. "cxx crate bridge" — NOT NEEDED at our boundary: the entire runtime
+   boundary is C ABI (extern "C"); cxx pulls cargo + its own codegen into
+   the build for no benefit over plain C headers already in use.
+10. Flattery corrections ("Rust-level security"): per-aspect ledger has
+   Flint 7.0 vs Rust 8.6; claims are artifact-anchored (panic-not-UB,
+   differential 11/0), NOT Rust-parity claims — keep phrasing
+   "panic-not-UB on the modeled surface", not "Rust-equivalent safety".
+
+NET DECISION (stored): No Rust anywhere in the bootstrap or runtime for
+now. Adopted ideas transferred: (a) the fuzz-by-generation idea is ROW'S
+step (extend differential corpus programmatically later, toolchain-free);
+(b) package-manager FEATURE idea parked in ledger Phase 6 list;
+(c) LLVM-only boundary maintains "single toolchain" moat. Re-eval
+trigger: a host install of rustc + demand for a Rust-only library AND
+already-shipped DWARF/--target items (per red-team order).
+
+### WAVE E — CROSS-LANGUAGE COMPARISON + SCORE (2026-10-16, no-subagent, evidence-locked)
+
+Method: every score anchored to a verified artifact (gate output, benchmark,
+commit, or documented failure) — no vibes. Anchors: differential 9/0
+(3 new corpus files), smoke 23/0, stdlib-ai 25/0, ladder 21, selfhost
+Phase C byte-identical, docs_check 0, lexdiff 108/0, aegis 16/16,
+time_check 8817 checks/0, matmul N=500: Flint AOT 42.57ms ≈ numpy 2.4.4
+42.66ms vs naive C 428.38ms (same-session), JIT+BLAS 45.8ms (was 517.9),
+510 builtins, ASan/UBSan-clean time runtime.
+
+Per-aspect /10 (Flint, evidence):
+- Correctness/safety 7.5 (+0.5) — map-read P0 (ICmp abort) FIXED; NaN/±Inf
+  f64→i64 now PANICs (vs C unset/UB, C++ value-poison); array OOB &&
+  finite-overflow-adjacent edges loud; D1–D4 FIXED. Still open: finite
+  1e19 as i64 fptosi poison (documented), m[0] garbage-read (unspecified).
+- Performance 8.5 — ≈numpy (BLAS-backed) N=500; f32 1.6–1.9× verified;
+  JIT single-compile only (no tiering, by design §7(2)).
+- Expressiveness 7.0 (+0.5) — as-casts (chained/precedence verified),
+  f64 rank≤2 tensor literals, match/lambdas; generics i64-only stub
+  (loud fail), traits absent.
+- Ergonomics 7.0 (+0.5) — map read works; map-assign still
+  "requires an array variable"; loop-var casts fixed; clear panic/error
+  text verified line-accurate.
+- Stdlib breadth 5.5 — 18+ runtime modules, tz (~100 zones, documented
+  Jerusalem/pre-1970 gaps), gradcheck mul/add/sub/sum only; no
+  serialization; no HTTP/image/audio.
+- Ecosystem 2.5 — no packages, no registry, C-ABI FFI both directions
+  (works: flt_*/libBLAS dlopen), nothing else.
+- Tooling 4.5 — no DWARF (planned first), no --target (lost v0.17),
+  JIT can't run util-linked (compiler-rt atomics gap), no analyzers;
+  differential-as-infrastructure is the offsetting strength.
+- Docs 7.5 — truth-gated (docs_check hard counts), honest limitations
+  sections; README/paper stale-count refreshed required on submission.
+- Testing rigor 9.0 — differential C++↔self-host manifest, fixed-point
+  byte-identical, goldens+counts, hostile-hunt culture; 2 P0-class found
+  by independent hunt this session and fixed same-session.
+- Process/maturity 6.0 — uncommitted stack (Phase 0 hygiene), no CI
+  runner here, gates runnable solo.
+
+Opponents (paper §anchors, unchanged): Python 8.7 (ecosystem 10,
+performance 5, safety 6), Rust 8.6 (safety 10, ecosystem 8,
+performance 9, ergonomics 6), C++ 7.7 (perf 9, ecosystem 9,
+safety 3, tooling 8), Go 8.2 (ergonomics 9, perf 7, safety 7),
+C 6.9 (perf 9, safety 3, ecosystem 7), Mojo 7.0 (ML perf 9,
+stability 4). Flint's moat vs all: differential self-host fixed point +
+quarantine-by-default + panic-not-UB brand + single-binary no-toolchain
+mobile/dev-host story; not close on ecosystem/tooling.
+
+**FINAL: Flint 7.0 / 10 (up from 6.8)** — Path to 8.0: checkpoint
+format + gradcheck widening (stdlib breadth), DWARF + --target
+(tooling), generics design spike; Path verifies via the same seven
+gates. P2 leftovers accepted: `as`-as-identifier OK (verified), QBE
+stubs, mixed-binop divergence (disclosed), map-assign.
+
+
+Keep 12: (1) as-casts, (2) tensor-literals narrowed f64-rank≤2, (5)
+tz_info registration, (10) checkpoint format, (12) observability slice,
+(14) gradcheck widening, (17) JIT compiler-rt gap, (19) DWARF, (20)
+--target restoration, (21) CHANGELOG entries, (22) paper re-fetch gate,
+(23) uncommitted-stack hygiene. Modify 3: (4) second-class references /
+borrow diagnostics (diagnostics-first sequencing), (8)
+quarantine→strictness measurement, (11) i8→S-spike. Split 2: (3)
+generics-DROP (i64-only stub, no design) / traits-DEFER, (15)
+Jerusalem-KEEP / Casablanca-DEFER.
+
+**2026-10-17 LEDGER PROGRESS ( Waves 1–4 of the remaining set):**
+(5) tz_info registration — CLOSED: scalar accessors
+    flt_tz_is_dst_at/flt_tz_abbrev_at wired, t_time covers, ai 26/26.
+(17) JIT compiler-rt gap — CLOSED: -mno-outline-atomics in build.sh
+    CFLAGS_RT, runtime rebuilt; JIT t_util/t_time pass; run.sh 25/25.
+(21) CHANGELOG — CLOSED: Added/Fixed entries for casts, tz, JIT, maps,
+    casts.
+(10) checkpoint format — CLOSED: FLWT v1 in runtime/flint_tensor.c
+    (flt_weights_save/load/count, little-endian, dtype/rank/dims/data
+    records, rank 1-5 f64 / 1-4 f32, header count stays 0 and count
+    re-walks); registered with tPtr signatures; tests/t_chkpt.fl
+    round-trip green on BOTH engines (JIT + clang AOT with
+    runtime+flint_aegis+flint_tensor+flint_blas+flint_nn); test_ai 26/26;
+    CHANGELOG entry added; no stage edits → no self-host retest needed.
+(14) gradcheck widening — CLOSED: tests/gradcheck.c now 53 checks from 10
+    (matmul f64+f32, 7 unaries/mean incl. relu kink), 0 failed,
+    "PASS gradcheck" gate unchanged. Verified the tape implements
+    AG_DIV/AG_SQRT/AG_POW/AG_RESHAPE/AG_TRANSPOSE only as enum names —
+    no functions exist — so 53/53 IS all implemented ops (enum-only
+    leftovers are design debt, note in next review).
+(20) --target restoration — CLOSED (emit stage, was "introduction" not
+    restoration: crosses-checked, the flag never existed in-tree; docs
+    verified this first). Codegen takes a triple override (ctor), which
+    sets triple + datalayout FROM A REAL TargetMachine (initTargets +
+    lookupTarget + createTargetMachine; std::nullopt opt) — x86_64 and
+    wasm32 datalayouts byte-match clang's canonical strings; .o paths emit
+    real objects (wasm magic 0061736d01000000 verified via od). Guard:
+    --target && runMode → rc 1 "requires an emit output; JIT execution is
+    host-triple only". cacheSalt extended (-tgt<spec>) so host and cross
+    modules never share cache entries. tests/test_target.sh 9/9.
+    fingerprints: --target x86_64-pc-linux-gnu; --target wasm32-unknown-wasi.
+    Execution (WASI sysroot/_start/runner) stays T3 by docs/tiers.md truth.
+    Docs updated: tiers table/probe/promo-3, IMPROVEMENT-PLAN, README, CHANGELOG.
+(19) DWARF line tables — CLOSED at the artifact stage. --debug builds a
+    DIBuilder CU + file + per-user-fn DISubprogram + per-statement
+    DILocation (emitStmt and emitExpr both stamp, so block-tail statements
+    map too), module passes drop to O0 under --debug (O2 const-folds
+    statements away and the line info with them), and Debug Info Version
+    module flag added (cache round-trip + object emitter dropped DI
+    without it, warning "invalid version (0)"). Oracle: llvm-dwarfdump —
+    tests/test_dwarf.sh 16/16 (CU, subprograms, line table rows, source
+    lines 4/5/8-12 of tests/t_debug.fl, artifact executes). SCOPE TRUTH
+    discovered: ORC JIT with a debug module hangs at mainFn (reproduced
+    with strip + no-opt; only common variable = DIBuilder metadata), so
+    --debug requires -o and bare-run refuses loudly (mirrors --target
+    guard) — DWARF belongs to artifacts, which run end-to-end. JIT
+    strips debug metadata defensively in runWithJIT. Remaining open
+    (recorded in IMPROVEMENT-PLAN): lldb/gdb driver validation, VS Code
+    extension stays DEFERRED past this.
+Drop 1: (9) `_unchecked` (gating already correct, no work). Defer 5: (6)
+races, (7) capabilities / supply-chain sandboxing (boundary-only idea
+stays in §7(5) SLSA context), (13) ONNX, (16)
+pre-1970, (18) VS Code extension. 12+3+2+1+5 = 23 ✓. D1-D4 (from
+CONSTRAINTS, not the inventory) all KEEP in Phase 1; §7(4)(5)(6)
+NIST/SLSA/PoisonCap ADOPT in Phase 6. Corrected 2026-10-10 after hostile
+re-check caught a miscount (14/3/3/6 = 26) in the first draft.
+

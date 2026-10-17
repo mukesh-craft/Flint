@@ -218,17 +218,17 @@ Elementwise `flt_neg exp log sqrt pow relu sigmoid tanh` ·
 > BLAS). It is what the gate compares the live BLAS path against, and it returns
 > the same answer with no floating-point variance. `flt_matmul` is the fast one.
 
-> `flt_blas_available()` and `flt_blas_backend()` report which path is live.
+> `flint_blas_available()` and `flint_blas_backend()` report which path is live.
 > Both AOT and JIT use OpenBLAS when it is installed. (JIT did not, for a
 > while: `flint_blas.o` reaches `cblas_dgemm` through a weak symbol, and the JIT
 > never loaded the library, so every matmul silently took the portable loop —
-> correct answers, ~11x slower. `flint_blas_available()` returning 0 in JIT mode
-> is the tell.)
+> correct answers, ~11x slower. Back then, `flint_blas_available()` returning 0
+> in JIT mode was the tell; it now returns 1 with OpenBLAS installed.)
 
 ### f32
 
 `flt_to_f32` / `flt_to_f64` / `flt_is_f32` convert. A tensor is one of the two
-widthes; `flt_data` returns NULL for an f32 tensor so a `double*` cannot be
+widths; `flt_data` returns NULL for an f32 tensor so a `double*` cannot be
 forced onto f32 storage (`flt_data_f32` is the f32 accessor).
 
 Measured on this device, N=500: **f64 41.7 ms → f32 22.3 ms (1.86×)**, and
@@ -344,6 +344,13 @@ flags plus standalone Python scripts:
                                      # vs surviving O2 (changes nothing)
 ./flintc --emit-interface a.fl b.flint.bc  # declarations only
 ./flintc --use-interface b.flint.bc main.fl -o app  # build against them
+./flintc main.fl --target x86_64-pc-linux-gnu --emit-llvm -o main.x86.ll
+                                     # cross-target emit (.ll text or .o
+                                     # object); JIT execution stays host-only
+./flintc --debug main.fl -o prog     # DWARF line tables in the artifact
+                                     # (llvm-dwarfdump/lldb); `--debug` needs
+                                     # -o, bare run refuses (JIT can't carry
+                                     # debug metadata)
 ./flintc --dump-tokens main.fl       # stable token dump (matches stage1)
 python3 flint-fmt main.fl [--check]  # format (--check fails if unformatted)
 python3 flint-doc main.fl            # docs to stdout
@@ -403,7 +410,7 @@ channels for handoff.
 
 ## Standard library
 
-13 runtime modules, ~12,900 lines of C, all reachable from Flint as `flint_*`
+18 runtime modules, ~12,900 lines of C, all reachable from Flint as `flint_*`
 builtins. Verified by `bash tests/test_ai.sh ./flintc` (17/17) and the
 `stdlib` gate in `tests/v1_gate_check.sh`.
 
@@ -548,9 +555,16 @@ in-program timers for runtime, wall clock for compile):
 | primes 10M | 542.9 ms | 481.4 ms | 199.1 ms | 203.9 ms | 2,092 ms |
 | fib(45) | 12,735 ms | 8,483 ms (beats C ~9%) | 9,328 ms | 9,333 ms | skipped (est. 10+ min) |
 | strrev (100K builder) | ~1.0 ms | ~0.95 ms | 5.5 ms | 32.0 ms | 444.9 ms |
+| matmul 500² (10 iters, AOT) | 42.6 ms | n/m | 428.4 ms (naive) | n/m | 42.7 ms (numpy 2.4.4) |
 
 `--unsafe` skips overflow + bounds checks: faster, but drops the safety
 that justifies Flint vs C. Failures and skips reported as-is, not hidden.
+
+Note (2026-10-10): the `matmul` row is new — same-session, AOT Flint
+(OpenBLAS) vs naive C vs numpy 2.4.4 (`benchmarks/matmul_np.py`;
+`benchmarks/matmul.py` stays pure-Python and takes ~60 s at 500²).
+Flint ≈ numpy to within noise (both OpenBLAS-backed; value checksums
+agree: 4799.09 vs 4799.0857 at 8²), ~10× the naive C triple loop.
 
 Note (2026-09-24): the `strrev` Flint cells were re-measured (4 stable
 runs, checksum 5044012 each, exit 0) — the old CRASH is gone since the
@@ -605,10 +619,10 @@ What exists and how to run it (file lists and line counts verified
 
 | Suite | Files | Lines | Run |
 |-------|-------|-------|-----|
-| `tests/` smoke tests | 5 `.fl` (`t_hello` 8, `t_arith` 14, `t_flow` 48, `t_funcs` 15, `t_types` 23) | 108 | `bash tests/run.sh ./flintc` |
-| `tests/` runners | `run.sh` 45, `run_tutorial.sh` 18, `test_registry.sh` 43 | 106 | `bash tests/test_registry.sh` |
+| `tests/` smoke tests | 5 `.fl` (`t_hello` 8, `t_arith` 26, `t_flow` 48, `t_funcs` 15, `t_types` 23) | 120 | `bash tests/run.sh ./flintc` |
+| `tests/` runners | `run.sh` 53, `run_tutorial.sh` 18, `test_registry.sh` 43 | 114 | `bash tests/test_registry.sh` |
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | loop above |
-| `benchmarks/` mirrors | 7 workloads in C, C++, Python | 370 | `clang -O2` / `g++` / `python3` |
+| `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) | 386 | `clang -O2` / `g++` / `python3` |
 | `tutorial/` lessons | 8 (`01_hello`–`08_wrap`), each with `EXPECT` checks | 198 | `bash tests/run_tutorial.sh ./flintc` |
 | `stage1/` Flint lexer | `flint_lex.fl` + edge corpora, byte-identical to `--dump-tokens` | — | `bash tests/test_lexdiff.sh ./flintc` |
 | `agent-bench/` tasks | 5 tasks (`TASK.md` + `expected.txt` + `reference.fl` each, 136 lines) + `check.sh` 24 | 160 | `bash agent-bench/check.sh ./flintc` |
