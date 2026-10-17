@@ -96,8 +96,10 @@ run() {
   fi
 }
 
-# 2x3 @ 3x2 = [[58,64],[139,154]], sum 415, blas available=1
-run tensor "4 58 64 139 154 58 64 139 154 415 1" tests/t_ai_tensor.fl
+# 2x3 @ 3x2 = [[58,64],[139,154]], sum 415, blas available=1, then Phase-2
+# tensor literals: rank-1 (size/get), rank-2 (size/shape/sum), int
+# promotion, negation, and literal-vs-handbuilt agreement (sum 10).
+run tensor "4 58 64 139 154 58 64 139 154 415 1 2 1 2 4 2 2 10 1 1 10" tests/t_ai_tensor.fl
 
 # y = x*x on [1,2,3] -> [1,4,9]; grad len 3, pass-through grad [2,2,2]
 run autograd "1 4 9 3 2 4 6" tests/t_ai_autograd.fl
@@ -165,6 +167,68 @@ fi
 run f32 "1 24 1 2 2 58 64 139 154 58 154 1 2 12 1 0.731059 21 3.5 0 6 1 6 0 4000000 8000000" \
     tests/t_f32.fl
 
+# Phase-2 negative cases: malformed shapes and unsupported dtypes must fail
+# loudly (nonzero exit + message), never silently miscompile. Sources live
+# in $TMPD (not the repo) so the parse-gate/fixpoint corpus stays green.
+run_fail() { # $1=name $2=want-substring $3=source-file
+  name="$1"; want="$2"; src="$3"
+  if "$FLINTC" "$src" -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
+    echo "FAIL $name (built, must reject)"
+    fail=$((fail+1)); return
+  fi
+  if command grep -qF -- "$want" "$TMPD/$name.err"; then
+    echo "PASS $name"
+    pass=$((pass+1))
+  else
+    echo "FAIL $name (missing '$want')"
+    command head -n 3 "$TMPD/$name.err"
+    fail=$((fail+1))
+  fi
+}
+cat > "$TMPD/reject_ragged.fl" <<'EOF'
+fn main() -> i64 {
+    t = [[1.0], [2.0, 3.0]]
+    0
+}
+EOF
+run_fail reject_ragged "ragged tensor literal" "$TMPD/reject_ragged.fl"
+cat > "$TMPD/reject_rank3.fl" <<'EOF'
+fn main() -> i64 {
+    t = [[[1.0]]]
+    0
+}
+EOF
+run_fail reject_rank3 "rank 1 and 2" "$TMPD/reject_rank3.fl"
+cat > "$TMPD/reject_suffix.fl" <<'EOF'
+fn main() -> i64 {
+    t = [1.0f32, 2.0]
+    0
+}
+EOF
+run_fail reject_suffix "not yet supported" "$TMPD/reject_suffix.fl"
+cat > "$TMPD/reject_cast_str.fl" <<'EOF'
+fn main() -> i64 {
+    x = 1 as str
+    0
+}
+EOF
+run_fail reject_cast_str "only 'i64' and 'f64'" "$TMPD/reject_cast_str.fl"
+cat > "$TMPD/reject_cast_f32.fl" <<'EOF'
+fn main() -> i64 {
+    x = 1 as f32
+    0
+}
+EOF
+run_fail reject_cast_f32 "not yet supported" "$TMPD/reject_cast_f32.fl"
+cat > "$TMPD/reject_cast_val.fl" <<'EOF'
+fn main() -> i64 {
+    s = "hi"
+    y = s as i64
+    0
+}
+EOF
+run_fail reject_cast_val "needs an i64 or f64 value" "$TMPD/reject_cast_val.fl"
+
 # The TOML parser, against every construct a config file uses plus five error
 # cases. C level: a parse bug should be reported as a parse failure, not as a
 # confusing value-model result.
@@ -206,10 +270,42 @@ else
   echo "SKIP yaml_check: flint_yaml.o not built"
 fi
 
+# The civil-time/timezone library: verified against the libc oracle (POSIX
+# TZ rules as an independent implementation of the same IANA rules) over
+# weekly sweeps plus exact transition edges. C level: a wrong UTC offset
+# returns plausible garbage rather than failing.
+if [ -f flint_time.o ]; then
+  if $CC_BIN -O1 tests/time_check.c $INC $LIB flint_time.o \
+       -lm -o "$TMPD/time_check" 2>/dev/null; then
+    if "$TMPD/time_check" > "$TMPD/time_check.out" 2>&1; then
+      echo "PASS time_check"
+      pass=$((pass+1))
+    else
+      echo "FAIL time_check"
+      command grep -E "^FAIL" "$TMPD/time_check.out" | head -6
+      fail=$((fail+1))
+    fi
+  else
+    echo "SKIP time_check: compile failed"
+  fi
+else
+  echo "SKIP time_check: flint_time.o not built"
+fi
+
+# The time library reached from Flint: calendar, DST edges, %Z abbrevs,
+# zone-aware parsing, durations, zone abbrev/DST accessors.
+run time "1 0 0 1 29 28 0 0 19800 32400 0 -18000 -14400 39600 36000 -25200 -25200 9 1 2026-10-07T09:30:15Z Wednesday October 07 2026 0 1 1 1 1 1d01:01:01 -0d01:01:01 60 -18000 -14400 -14400 -18000 39600 36000 -21600 EDT 1 1 EST 0 EDT 1 UTC 0" \
+    tests/t_time.fl
+
 # The utility layer reached from Flint, not just from C: sorting, binary
 # search, atomics, a mutex, an rwlock, the CSPRNG and CLI parsing.
 run util "1 9 2 -1 15 12 1 99 1 rwlock-ok 1 1 rng-ok 1 0 cli-ok" \
     tests/t_util.fl
+
+# Weight checkpoints: FLWT v1 save/append/count/load round-trip, exact f64
+# values and f32 dtype chosen live, and out-of-range reads fail the null way.
+run chkpt "1 1 1 1 1 1 1 1 1 1" \
+    tests/t_chkpt.fl
 
 echo "stdlib-ai: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

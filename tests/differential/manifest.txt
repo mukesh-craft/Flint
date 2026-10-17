@@ -1,8 +1,14 @@
 # Differential manifest: "<file> <exit> <expected-stdout|-> <allowance>"
-# allowance: same | cpp_may_differ (D1/D2/D4) | both_may_reject (D3).
+# allowance: same | both_may_reject (D3, convergent rejection).
 # See COMPATIBILITY.md. Harness fails on any UNLISTED divergence.
-for_array.fl 0 for_array.txt cpp_may_differ
-bare_len.fl 0 bare_len.txt cpp_may_differ
+for_array.fl 0 for_array.txt same
+bare_len.fl 0 bare_len.txt same
 method_len.fl 0 - both_may_reject
-str_index.fl 0 str_index.txt cpp_may_differ
+str_index.fl 0 str_index.txt same
 common.fl 0 common.txt same
+cast_as.fl 0 - same
+map_index.fl 0 - same
+loop_cast.fl 0 - same
+sci_notation.fl 0 - same
+map_key_type.fl 0 - same
+overflow_cast.fl 134 - same

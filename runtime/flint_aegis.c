@@ -327,7 +327,8 @@ void flint_aegis_write_u8(int64_t lease, int64_t idx, int64_t val) {
 // exceeded, oldest first, which bounds memory while still catching the
 // read-after-free that actually happens.
 //
-// Enabled by FLINT_AEGIS_QUARANTINE=1. Off by default: the hot path pays one
+// ON by default (see aegis_quarantine_on): memory safety that only applies
+// when you know to ask for it is not a guarantee. The hot path pays one
 // predictable branch on an already-loaded global.
 
 #define AEGIS_POISON 0xDE

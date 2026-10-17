@@ -12,7 +12,7 @@ Rules (Lux/Traverse precedent adapted):
   UNLISTED divergence. No silent miscompiles, ever.
 - Perf work (P1) is gated on this log: no listed P0 open.
 
-## D1 — C++ miscompiles `for` over array (segfault). OPEN, C++ bug.
+## D1 — C++ miscompiles `for` over array (segfault). FIXED 2026-10-15 (hoisted data+len desugar + bounds-checked index; both print 6).
 
 ```flint
 fn main() -> i64 {
@@ -33,7 +33,7 @@ fn main() -> i64 {
   miscompile) or at minimum emit a loud error instead of a bad binary.
   Differential status: `cpp_may_differ` (see manifest).
 
-## D2 — C++ rejects bare `len()` calls. OPEN, C++ gap.
+## D2 — C++ rejects bare `len()` calls. FIXED 2026-10-15 (bare len() dispatches array→extractvalue, str→flint_str_length, map→flint_map_len; both print 3).
 
 ```flint
 fn main() -> i64 {
@@ -49,7 +49,7 @@ fn main() -> i64 {
 - Verdict: self-hosted is right. Disposition: FIX-REF (add builtin) or
   document `len()` as self-hosted-only. Differential: `cpp_may_differ`.
 
-## D3 — C++ method calls mangle to garbage (`fa_len`). OPEN, C++ bug.
+## D3 — C++ method calls mangle to garbage (`fa_len`). FIXED 2026-10-15 (clean unknown-method rejection converges with self-host G7 error; both reject).
 
 ```flint
 fn main() -> i64 {
@@ -66,7 +66,7 @@ fn main() -> i64 {
   Disposition: PIN-LIMITATION (methods beyond map has/get/set are G7) +
   FIX-REF message. Differential: `both_may_reject`.
 
-## D4 — C++ crashes on string indexing (`s[1]`). OPEN, C++ bug.
+## D4 — C++ crashes on string indexing (`s[1]`). FIXED 2026-10-15 (str index via i8 GEP+zext with bounds check; both print 101).
 
 ```flint
 fn main() -> i64 {

@@ -37,7 +37,12 @@ esac
 # the linker's --gc-sections (added in spawnLinker) can discard everything
 # the program doesn't reference (AI engine, crypto, net, ...). Object files
 # grow slightly; final binaries shrink a lot.
-CFLAGS_RT="-O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security -fPIE -ffunction-sections -fdata-sections"
+# -mno-outline-atomics: LLVM's AArch64 outline-atomics lowering would emit
+# external calls to __aarch64_cas8_acq_rel / __aarch64_ldadd8_acq_rel, which
+# exist only as LOCAL symbols inside flintc's static compiler-rt copy — the
+# JIT dlsym can't see them (item 17). Inline ldaxr/stlxr needs nothing, and
+# these same .o files are what the JIT loads via addObjectFile.
+CFLAGS_RT="-O2 -fstack-protector-strong -D_FORTIFY_SOURCE=2 -Wformat -Wformat-security -fPIE -ffunction-sections -fdata-sections -mno-outline-atomics"
 
 # Incremental helper: skip rebuild when $1 (output) is newer than all $2... inputs.
 needs_rebuild() {
@@ -152,6 +157,7 @@ echo "=== Building Flint math/format/collections (parallel) ==="
 ( needs_rebuild flint_value.o runtime/flint_value.c && $CC -c $CFLAGS_RT runtime/flint_value.c -o flint_value.o ) &
 ( needs_rebuild flint_toml.o runtime/flint_toml.c && $CC -c $CFLAGS_RT runtime/flint_toml.c -o flint_toml.o ) &
 ( needs_rebuild flint_yaml.o runtime/flint_yaml.c && $CC -c $CFLAGS_RT runtime/flint_yaml.c -o flint_yaml.o ) &
+( needs_rebuild flint_time.o runtime/flint_time.c && $CC -c $CFLAGS_RT runtime/flint_time.c -o flint_time.o ) &
 wait
 echo "  math:         ./flint_math.o"
 echo "  fmt:          ./flint_fmt.o"
@@ -159,6 +165,7 @@ echo "  collections:  ./flint_coll.o"
 echo "  nn layers:    ./flint_nn.o"
 echo "  util:         ./flint_util.o"
 echo "  value/toml:   ./flint_value.o ./flint_toml.o ./flint_yaml.o"
+echo "  time:         ./flint_time.o"
 
 echo "=== Building Flint Standard Library (parallel) ==="
 ( needs_rebuild flint_serial.o runtime/flint_serial.c && $CC -c $CFLAGS_RT runtime/flint_serial.c -o flint_serial.o ) &

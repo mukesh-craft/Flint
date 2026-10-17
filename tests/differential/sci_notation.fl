@@ -1,0 +1,10 @@
+# Scientific-notation lexing: 1e19, 2.5e-3, 1E+4 lex as single f64
+# literals in BOTH lexers (P1-5). Casts stay finite and in-range so the
+# non-finite panic never fires; both backends must agree.
+fn main() -> i64 {
+    print(1e2 as i64)
+    print(1E+4 as i64)
+    print(2.5e-3 as i64)
+    print(flint_f64_to_string(1e2 as f64))
+    0
+}

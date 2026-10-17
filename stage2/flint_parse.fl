@@ -16,6 +16,11 @@
 #   (enum-lit E V ARGS)  (match S (arms ((PAT B))*))
 #   PAT = (pat-var E V BIND|-)
 #   (lambda ((P T)*) BODY)  (array E* | (spread E)*)  (map-lit (str K) V*)
+#   (tensor E*)  (cast E i64|f64)
+#   (tensor ...) is the Phase-2 f64 literal: flat bare numerics (+1 float)
+#   or nested row tensors. Shapes are NOT validated here (ragged/rank fail
+#   loudly at emit, the t_for_bad parse-clean/emit-loud contract).
+#   (cast E T) is `E as T` (contextual `as`, binds like postfix).
 #   (extern "C" DECLS)  (import P)  (python (str*))  (expr X)
 # DESIGN: token vecs + source in globals; cursor is a 1-elem vec; decls use
 # scope-stamped values + persistent top map (mirrors C++ declared/globalVars).
@@ -56,6 +61,19 @@ PMAPENUM = map {
     "": 0
 }
 mut PSCOPE: i64 = 1
+# Last [...] literal built by p_array_lit (for the enclosing literal's row
+# classification): 0 = not a tensor candidate (or ordinary array), 1 = flat
+# numerics (PTN count, PTF any-float), 2 = nested rows (PTN rows, PTC cols
+# or 0 when ragged/opaque, PTF any-float).
+mut PTN: i64 = 0
+mut PTF: i64 = 0
+mut PTK: i64 = 0
+mut PTC: i64 = 0
+# Real-but-unsupported numeric dtype suffixes (f32/i8...): loud "not yet",
+# never silent. `as`-targets share the set (see p_postfix).
+PDTYPESUF = map {
+    "f32": 1, "f16": 1, "i8": 1, "i16": 1, "i32": 1, "u8": 1, "u16": 1, "u32": 1, "u64": 1
+}
 # Step budget: any parse consuming >20M tokens is a bug, not a program.
 fn p_bump() -> i64 {
     PSTEPS = PSTEPS + 1
@@ -130,6 +148,49 @@ fn p_text() -> str {
         st = flint_vec_get(TS, p_pos())
         ln = flint_vec_get(TL, p_pos())
         flint_str_substring(GSRC, st, st + ln)
+    }
+}
+# Kind/text of the token AFTER the cursor (0/"" past the end). Pure
+# lookahead for contextual `as` (no consumption, no rewind needed).
+fn p_next_kind() -> i64 {
+    np = p_pos() + 1
+    if np < flint_vec_len(TK) {
+        flint_vec_get(TK, np)
+    } else {
+        0
+    }
+}
+fn p_next_text() -> str {
+    np = p_pos() + 1
+    if np < flint_vec_len(TK) {
+        st = flint_vec_get(TS, np)
+        ln = flint_vec_get(TL, np)
+        flint_str_substring(GSRC, st, st + ln)
+    } else {
+        ""
+    }
+}
+# `(num RAW)`: float iff the raw ends with the `d` marker stage1 adds
+# (p_primary appends it exactly when the lexeme has a dot).
+fn p_num_is_float(e: str) -> i64 {
+    n = flint_str_length(e)
+    if n < 7 {
+        0
+    } else {
+        if flint_str_char_at(e, n - 2) == 100 {
+            1
+        } else {
+            0
+        }
+    }
+}
+# `(neg INNER)`: float iff INNER is a float num.
+fn p_neg_is_float(e: str) -> i64 {
+    inner = flint_str_substring(e, 5, flint_str_length(e) - 1)
+    if p_starts_with(inner, "(num ") == 1 {
+        p_num_is_float(inner)
+    } else {
+        0
     }
 }
 fn p_emit(out, s: str) -> i64 {
@@ -324,6 +385,23 @@ fn p_expr_code(e: str) -> i64 {
             if p_starts_with(e, "(array") == 1 {
                 4
             } else {
+                if p_starts_with(e, "(tensor ") == 1 {
+                    3
+                } else {
+                    if p_starts_with(e, "(cast ") == 1 {
+                        # Target is the last word: `... i64)` or `... f64)`.
+                        n = flint_str_length(e)
+                        tail4 = flint_str_substring(e, n - 4, n)
+                        if flint_str_compare(tail4, "i64)") == 0 {
+                            1
+                        } else {
+                            if flint_str_compare(tail4, "f64)") == 0 {
+                                2
+                            } else {
+                                0
+                            }
+                        }
+                    } else {
                 if p_starts_with(e, "(call ") == 1 {
                     rest = flint_str_substring(e, 6, flint_str_length(e))
                     sp = flint_str_index_of(rest, " ")
@@ -338,6 +416,8 @@ fn p_expr_code(e: str) -> i64 {
                         0
                     } else {
                         p_type_of(vn)
+                    }
+                }
                     }
                 }
             }
@@ -503,14 +583,34 @@ fn p_arg_list() -> str {
     }
     s
 }
-# Array literal [a, b, ...spread] (mirrors C++, trailing comma tolerated).
+# Array literal [a, b, ...spread] (mirrors C++, trailing comma tolerated),
+# or Phase-2 f64 tensor literal `(tensor ...)`: every element a bare numeric
+# with at least one float (flat), or every element a flat-numeric row tensor
+# (nested). Poison rule (mirrors C++ exactly): any float element or any
+# [...] row claims the literal — tensor node or (at emit) loud error, never
+# the old silent-garbage array. Pure-int/var/str/call literals keep `(array`.
+# Shapes are NOT validated here (ragged/rank fail at emit); dtype suffixes
+# fail HERE (no node can hold them). Sets PTN/PTF/PTK/PTC for the literal.
 fn p_array_lit() -> str {
     p_next()
-    mut items: str = ""
+    PTK = 0
+    PTN = 0
+    PTF = 0
+    PTC = 0
     if p_kind() == 55 {
         p_next()
         "(array)"
     } else {
+        mut items: str = ""
+        mut n: i64 = 0
+        mut flatOk: i64 = 1
+        mut anyF: i64 = 0
+        mut rowsOk: i64 = 1
+        mut rowsF: i64 = 0
+        mut rowCols: i64 = -1
+        mut rowsEqual: i64 = 1
+        mut sawBracket: i64 = 0
+        mut hasSpread: i64 = 0
         mut go: i64 = 1
         while go == 1 {
             mut e: str = ""
@@ -518,13 +618,70 @@ fn p_array_lit() -> str {
                 p_next()
                 e = p_expr()
                 items = items + " (spread " + e + ")"
+                hasSpread = 1
             } else {
                 e = p_expr()
                 items = items + " " + e
+                if p_starts_with(e, "(num ") == 1 {
+                    if p_num_is_float(e) == 1 {
+                        anyF = 1
+                    }
+                    rowsOk = 0
+                } else {
+                    if p_starts_with(e, "(neg ") == 1 {
+                        inner = flint_str_substring(e, 5, flint_str_length(e) - 1)
+                        if p_starts_with(inner, "(num ") == 1 {
+                            if p_num_is_float(inner) == 1 {
+                                anyF = 1
+                            }
+                        } else {
+                            flatOk = 0
+                        }
+                        rowsOk = 0
+                    } else {
+                        if p_starts_with(e, "(array ") == 1 {
+                            flatOk = 0
+                            sawBracket = 1
+                            rowsOk = 0
+                        } else {
+                            if p_starts_with(e, "(tensor ") == 1 {
+                                flatOk = 0
+                                sawBracket = 1
+                                if PTK == 1 {
+                                    if rowCols == -1 {
+                                        rowCols = PTN
+                                    } else {
+                                        if PTN != rowCols {
+                                            rowsEqual = 0
+                                        }
+                                    }
+                                    if PTF == 1 {
+                                        rowsF = 1
+                                    }
+                                } else {
+                                    rowsOk = 0
+                                }
+                            } else {
+                                flatOk = 0
+                                rowsOk = 0
+                            }
+                        }
+                    }
+                }
             }
             if p_is_err(e) == 1 {
                 return ""
             }
+            # Suffix check: NUMBER then f32/i8... is loud "not yet".
+            if p_kind() == 1 {
+                w = p_text()
+                if PDTYPESUF.has(w) == 1 {
+                    print("tensor dtype suffix is not yet supported (f64 literals only)")
+                    p_note_err()
+                    return ""
+                }
+            }
+            n = n + 1
             if p_accept(57) == 1 {
                 if p_kind() == 55 {
                     go = 0
@@ -537,7 +694,54 @@ fn p_array_lit() -> str {
             p_note_err()
             ""
         } else {
-            "(array" + items + ")"
+            if hasSpread == 1 {
+                PTK = 0
+                "(array" + items + ")"
+            } else {
+                if flatOk == 1 {
+                    if anyF == 1 {
+                        PTK = 1
+                        PTN = n
+                        PTF = 1
+                        PTC = 0
+                        "(tensor" + items + ")"
+                    } else {
+                        PTK = 0
+                        "(array" + items + ")"
+                    }
+                } else {
+                    if rowsOk == 1 {
+                        PTK = 2
+                        PTN = n
+                        PTF = rowsF
+                        if rowsEqual == 1 {
+                            PTC = rowCols
+                        } else {
+                            PTC = 0
+                        }
+                        "(tensor" + items + ")"
+                    } else {
+                        if anyF == 1 {
+                            PTK = 2
+                            PTN = 0
+                            PTF = 1
+                            PTC = 0
+                            "(tensor" + items + ")"
+                        } else {
+                            if sawBracket == 1 {
+                                PTK = 2
+                                PTN = 0
+                                PTF = 0
+                                PTC = 0
+                                "(tensor" + items + ")"
+                            } else {
+                                PTK = 0
+                                "(array" + items + ")"
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -713,13 +917,72 @@ fn p_primary_paren() -> str {
         ""
     }
 }
-# Postfix chain: [index/slice/idx-set], .field, .method(args) raw, ? unwrap.
+# Postfix chain: [index/slice/idx-set], .field, .method(args) raw, ? unwrap,
+# `as i64|f64` cast (contextual IDENT, binds like postfix).
 # Failures stop the chain (go=0); the error is already recorded.
 fn p_postfix(base: str) -> str {
     mut b: str = base
     mut go: i64 = 1
     while go == 1 {
         k = p_kind()
+        if k == 1 {
+            w = p_text()
+            if flint_str_compare(w, "as") == 0 {
+                nk = p_next_kind()
+                if nk == 23 {
+                    p_next()
+                    p_next()
+                    b = "(cast " + b + " i64)"
+                } else {
+                    if nk == 24 {
+                        p_next()
+                        p_next()
+                        b = "(cast " + b + " f64)"
+                    } else {
+                        if nk == 25 {
+                            p_next()
+                            p_next()
+                            print("as-casts support only 'i64' and 'f64'")
+                            p_note_err()
+                            return ""
+                        } else {
+                            if nk == 26 {
+                                p_next()
+                                p_next()
+                                print("as-casts support only 'i64' and 'f64'")
+                                p_note_err()
+                                return ""
+                            } else {
+                                if nk == 27 {
+                                    p_next()
+                                    p_next()
+                                    print("as-casts support only 'i64' and 'f64'")
+                                    p_note_err()
+                                    return ""
+                                } else {
+                                    if nk == 1 {
+                                        nw = p_next_text()
+                                        if PDTYPESUF.has(nw) == 1 {
+                                            p_next()
+                                            p_next()
+                                            print("as-cast dtype is not yet supported (only 'i64' and 'f64')")
+                                            p_note_err()
+                                            return ""
+                                        } else {
+                                            go = 0
+                                        }
+                                    } else {
+                                        go = 0
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                go = 0
+            }
+        } else {
         if k == 54 {
             p_next()
             idx = p_expr()
@@ -826,6 +1089,7 @@ fn p_postfix(base: str) -> str {
                     go = 0
                 }
             }
+        }
         }
     }
     b
@@ -2801,6 +3065,21 @@ fn pp_tagged3(src: str, tag: str) -> str {
                                 PPPREC = 0
                                 e + "?"
                             } else {
+                                if tag == "cast" {
+                                    # `E as T` (postfix binding). Parenthesize
+                                    # a low-prec operand so re-parse agrees:
+                                    # `(x + 1) as f64` must print with parens.
+                                    e = pp_node(src)
+                                    ep = PPPREC
+                                    pp_skip(src)
+                                    ty = pp_word(src)
+                                    PPPREC = 100
+                                    if ep < 100 {
+                                        "(" + e + ") as " + ty
+                                    } else {
+                                        e + " as " + ty
+                                    }
+                                } else {
                                 if tag == "ref" {
                                     e = pp_node(src)
                                     PPPREC = 100
@@ -2813,6 +3092,7 @@ fn pp_tagged3(src: str, tag: str) -> str {
                                     } else {
                                         pp_tagged4(src, tag)
                                     }
+                                }
                                 }
                             }
                         }
@@ -3423,46 +3703,52 @@ fn pp_tagged7(src: str, tag: str) -> str {
                 PPPREC = 100
                 "[" + pp_comma_list(src) + "]"
             } else {
-                if tag == "spread" {
-                    e = pp_node(src)
+                if tag == "tensor" {
+                    # Same surface as array (fixpoint re-parses to tensor).
                     PPPREC = 100
-                    "..." + e
+                    "[" + pp_comma_list(src) + "]"
                 } else {
-                    if tag == "map-lit" {
+                    if tag == "spread" {
+                        e = pp_node(src)
                         PPPREC = 100
-                        "map{{" + pp_map_pairs(src) + "}"
+                        "..." + e
                     } else {
-                        if tag == "extern" {
-                            pp_skip(src)
-                            lk = pp_word(src)
+                        if tag == "map-lit" {
                             PPPREC = 100
-                            "extern " + lk + " {{\n" + pp_seq(src) + "\n}"
+                            "map{{" + pp_map_pairs(src) + "}"
                         } else {
-                            if tag == "import" {
+                            if tag == "extern" {
                                 pp_skip(src)
-                                pth = pp_word(src)
+                                lk = pp_word(src)
                                 PPPREC = 100
-                                "import " + pth
+                                "extern " + lk + " {{\n" + pp_seq(src) + "\n}"
                             } else {
-                                if tag == "python" {
+                                if tag == "import" {
+                                    pp_skip(src)
+                                    pth = pp_word(src)
                                     PPPREC = 100
-                                    "python {{ " + pp_python_strs(src) + "}"
+                                    "import " + pth
                                 } else {
-                                    if tag == "fn-decl" {
+                                    if tag == "python" {
                                         PPPREC = 100
-                                        pp_tagged6(src, "fn")
+                                        "python {{ " + pp_python_strs(src) + "}"
                                     } else {
-                                        if tag == "expr" {
-                                            e = pp_node(src)
+                                        if tag == "fn-decl" {
                                             PPPREC = 100
-                                            e
+                                            pp_tagged6(src, "fn")
                                         } else {
-                                            if tag == "prog" {
+                                            if tag == "expr" {
+                                                e = pp_node(src)
                                                 PPPREC = 100
-                                                pp_seq(src)
+                                                e
                                             } else {
-                                                PERR = PERR + 1
-                                                ""
+                                                if tag == "prog" {
+                                                    PPPREC = 100
+                                                    pp_seq(src)
+                                                } else {
+                                                    PERR = PERR + 1
+                                                    ""
+                                                }
                                             }
                                         }
                                     }

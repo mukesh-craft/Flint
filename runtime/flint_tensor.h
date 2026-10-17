@@ -177,6 +177,17 @@ int64_t ag_grad_len(int64_t grad_id);
 void   ag_zero_grad(int64_t grad_id);
 void   ag_print_graph(void);
 
+// ---- weight checkpoints (FLWT v1) ------------------------------------------
+// Append-only, per-call serialization with a versioned header. Save a tensor
+// per call (fresh writes the "FLWT" v1 header; append adds one record), then
+// count the records and load each back by index with its exact shape and
+// dtype. All little-endian, host byte order; rank 1-5 (f32 1-4). Paths come
+// straight from the caller; the runtime performs no sandboxing there (same
+// contract as every file-capable C runtime function).
+int64_t flt_weights_save(const char* path, void* t, int64_t append);
+void*   flt_weights_load(const char* path, int64_t index);
+int64_t flt_weights_count(const char* path);
+
 // High-level autograd ops (record + compute)
 void* ag_matmul(void* a, void* b);
 void* ag_add(void* a, void* b);

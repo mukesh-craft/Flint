@@ -559,31 +559,127 @@ fn lex_into(src: str, kinds, starts, lens, lines, cols) -> i64 {
                                                                                                                             dd = 1
                                                                                                                         }
                                                                                                                     }
-                                                                                                                    if pos < n {
-                                                                                                                        if flint_str_char_at(src, pos) == 46 {
-                                                                                                                            # Consume '.' only if the char after
-                                                                                                                            # it is a digit (mirrors C++).
-                                                                                                                            if pos + 1 < n {
-                                                                                                                                if lex_is_digit(flint_str_char_at(src, pos + 1)) == 1 {
-                                                                                                                                    pos = pos + 1
-                                                                                                                                    col = col + 1
-                                                                                                                                    mut df: i64 = 0
-                                                                                                                                    while df == 0 {
-                                                                                                                                        if pos < n {
-                                                                                                                                            if lex_is_digit(flint_str_char_at(src, pos)) == 1 {
-                                                                                                                                                pos = pos + 1
-                                                                                                                                                col = col + 1
-                                                                                                                                            } else {
-                                                                                                                                                df = 1
-                                                                                                                                            }
-                                                                                                                                        } else {
-                                                                                                                                            df = 1
-                                                                                                                                        }
-                                                                                                                                    }
-                                                                                                                                }
-                                                                                                                            }
-                                                                                                                        }
-                                                                                                                    }
+                                                                                                                     if pos < n {
+                                                                                                                         if flint_str_char_at(src, pos) == 46 {
+                                                                                                                             # Consume '.' only if the char after
+                                                                                                                             # it is a digit (mirrors C++).
+                                                                                                                             if pos + 1 < n {
+                                                                                                                                 if lex_is_digit(flint_str_char_at(src, pos + 1)) == 1 {
+                                                                                                                                     pos = pos + 1
+                                                                                                                                     col = col + 1
+                                                                                                                                     mut df: i64 = 0
+                                                                                                                                     while df == 0 {
+                                                                                                                                         if pos < n {
+                                                                                                                                             if lex_is_digit(flint_str_char_at(src, pos)) == 1 {
+                                                                                                                                                 pos = pos + 1
+                                                                                                                                                 col = col + 1
+                                                                                                                                             } else {
+                                                                                                                                                 df = 1
+                                                                                                                                             }
+                                                                                                                                         } else {
+                                                                                                                                             df = 1
+                                                                                                                                         }
+                                                                                                                                     }
+                                                                                                                                 }
+                                                                                                                             }
+                                                                                                                         }
+                                                                                                                     }
+                                                                                                                     # Float exponent: e/E [+-]? digits (1e19,
+                                                                                                                     # 2.5e-3, 1E+4; mirrors C++). Consumed only
+                                                                                                                     # when digits follow (else `1e` stays `1` +
+                                                                                                                     # word `e`). Forces float via lex_has_dot.
+                                                                                                                     if pos < n {
+                                                                                                                         ec = flint_str_char_at(src, pos)
+                                                                                                                         if ec == 101 {
+                                                                                                                             mut eq: i64 = pos + 1
+                                                                                                                             if eq < n {
+                                                                                                                                 eqc = flint_str_char_at(src, eq)
+                                                                                                                                 if eqc == 43 {
+                                                                                                                                     eq = eq + 1
+                                                                                                                                 } else {
+                                                                                                                                     if eqc == 45 {
+                                                                                                                                         eq = eq + 1
+                                                                                                                                     }
+                                                                                                                                 }
+                                                                                                                             }
+                                                                                                                             if eq < n {
+                                                                                                                                 if lex_is_digit(flint_str_char_at(src, eq)) == 1 {
+                                                                                                                                     pos = pos + 1
+                                                                                                                                     col = col + 1
+                                                                                                                                     if pos < n {
+                                                                                                                                         sc = flint_str_char_at(src, pos)
+                                                                                                                                         if sc == 43 {
+                                                                                                                                             pos = pos + 1
+                                                                                                                                             col = col + 1
+                                                                                                                                         } else {
+                                                                                                                                             if sc == 45 {
+                                                                                                                                                 pos = pos + 1
+                                                                                                                                                 col = col + 1
+                                                                                                                                             }
+                                                                                                                                         }
+                                                                                                                                     }
+                                                                                                                                     mut de: i64 = 0
+                                                                                                                                     while de == 0 {
+                                                                                                                                         if pos < n {
+                                                                                                                                             if lex_is_digit(flint_str_char_at(src, pos)) == 1 {
+                                                                                                                                                 pos = pos + 1
+                                                                                                                                                 col = col + 1
+                                                                                                                                             } else {
+                                                                                                                                                 de = 1
+                                                                                                                                             }
+                                                                                                                                         } else {
+                                                                                                                                             de = 1
+                                                                                                                                         }
+                                                                                                                                     }
+                                                                                                                                 }
+                                                                                                                             }
+                                                                                                                         } else {
+                                                                                                                             if ec == 69 {
+                                                                                                                                 mut eQ: i64 = pos + 1
+                                                                                                                                 if eQ < n {
+                                                                                                                                     eQc = flint_str_char_at(src, eQ)
+                                                                                                                                     if eQc == 43 {
+                                                                                                                                         eQ = eQ + 1
+                                                                                                                                     } else {
+                                                                                                                                         if eQc == 45 {
+                                                                                                                                             eQ = eQ + 1
+                                                                                                                                         }
+                                                                                                                                     }
+                                                                                                                                 }
+                                                                                                                                 if eQ < n {
+                                                                                                                                     if lex_is_digit(flint_str_char_at(src, eQ)) == 1 {
+                                                                                                                                         pos = pos + 1
+                                                                                                                                         col = col + 1
+                                                                                                                                         if pos < n {
+                                                                                                                                             sC = flint_str_char_at(src, pos)
+                                                                                                                                             if sC == 43 {
+                                                                                                                                                 pos = pos + 1
+                                                                                                                                                 col = col + 1
+                                                                                                                                             } else {
+                                                                                                                                                 if sC == 45 {
+                                                                                                                                                     pos = pos + 1
+                                                                                                                                                     col = col + 1
+                                                                                                                                                 }
+                                                                                                                                             }
+                                                                                                                                         }
+                                                                                                                                         mut dE: i64 = 0
+                                                                                                                                         while dE == 0 {
+                                                                                                                                             if pos < n {
+                                                                                                                                                 if lex_is_digit(flint_str_char_at(src, pos)) == 1 {
+                                                                                                                                                     pos = pos + 1
+                                                                                                                                                     col = col + 1
+                                                                                                                                                 } else {
+                                                                                                                                                     dE = 1
+                                                                                                                                                 }
+                                                                                                                                             } else {
+                                                                                                                                                 dE = 1
+                                                                                                                                             }
+                                                                                                                                         }
+                                                                                                                                     }
+                                                                                                                                 }
+                                                                                                                             }
+                                                                                                                         }
+                                                                                                                     }
                                                                                                                     lex_emit(kinds, starts, lens, lines, cols, 2, st, pos - st, line, col)
                                                                                                                 } else {
                                                                                                                     if lex_is_alpha(c2) == 1 {
@@ -700,15 +796,28 @@ fn lex_into(src: str, kinds, starts, lens, lines, cols) -> i64 {
 }
 # Driver helpers (dump side only; not part of the lexer contract).
 fn lex_has_dot(s: str) -> i64 {
+    # Float marker: '.' OR exponent e/E (1e19, 2.5e-3, 1E+4 all need `d`).
+    # Number lexemes hold only digits/./e/E/sign, so any e/E is an exponent.
     n = flint_str_length(s)
     mut i: i64 = 0
     mut found: i64 = 0
     while i < n {
-        if flint_str_char_at(s, i) == 46 {
+        c = flint_str_char_at(s, i)
+        if c == 46 {
             found = 1
             i = n
         } else {
-            i = i + 1
+            if c == 101 {
+                found = 1
+                i = n
+            } else {
+                if c == 69 {
+                    found = 1
+                    i = n
+                } else {
+                    i = i + 1
+                }
+            }
         }
     }
     found

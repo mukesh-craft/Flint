@@ -17,6 +17,9 @@ check tests/t_hello.fl "hello"
 check tests/t_hello.fl "1"
 check tests/t_arith.fl "48"
 check tests/t_arith.fl "-1"
+check tests/t_arith.fl "-7"
+check tests/t_arith.fl "4611686018427387904"
+check tests/t_arith.fl "57"
 check tests/t_flow.fl "25"
 check tests/t_flow.fl "9"
 check tests/t_flow.fl "3"
@@ -30,6 +33,11 @@ check tests/t_funcs.fl "42"
 check tests/t_funcs.fl "55"
 check tests/t_types.fl "HELLO"
 check tests/t_types.fl "42"
+# util + time under JIT: these load .o files whose atomics must resolve in
+# the JIT's own symbol pool (compiler-rt gap, item 17) — a standing gate
+# for the no-outline-atomics runtime build.
+check tests/t_util.fl "cli-ok"
+check tests/t_time.fl "EDT"
 check tests/t_lexkit.fl "hello world 42"
 check tests/t_lexkit.fl "1998"
 check_fail() { # $1=file $2=expected-error-substring: must exit nonzero with message
