@@ -1,0 +1,123 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Flint",
+  "scopeName": "source.flint",
+  "fileTypes": [
+    "fl"
+  ],
+  "patterns": [
+    {
+      "name": "comment.line.number-sign.flint",
+      "match": "^\\s*#.*$"
+    },
+    {
+      "name": "comment.line.double-slash.flint",
+      "match": "(?<!\\S)//.*$"
+    },
+    {
+      "begin": "/\\*",
+      "end": "\\*/",
+      "name": "comment.block.flint"
+    },
+    {
+      "name": "string.quoted.double.flint",
+      "match": "\"",
+      "begin": "\"",
+      "end": "\"",
+      "patterns": [
+        {
+          "name": "constant.character.escape.flint",
+          "match": "\\\\."
+        }
+      ]
+    },
+    {
+      "name": "constant.numeric.integer.flint",
+      "match": "\\b\\d+\\b"
+    },
+    {
+      "name": "constant.numeric.float.flint",
+      "match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b"
+    },
+    {
+      "name": "constant.numeric.scientific.flint",
+      "match": "\\b\\d+[eE][+-]?\\d+\\b"
+    },
+    {
+      "name": "constant.language.boolean.flint",
+      "match": "\\b(true|false)\\b"
+    },
+    {
+      "name": "keyword.control.flint",
+      "match": "\\b(break|continue|elif|else|for|if|in|match|parallel|return|try|while)\\b"
+    },
+    {
+      "name": "storage.type.flint",
+      "match": "\\b(bool|f64|i64|ptr|str)\\b"
+    },
+    {
+      "name": "storage.modifier.flint",
+      "match": "\\b(mut|var|let|def)\\b"
+    },
+    {
+      "name": "keyword.declaration.flint",
+      "match": "\\b(def|enum|extern|fn|import|let|mut|struct|var)\\b"
+    },
+    {
+      "name": "keyword.operator.word.flint",
+      "match": "\\b(and|or|not)\\b"
+    },
+    {
+      "name": "support.type.python.flint",
+      "match": "\\bpython\\b"
+    },
+    {
+      "name": "support.function.builtin.flint",
+      "match": "\\bflint_[a-z0-9_]+\\b"
+    },
+    {
+      "name": "support.function.tensor.flint",
+      "match": "\\b(ag_[a-z0-9_]+|adam_[a-z0-9_]+)\\b"
+    },
+    {
+      "name": "entity.name.function.flint",
+      "match": "\\b(flint_print|flint_println|print|puts)\\b"
+    },
+    {
+      "name": "variable.other.member.flint",
+      "match": "(?<=[\\.\\|>:])\\s*[A-Za-z_][A-Za-z0-9_]*"
+    },
+    {
+      "name": "entity.name.type.struct.flint",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    {
+      "name": "entity.name.function.call.flint",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()"
+    },
+    {
+      "name": "entity.name.type.flint",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\{)"
+    },
+    {
+      "name": "constant.language.flint",
+      "match": "\\b(self|this)\\b"
+    },
+    {
+      "name": "keyword.operator.flint",
+      "match": "(:=|\\|>|\\.\\.|==|!=|<=|>=|&&|\\|\\||[-+*/%!<>=&|?~])"
+    },
+    {
+      "name": "punctuation.separator.flint",
+      "match": "[:,;.]"
+    },
+    {
+      "name": "punctuation.bracket.flint",
+      "match": "[{}()\\[\\]]"
+    },
+    {
+      "name": "variable.other.flint",
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+    }
+  ]
+}

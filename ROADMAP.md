@@ -514,7 +514,7 @@ clang output.ll runtime.o -o hello
 | Error messages with source line + caret display | ✅ |
 | `flint fmt` (auto-formatter script) | ✅ |
 | `flint doc` (documentation generator script) | ✅ |
-| `flint-lsp` (basic LSP server with completion/hover) | ✅ |
+| `flint-lsp` (Rust LSP: diagnostics/completion/hover/definition/references/outline, gated) | ✅ |
 
 ## Phase J: Post-V1 Improvement Plan (compiled 2026-09-24)
 
