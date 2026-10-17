@@ -13,6 +13,8 @@
 #
 # Usage: bash tests/test_lsp.sh [path/to/flintc]   (default: ./flintc)
 set -u
+WORK="${TMPDIR:-$HOME/.tmp}"
+mkdir -p "$WORK"
 FLINTC="${1:-./flintc}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
