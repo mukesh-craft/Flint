@@ -1,0 +1,8 @@
+// Flint library module: no main, so the emitted object can be linked into a
+// foreign-language program (Rust here, C anywhere) without colliding with
+// that program's own entry point. flintc emits user functions as unmangled
+// global symbols — this file is what makes "Rust calls Flint" true.
+
+fn add(a: i64, b: i64) -> i64 {
+    return a + b
+}

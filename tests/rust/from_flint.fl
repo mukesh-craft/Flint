@@ -1,0 +1,16 @@
+// Flint calling into a Rust static library (direction: Flint -> Rust).
+//
+// Build with: ./flintc tests/rust/from_flint.fl -o prog --link libflintrust.a
+// The symbols come from tests/rust/flintrust.rs.
+
+extern "C" {
+    fn rust_add(a: i64, b: i64) -> i64
+    fn rust_sum_to(n: i64) -> i64
+    fn rust_strlen(s: str) -> i64
+}
+
+fn main() {
+    print(rust_add(40, 2))
+    print(rust_sum_to(1000))
+    print(rust_strlen("hello"))
+}

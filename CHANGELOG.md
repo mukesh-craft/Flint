@@ -7,6 +7,30 @@ All notable changes to Flint are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **C-ABI interop proven in both directions, with Rust on both sides.**
+  Flint could call C (`examples/ffi_demo.fl`), but nothing called *Flint*:
+  the README's "FFI both directions" claim had no reverse test. Two facts
+  make it real and both are now gated (`tests/test_rust_ffi.sh`, 8 checks,
+  rustc + clang only, no cargo and no network):
+  - **Flint -> Rust**: `tests/rust/flintrust.rs` builds as a static library
+    exporting `rust_add`/`rust_sum_to`/`rust_strlen`; `tests/rust/from_flint.fl`
+    declares them `extern "C"` and links it via `--link`, printing
+    `42 / 500500 / 5`. The Rust side checks its pointer arguments and
+    reports failure as a sentinel instead of trapping.
+  - **Rust -> Flint**: `tests/rust/lib_add.fl` is a Flint module with no
+    `main`, which `flintc -o lib_add.o` emits with user functions as
+    unmangled globals (`T add`). `tests/rust/to_rust.rs` links that object
+    plus the Flint runtime objects and calls `add(40,2) == 42` and
+    `flint_str_length("hello") == 5` directly — the runtime ABI is
+    reachable from Rust, not only from Flint.
+- **`tests/test_rust_oracle.sh`: a memory-safe result oracle.** The benchmark
+  suite compares *timings* between mirrors; nothing compared *results* across
+  languages. `tests/rust/oracle_sum.rs` and `tests/rust/oracle_primes.rs`
+  reimplement the `sum_array` and `primes` workloads with checked arithmetic
+  and a `Vec` sieve, and the deterministic output line must be byte-identical
+  to Flint's (`sum: 99999990000000`, `primes up to 10M: 664579`); timing
+  lines are excluded by design. It earned its keep immediately: the first
+  Rust primes mirror counted marked composites and reported 9335420.
 - **LICENSE (Apache-2.0) + license pointer in README.** The repository had
   no license file, which legally blocked third-party reuse of Flint source
   and artifacts. The full Apache-2.0 text is now in `LICENSE` (copyright
