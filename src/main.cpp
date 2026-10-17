@@ -20,6 +20,9 @@
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Support/CodeGen.h"
 #include "llvm/IR/LegacyPassManager.h"
+#include "llvm/IR/DIBuilder.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -267,7 +270,7 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     const char* stdLibs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o",
                              "flint_ai_opt.o", "flint_math.o", "flint_fmt.o",
                              "flint_coll.o", "flint_nn.o", "flint_util.o",
-                             "flint_value.o", "flint_toml.o", "flint_yaml.o",
+                             "flint_value.o", "flint_toml.o", "flint_yaml.o", "flint_time.o",
                              "flint_serial.o", "flint_crypto.o", "flint_net.o",
                              "flint_aegis.o", "flint_chan.o",
                              "ffi_helper.o"};
@@ -429,7 +432,7 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
     }
     const char* aiObjs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o", "flint_ai_opt.o"};
     const char* libObjs[] = {"flint_math.o", "flint_fmt.o", "flint_coll.o",
-                            "flint_nn.o", "flint_util.o"};
+                            "flint_nn.o", "flint_util.o", "flint_time.o"};
     for (auto* objName : libObjs)
         if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
     for (auto* objName : aiObjs)
@@ -479,11 +482,20 @@ static void* preloadPython() {
     return handle;
 }
 
+// JIT path: debug metadata is for artifacts (.ll text, .o objects), never
+// for JIT execution — strip it before handing the module to ORC (the JIT
+// engine with an unfinalized DIBuilder hung; stripping is also simply the
+// right scope: no debugger attaches to JIT-computed code).
 static int runWithJIT(std::unique_ptr<llvm::Module> mod, std::unique_ptr<llvm::LLVMContext> ctx,
                       const std::vector<char*>& progArgs,
                       const std::vector<std::string>& extraObjs = {}) {
     using namespace llvm;
     using namespace llvm::orc;
+
+    // Debug metadata never enters the JIT (see comment above this fn).
+    if (mod->getModuleFlag("Debug Info Version")) {
+        llvm::StripDebugInfo(*mod.get());
+    }
 
     void* pythonHandle = preloadPython();
     if (!pythonHandle) {
@@ -572,7 +584,9 @@ static const char* kFlintVersion = FLINT_VERSION;
 // --backend) silently reused stale modules/binaries.
 static std::string cacheSalt(llvm::CodeGenOptLevel ol, bool releaseMode,
                              const std::string& backend, const char* argv0,
-                             bool loopOpt = false) {
+                             bool loopOpt = false,
+                             const std::string& targetTriple = "",
+                             bool debugInfo = false) {
     struct stat st;
     uint64_t mt = 0;
     if (argv0 && stat(argv0, &st) == 0) mt = (uint64_t)st.st_mtime;
@@ -598,7 +612,9 @@ static std::string cacheSalt(llvm::CodeGenOptLevel ol, bool releaseMode,
     return "flintc-v" + std::string(kFlintVersion) + "-o" + std::to_string((int)ol)
          + (releaseMode ? "-unsafe" : "-safe") + "-" + backend + "-m" + std::to_string(mt)
          + "-rt" + std::to_string(rt)
-         + (loopOpt ? "-loopopt" : "");
+         + (loopOpt ? "-loopopt" : "")
+         + (targetTriple.empty() ? "" : "-tgt" + targetTriple)
+         + (debugInfo ? "-dbg" : "");
 }
 
 // B1: cold panic/bounds helpers for generated IR. flint_panic never returns
@@ -1279,6 +1295,21 @@ private:
             advance(); // '.'
             while (std::isdigit(peek())) advance();
         }
+        // Float exponent: e/E [+-]? digits (1e19, 2.5e-3, 1E+4). Consumed
+        // only when digits follow (optional sign skipped first); else `1e`
+        // stays `1` + ident `e`, never a split token. Forces float.
+        if (peek() == 'e' || peek() == 'E') {
+            size_t q = pos + 1;
+            char qc = q < source.size() ? source[q] : '\0';
+            if (qc == '+' || qc == '-') q++;
+            char dc = q < source.size() ? source[q] : '\0';
+            if (std::isdigit(dc)) {
+                isFloat = true;
+                advance(); // 'e'/'E'
+                if (peek() == '+' || peek() == '-') advance();
+                while (std::isdigit(peek())) advance();
+            }
+        }
         // Store isFloat in the lexeme as a hint? No — better in the token.
         // We append a secret 'd' suffix to the lexeme that the parser will see.
         std::string lit = source.substr(start, pos - start).str();
@@ -1406,7 +1437,7 @@ enum class NodeKind {
     Number, String, Variable, Assign, Binary, Compare, Call, VarDecl,
     Return, If, While, Break, Continue, Block, PyBlock, Array, Index, Slice, Ref, Deref,
     StructLiteral, EnumConstruct, Match, FieldAccess, Function, Lambda, Unwrap, Destructure,
-    MapLiteral
+    MapLiteral, Cast, Tensor
 };
 
 struct ExprAST {
@@ -1610,6 +1641,104 @@ struct MapLiteralAST : ExprAST {
     MapLiteralAST() : ExprAST(NodeKind::MapLiteral) {}
 };
 
+// Phase-2 `as` cast: `expr as i64|f64` (contextual `as`, NOT a keyword —
+// `as` lexes as IDENTIFIER everywhere, so no lexer/token change was needed
+// and --dump-tokens output is untouched). i64->f64 widens exactly;
+// f64->i64 truncates toward zero (LLVM fptosi semantics); out-of-range
+// inputs are LLVM-undefined (poison), never checked — guard explicitly if
+// the input is untrusted. Only i64/f64 are supported; anything else is a
+// loud parse/codegen error, never silent.
+struct CastExprAST : ExprAST {
+    std::unique_ptr<ExprAST> expr;
+    Type target;
+    CastExprAST(std::unique_ptr<ExprAST> e, Type t)
+        : ExprAST(NodeKind::Cast), expr(std::move(e)), target(t) {}
+};
+
+// Phase-2 f64 tensor literal: `[...floats...]` (rank 1) or
+// `[[...],[...]]` equal-length rows (rank 2), desugared at codegen to the
+// existing builtins flint_create_1d/2d + flt_set (no runtime change).
+// Values are stored as doubles; int elements promote exactly when
+// representable. Detection is purely syntactic (bare numeric literals, so
+// every backend agrees trivially); anything else stays an Array.
+struct TensorLiteralAST : ExprAST {
+    int rank = 1; // 1 or 2
+    int64_t rows = 0; // rank 1: length; rank 2: row count
+    int64_t cols = 0; // rank 2: column count
+    std::vector<double> values; // flat row-major
+    TensorLiteralAST() : ExprAST(NodeKind::Tensor) {}
+};
+
+// Phase-2 helpers (as-casts + tensor literals). Detection is purely
+// syntactic so the AST, emit-mode, and Flint self-host paths agree exactly.
+static bool isTensorDtypeSuffix(const std::string& w) {
+    return w == "f32" || w == "f16" || w == "i8" || w == "i16" ||
+           w == "i32" || w == "u8" || w == "u16" || w == "u32" ||
+           w == "u64";
+}
+
+// Classify the follower of contextual `as`: 1=i64, 2=f64 (supported),
+// -1=explicit reject (sets *notYet for real-but-unsupported dtypes),
+// 0=not a cast trigger (leave `as` alone — variable/field use).
+static int castTargetKind(TokenType follower, const std::string& followerLex,
+                          bool* notYet) {
+    *notYet = false;
+    if (follower == TokenType::KW_I64) return 1;
+    if (follower == TokenType::KW_F64) return 2;
+    if (follower == TokenType::KW_STR || follower == TokenType::KW_BOOL ||
+        follower == TokenType::KW_PTR)
+        return -1;
+    if (follower == TokenType::IDENTIFIER && isTensorDtypeSuffix(followerLex)) {
+        *notYet = true;
+        return -1;
+    }
+    return 0;
+}
+
+// Numeric-literal value for tensor detection: bare Number nodes and the exact
+// unary-minus desugar (0 - lit, int-zero lhs). Paren groups return their
+// inner node, so (1.0) is a Number here — and identically (num 1.0d) in
+// stage 2, so all paths agree. `0.0 - x` is NOT folded (only int-zero lhs).
+static bool tensorElemDouble(ExprAST* e, double& out, bool& isFloat) {
+    if (!e) return false;
+    if (e->kind == NodeKind::Number) {
+        auto* n = static_cast<NumberExprAST*>(e);
+        if (n->isInt) {
+            out = static_cast<double>(n->intValue);
+            isFloat = false;
+            return true;
+        }
+        out = n->value;
+        if (n->isFloat) {
+            isFloat = true;
+            return true;
+        }
+        double ip;
+        if (std::modf(n->value, &ip) != 0.0) {
+            isFloat = true;
+            return true;
+        }
+        isFloat = false;
+        return true;
+    }
+    if (e->kind == NodeKind::Binary) {
+        auto* b = static_cast<BinaryExprAST*>(e);
+        if (b->op == '-' && b->lhs && b->lhs->kind == NodeKind::Number) {
+            auto* z = static_cast<NumberExprAST*>(b->lhs.get());
+            if (z->isInt && z->intValue == 0) {
+                double d;
+                bool f;
+                if (tensorElemDouble(b->rhs.get(), d, f)) {
+                    out = -d;
+                    isFloat = f;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 // Clone an expression AST node (for default parameter expansion)
 static std::unique_ptr<ExprAST> cloneExpr(ExprAST* e) {
     if (!e) return nullptr;
@@ -1654,6 +1783,19 @@ static std::unique_ptr<ExprAST> cloneExpr(ExprAST* e) {
             c->keys = m->keys;
             for (auto& v : m->values) c->values.push_back(cloneExpr(v.get()));
             return c;
+        }
+        case NodeKind::Cast: {
+            auto* c = static_cast<CastExprAST*>(e);
+            auto n = std::make_unique<CastExprAST>(cloneExpr(c->expr.get()), c->target);
+            n->loc = c->loc; return n;
+        }
+        case NodeKind::Tensor: {
+            auto* t = static_cast<TensorLiteralAST*>(e);
+            auto n = std::make_unique<TensorLiteralAST>();
+            n->loc = t->loc;
+            n->rank = t->rank; n->rows = t->rows; n->cols = t->cols;
+            n->values = t->values;
+            return n;
         }
         default: return nullptr;
     }
@@ -1945,7 +2087,8 @@ public:
             case NodeKind::Array: case NodeKind::Index: case NodeKind::Slice:
             case NodeKind::Ref: case NodeKind::Deref: case NodeKind::StructLiteral:
             case NodeKind::EnumConstruct: case NodeKind::FieldAccess:
-            case NodeKind::Lambda: case NodeKind::Unwrap: case NodeKind::MapLiteral:
+            case NodeKind::Lambda:             case NodeKind::Unwrap: case NodeKind::MapLiteral:
+            case NodeKind::Cast: case NodeKind::Tensor:
             // An `if` used in expression position is a value (`fn f() -> i64
             // { if c { 1 } else { 2 } }`). Excluding it broke implicit returns
             // of if-expressions -- fib() silently returned 0.
@@ -2317,6 +2460,12 @@ private:
             case NodeKind::String: return Type::str();
             case NodeKind::Array: return Type::array(Type::i64());
             case NodeKind::MapLiteral: return Type::map();
+            case NodeKind::Cast: return static_cast<CastExprAST*>(expr)->target;
+            // Tensor deliberately infers i64, NOT ptr: inferCallType gives
+            // flt_create_1d/2d the same i64 (opaque handles are unified at
+            // codegen by emitVarDecl's LLVM-type adjustment), so a literal
+            // and its hand-built equivalent type identically everywhere.
+            case NodeKind::Tensor: return Type::i64();
             case NodeKind::Variable: {
                 auto* v = static_cast<VariableExprAST*>(expr);
                 auto it = varTypeMap.find(v->name);
@@ -2639,7 +2788,24 @@ private:
 
         // Shared range-loop builder: `for i in start..end { body }`.
         auto buildRangeLoop = [&](std::unique_ptr<ExprAST> s, std::unique_ptr<ExprAST> e) -> std::unique_ptr<ExprAST> {
+            // Declare the loop var while parsing the body so `i as f64`
+            // (and any `i <ident>` use) sees a variable, not a bare call
+            // via the optional-parens rule (which only fires for unknown
+            // names). parseBlock saves/restores outer scope, so erase after
+            // when we introduced it (shadowing restores the old type).
+            bool hadLoop = declaredVars.count(loopVar.lexeme) != 0;
+            Type savedTy = Type::i64();
+            auto sit = varTypeMap.find(loopVar.lexeme);
+            if (sit != varTypeMap.end()) savedTy = sit->second;
+            declaredVars.insert(loopVar.lexeme);
+            varTypeMap[loopVar.lexeme] = Type::i64();
             auto body = parseBlock();
+            if (!hadLoop) {
+                declaredVars.erase(loopVar.lexeme);
+                varTypeMap.erase(loopVar.lexeme);
+            } else {
+                varTypeMap[loopVar.lexeme] = savedTy;
+            }
             if (!body) return nullptr;
 
             auto block = std::make_unique<BlockStmtAST>();
@@ -2700,7 +2866,20 @@ private:
             // Desugars to: { let __coll = collection; mut __idx = 0; while __idx < len(__coll) { let x = coll[__idx]; body; __idx = __idx + 1 } }
             // with kind-aware len/elem (array: hoisted len + data ptr; str: str_length + byte load).
             // Non-array/non-str never reach here (loud parse error above).
+            // Same loop-var scope fix as the range path above.
+            bool hadCLoop = declaredVars.count(loopVar.lexeme) != 0;
+            Type savedCTy = Type::i64();
+            auto csit = varTypeMap.find(loopVar.lexeme);
+            if (csit != varTypeMap.end()) savedCTy = csit->second;
+            declaredVars.insert(loopVar.lexeme);
+            varTypeMap[loopVar.lexeme] = Type::i64();
             auto body = parseBlock();
+            if (!hadCLoop) {
+                declaredVars.erase(loopVar.lexeme);
+                varTypeMap.erase(loopVar.lexeme);
+            } else {
+                varTypeMap[loopVar.lexeme] = savedCTy;
+            }
             if (!body) return nullptr;
 
             auto block = std::make_unique<BlockStmtAST>();
@@ -2831,7 +3010,21 @@ private:
         consume(TokenType::DOTDOT, "expected '..'");
         auto endExpr = parseExpression();
         if (!endExpr) return nullptr;
+        // Worker param scope (same fix as parseForStmt): the body sees the
+        // loop var as declared while parsing.
+        bool hadPLoop = declaredVars.count(loopVar.lexeme) != 0;
+        Type savedPTy = Type::i64();
+        auto psit = varTypeMap.find(loopVar.lexeme);
+        if (psit != varTypeMap.end()) savedPTy = psit->second;
+        declaredVars.insert(loopVar.lexeme);
+        varTypeMap[loopVar.lexeme] = Type::i64();
         auto body = parseBlock();
+        if (!hadPLoop) {
+            declaredVars.erase(loopVar.lexeme);
+            varTypeMap.erase(loopVar.lexeme);
+        } else {
+            varTypeMap[loopVar.lexeme] = savedPTy;
+        }
         if (!body) return nullptr;
 
         // parallel for i in start..end { body }
@@ -2996,6 +3189,12 @@ private:
                 case NodeKind::MapLiteral:
                     varType = Type::map();
                     break;
+                case NodeKind::Cast:
+                    // `y = expr as f64` records f64 so varTypeMap stays
+                    // honest (annotations, methodRecvKind, later inference).
+                    varType = static_cast<CastExprAST*>(init.get())->target;
+                    break;
+                // Tensor keeps the default i64 (same as flt_create_* calls).
                 case NodeKind::Call: {
                     auto* cInit = static_cast<CallExprAST*>(init.get());
                     // Same table inferType uses, so a global bound to a builtin
@@ -3243,6 +3442,10 @@ private:
                 for (auto& v : static_cast<MapLiteralAST*>(e)->values)
                     collectLambdaUses(v.get(), bound, uses, err);
                 break;
+            case NodeKind::Cast:
+                collectLambdaUses(static_cast<CastExprAST*>(e)->expr.get(), bound, uses, err);
+                break;
+            // TensorLiteralAST holds only doubles (no sub-expressions).
             case NodeKind::Lambda:
                 if (err) *err = "nested lambdas are not supported";
                 break;
@@ -3328,6 +3531,26 @@ private:
                 auto uw = std::make_unique<UnwrapExprAST>(std::move(lhs));
                 uw->loc = previous().loc;
                 lhs = std::move(uw);
+            } else if (check(TokenType::IDENTIFIER) && peek().lexeme == "as") {
+                // Phase-2 `as` cast (contextual: `as` stays an IDENTIFIER, so
+                // `as` as a variable/field name never triggers this — only
+                // `expr as <type>` does). Binds tighter than any binary op.
+                bool notYet = false;
+                int tk = castTargetKind(peek(1).type, peek(1).lexeme, &notYet);
+                if (tk == 0) break;
+                Token asTok = advance(); // 'as'
+                Token tyTok = advance(); // target
+                if (tk < 0) {
+                    if (notYet)
+                        parseError("as-cast to '" + tyTok.lexeme + "' is not yet supported (only 'i64' and 'f64'; f64->i64 truncates toward zero)");
+                    else
+                        parseError("as-casts support only 'i64' and 'f64' (got '" + tyTok.lexeme + "')");
+                    return nullptr;
+                }
+                auto c = std::make_unique<CastExprAST>(
+                    std::move(lhs), tk == 2 ? Type::f64() : Type::i64());
+                c->loc = asTok.loc;
+                lhs = std::move(c);
             } else {
                 break;
             }
@@ -3588,9 +3811,141 @@ private:
                         auto e = parseExpression();
                         if (e) { elems.push_back(std::move(e)); spreadFlags.push_back(false); }
                     }
+                    // Phase-2: dtype-suffixed numbers are loud, never silent.
+                    if (check(TokenType::IDENTIFIER) && isTensorDtypeSuffix(peek().lexeme)) {
+                        parseError("numeric dtype suffix '" + peek().lexeme + "' is not yet supported (tensor literals are f64-only; convert with `as f64` / `as i64`)");
+                        return nullptr;
+                    }
                 } while (match(TokenType::COMMA));
             }
             consume(TokenType::RBRACKET, "expected ']' after array literal");
+            // Phase-2 tensor literal: f64 rank<=2 desugars to flint_create_*.
+            // Poison rule: any float element or any [...] row claims the
+            // literal — it becomes a tensor or a LOUD error, never a silent
+            // garbage array (float arrays never worked: C++ stored double
+            // bits as i64, self-host errored). Pure-int/var/str/call
+            // literals keep the exact old array path ([1,2,3] untouched).
+            bool hasSpread = false;
+            for (bool f : spreadFlags) if (f) hasSpread = true;
+            if (!hasSpread && !elems.empty()) {
+                struct RowInfo { std::vector<double> vals; bool anyFloat = false; };
+                bool poisoned = false;
+                bool flatNums = true;
+                bool allRows = true;
+                std::vector<double> flatVals;
+                bool flatFloat = false;
+                std::vector<RowInfo> rows;
+                bool shapeErr = false;
+                std::string shapeMsg;
+                for (auto& e : elems) {
+                    double d = 0.0;
+                    bool f = false;
+                    if (tensorElemDouble(e.get(), d, f)) {
+                        flatVals.push_back(d);
+                        flatFloat = flatFloat || f;
+                        allRows = false;
+                        if (f) poisoned = true;
+                        continue;
+                    }
+                    flatNums = false;
+                    if (e->kind == NodeKind::Tensor) {
+                        // Inner [...] already converted: a rank-1 tensor
+                        // node IS a row (it has >=1 float by construction).
+                        poisoned = true;
+                        auto* tn = static_cast<TensorLiteralAST*>(e.get());
+                        if (tn->rank != 1) {
+                            parseError("tensor literals support only rank 1 and 2 (f64)");
+                            return nullptr;
+                        }
+                        RowInfo ri;
+                        ri.vals = tn->values;
+                        ri.anyFloat = true;
+                        rows.push_back(std::move(ri));
+                        continue;
+                    }
+                    if (e->kind == NodeKind::Array) {
+                        poisoned = true;
+                        auto* row = static_cast<ArrayExprAST*>(e.get());
+                        bool rspread = false;
+                        for (bool sf : row->spreadFlags) if (sf) rspread = true;
+                        RowInfo ri;
+                        bool ok = !rspread && !row->elements.empty();
+                        if (ok) {
+                            for (auto& re : row->elements) {
+                                double rd = 0.0;
+                                bool rf = false;
+                                if (tensorElemDouble(re.get(), rd, rf)) {
+                                    ri.vals.push_back(rd);
+                                    ri.anyFloat = ri.anyFloat || rf;
+                                } else if (re->kind == NodeKind::Array) {
+                                    shapeErr = true;
+                                    shapeMsg = "tensor literals support only rank 1 and 2 (f64)";
+                                    ok = false;
+                                    break;
+                                } else {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (ok) {
+                            rows.push_back(std::move(ri));
+                            continue;
+                        }
+                        if (!shapeErr) {
+                            shapeErr = true;
+                            shapeMsg = "tensor literal rows must be non-empty all-numeric f64 literal lists";
+                        }
+                    } else {
+                        allRows = false;
+                    }
+                }
+                if (shapeErr) {
+                    parseError(shapeMsg);
+                    return nullptr;
+                }
+                if (poisoned) {
+                    if (flatNums) {
+                        if (!flatFloat) {
+                            parseError("tensor literal needs at least one f64 element (add a decimal point); nested i64 arrays are not supported");
+                            return nullptr;
+                        }
+                        auto t = std::make_unique<TensorLiteralAST>();
+                        t->rank = 1;
+                        t->rows = (int64_t)flatVals.size();
+                        t->values = std::move(flatVals);
+                        t->loc = previous().loc;
+                        return t;
+                    }
+                    if (allRows && rows.size() == elems.size()) {
+                        size_t cols = rows[0].vals.size();
+                        bool ragged = false;
+                        bool anyF = false;
+                        for (auto& r : rows) {
+                            if (r.vals.size() != cols) ragged = true;
+                            anyF = anyF || r.anyFloat;
+                        }
+                        if (ragged) {
+                            parseError("ragged tensor literal: all rows must have the same length");
+                            return nullptr;
+                        }
+                        if (!anyF) {
+                            parseError("tensor literal needs at least one f64 element (add a decimal point); nested i64 arrays are not supported");
+                            return nullptr;
+                        }
+                        auto t = std::make_unique<TensorLiteralAST>();
+                        t->rank = 2;
+                        t->rows = (int64_t)rows.size();
+                        t->cols = (int64_t)cols;
+                        for (auto& r : rows)
+                            for (double v : r.vals) t->values.push_back(v);
+                        t->loc = previous().loc;
+                        return t;
+                    }
+                    parseError("tensor-shaped array literal is neither a flat f64 list nor equal-length f64 rows (use bare f64 literals, or build dynamic tensors with flint_create_1d/2d + flt_set)");
+                    return nullptr;
+                }
+            }
             auto arr = std::make_unique<ArrayExprAST>();
             arr->elements = std::move(elems);
             arr->spreadFlags = std::move(spreadFlags);
@@ -3860,6 +4215,15 @@ public:
     llvm::Value* emitIndexStoreEmit(llvm::Value* base, llvm::Value* index, llvm::Value* val);
     llvm::Value* emitFieldAccessEmit(llvm::Value* base, const std::string& field);
     llvm::Value* emitArrayLiteralEmit(const std::vector<llvm::Value*>& elems);
+    llvm::Value* emitTensorLiteralEmit(TensorLiteralAST& t);
+    // Phase-2 emit-mode tensor scan: `[` already consumed. 1=tensor (*t
+    // filled, consumed through `]`), 0=not tensor-shaped (consumed nothing
+    // past `[`, caller rewinds to the array path), -1=hard shape error
+    // (reported, consumed through `]`).
+    int tryParseTensorEmit(TensorLiteralAST& t);
+    // One numeric element for the scan above (redundant parens + leading
+    // minus allowed). 1=numeric, 0=not, -1=dtype suffix (reported).
+    int parseTensorNumEmit(double& out, bool& isF);
     llvm::Value* emitStructLiteralEmit(const std::string& name);
     llvm::Value* emitEnumConstructEmit(const std::string& enumName, const std::string& variantName);
     llvm::Value* emitCallEmit(const std::string& callee);
@@ -3909,7 +4273,14 @@ struct ArgSlot {
 
 class Codegen {
 public:
-    Codegen() : ctx(std::make_unique<llvm::LLVMContext>()),
+    // --target <triple>: non-host modules are EMIT-only outputs (.ll text or
+    // .o object). The datalayout and triple then describe the requested
+    // machine instead of the compiled-in Android host triple, so cross
+    // targets produce truthful metadata rather than a lying triple line.
+    // --run stays host-only because the ORC JIT is built for the native
+    // machine; main() refuses the combination loudly.
+    Codegen(const std::string& tripleOverride = "") :
+                ctx(std::make_unique<llvm::LLVMContext>()),
                 mod(std::make_unique<llvm::Module>("flint_module", *ctx)),
                 builder(std::make_unique<llvm::IRBuilder<>>(*ctx)),
                 i64Ty(llvm::Type::getInt64Ty(*ctx)),
@@ -3922,10 +4293,68 @@ public:
         // extensions (p270/p271/p272) are not needed at -O0; the layout here
         // must match ORC JIT's default to avoid enum/struct size mismatches.
         mod->setDataLayout("e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32");
+        if (!tripleOverride.empty()) {
+            initTargets();
+            std::string err;
+            auto* tgt = llvm::TargetRegistry::lookupTarget(tripleOverride, err);
+            if (!tgt) {
+                std::cerr << "error: --target '" << tripleOverride << "': " << err << "\n";
+                std::exit(1);
+            }
+            auto* tm = tgt->createTargetMachine(llvm::Triple(tripleOverride), "generic", "", {}, llvm::Reloc::PIC_,
+                std::nullopt);
+            if (!tm) { std::cerr << "error: no TargetMachine for '" << tripleOverride << "'\n"; std::exit(1); }
+            mod->setTargetTriple(llvm::Triple(tripleOverride));
+            mod->setDataLayout(tm->createDataLayout());
+            delete tm;
+        }
     }
 
     void setParser(Parser* p) { parser = p; }
     bool usedPython() const { return hasPython; }
+
+    // --debug: real DWARF line tables. DIBuilder CU + file + one
+    // DISubprogram per user function + per-statement DebugLoc seen by each
+    // IRBuilder insert. TF functions stay body-bearing, so a debugger can
+    // step Flint source lines. Verified by llvm-dwarfdump (on device), not
+    // asserted.
+    std::unique_ptr<llvm::DIBuilder> dib;
+    llvm::DICompileUnit* cu = nullptr;
+    llvm::DISubprogram* curDISub = nullptr;
+    bool debugInfo = false;
+
+    void initDebugSource(const std::string& srcPath) {
+        debugInfo = true;
+        std::string dir, file;
+        auto slash = srcPath.find_last_of('/');
+        if (slash == std::string::npos) {
+            dir = ".";
+            file = srcPath;
+        } else {
+            dir = srcPath.substr(0, slash);
+            file = srcPath.substr(slash + 1);
+        }
+        if (dir.empty()) dir = ".";
+        dib = std::make_unique<llvm::DIBuilder>(*mod, true /* AllowUnresolvedNodes */);
+        // Without this flag the bitcode reader (cache round-trip) and the
+        // object emitter both drop debug info outright with
+        // "invalid version (0)".
+        mod->addModuleFlag(llvm::Module::ModFlagBehavior::Error,
+                           "Debug Info Version", llvm::DEBUG_METADATA_VERSION);
+        cu = dib->createCompileUnit(
+            llvm::dwarf::DW_LANG_C11,
+            dib->createFile(file, dir),
+            "flint",
+            false /* isOptimized */,
+            "",
+            0);
+    }
+
+    void finishDebug() {
+        if (!dib) return;
+        dib->finalize();
+        dib.reset();
+    }
 
     // P0-3 error gate (re-added after 2026-09-14 wipe): every codegen
     // diagnostic routes through here so a failed compile exits nonzero and
@@ -4316,7 +4745,8 @@ public:
         // ──────────────────────────────────────────────────────
         add("flint_time_now", i64Ty, {}, false);
         add("flint_time_ns_monotonic", i64Ty, {}, false);
-        add("flint_time_format", i8PtrTy, {i8PtrTy}, false);
+        // (1-arg flint_time_format retired: the 3-arg civil-time version in
+        // flint_time.o owns the name; no callers of the old one exist.)
         // ──────────────────────────────────────────────────────
         // STANDARD LIBRARY — Testing
         // ──────────────────────────────────────────────────────
@@ -4468,6 +4898,9 @@ public:
         add("flt_div_tt",   tPtr, {tPtr, tPtr}, false);
         add("flt_matmul",   tPtr, {tPtr, tPtr}, false);
         add("flt_matmul_blas", tPtr, {tPtr, tPtr}, false);
+        add("flt_weights_save",  i64Ty, {i8PtrTy, tPtr, i64Ty}, false);
+        add("flt_weights_load",  tPtr,  {i8PtrTy, i64Ty}, false);
+        add("flt_weights_count", i64Ty, {i8PtrTy}, false);
         add("flt_sum",      f64Ty, {tPtr}, false);
         add("flt_mean",     f64Ty, {tPtr}, false);
         add("flt_reshape",  tPtr, {tPtr, i64Ty, llvm::PointerType::get(i64Ty, 0)}, false);
@@ -4790,6 +5223,41 @@ public:
         add("flint_toml_parse",     tPtr,    {i8PtrTy}, false);
         add("flint_yaml_parse",    tPtr,    {i8PtrTy}, false);
 
+        // ──────────────────────────────────────────────────────
+        // DATE / TIME / TIMEZONES (flint_time.o). Civil time and instants are
+        // deliberately separate: a calendar date is a fact, "3pm" is not.
+        // ──────────────────────────────────────────────────────
+        auto dtPtr = llvm::PointerType::get(*ctx, 0);
+        add("flint_is_leap",          i64Ty, {i64Ty}, false);
+        add("flint_days_in_month",    i64Ty, {i64Ty, i64Ty}, false);
+        add("flint_days_from_civil",  i64Ty, {i64Ty, i64Ty, i64Ty}, false);
+        add("flint_weekday_from_days", i64Ty, {i64Ty}, false);
+        add("flint_timegm",           i64Ty, {dtPtr}, false);
+        add("flint_gmtime",           dtPtr, {i64Ty}, false);
+        add("flint_datetime_make",    dtPtr, {i64Ty, i64Ty, i64Ty, i64Ty, i64Ty, i64Ty}, false);
+        add("flint_tz_offset_at",     i64Ty, {i8PtrTy, i64Ty}, false);
+        add("flint_tz_is_dst_at",     i64Ty,   {i8PtrTy, i64Ty}, false);
+        add("flint_tz_abbrev_at",     i8PtrTy, {i8PtrTy, i64Ty}, false);
+        add("flint_tz_lookup",        dtPtr, {i8PtrTy}, false);
+        add("flint_tz_convert",       dtPtr, {i64Ty, i8PtrTy}, false);
+        add("flint_dt_year",   i64Ty, {dtPtr}, false);
+        add("flint_dt_month",  i64Ty, {dtPtr}, false);
+        add("flint_dt_day",    i64Ty, {dtPtr}, false);
+        add("flint_dt_hour",   i64Ty, {dtPtr}, false);
+        add("flint_dt_minute", i64Ty, {dtPtr}, false);
+        add("flint_dt_second", i64Ty, {dtPtr}, false);
+        add("flint_dt_weekday", i64Ty, {dtPtr}, false);
+        add("flint_dt_yearday", i64Ty, {dtPtr}, false);
+        add("flint_tz_known",         i64Ty, {i8PtrTy}, false);
+        add("flint_tzdata_loaded",    i64Ty, {}, false);
+        add("flint_time_format",      i8PtrTy, {i8PtrTy, i64Ty, i8PtrTy}, false);
+        add("flint_time_parse",       i64Ty, {i8PtrTy, i8PtrTy, llvm::PointerType::get(i64Ty, 0)}, false);
+        add("flint_time_diff",        i64Ty, {i64Ty, i64Ty}, false);
+        add("flint_time_duration",    i8PtrTy, {i64Ty}, false);
+        add("flint_time_free",        voidTy, {i8PtrTy}, false);
+        add("flint_dt_free",          voidTy, {dtPtr}, false);
+        add("flint_tz_free",          voidTy, {dtPtr}, false);
+
         // BLAS backend introspection -- lets Flint report which matmul path is
         // live, which matters because it differs per build.
         add("flint_blas_available", i64Ty, {}, false);
@@ -4922,6 +5390,10 @@ public:
                 auto* n = static_cast<MapLiteralAST*>(e);
                 for (auto& v : n->values) push(v.get());
                 break; }
+            case NodeKind::Cast: {
+                auto* n = static_cast<CastExprAST*>(e);
+                push(n->expr.get()); break; }
+            // TensorLiteralAST holds only doubles: no children.
             // Statement forms: calls overwhelmingly live inside these, so a
             // walk that skips them sees almost nothing.
             case NodeKind::Block: {
@@ -5132,6 +5604,28 @@ public:
         llvm::Function* f = fIt->second;
         currentFunc = f;
 
+        if (debugInfo && dib) {
+            unsigned line = (unsigned)(fn->loc.line ? fn->loc.line : 1);
+            auto* sp = dib->createFunction(
+                cu,
+                fn->name,
+                f->getName(),
+                cu->getFile(),
+                line,
+                dib->createSubroutineType(dib->getOrCreateTypeArray({})),
+                line,
+                llvm::DINode::FlagZero,
+                llvm::DISubprogram::toSPFlags(false /* isLocalToUnit */,
+                                              true  /* isDefinition */,
+                                              false /* isOptimized */));
+            f->setSubprogram(sp);
+            curDISub = sp;
+            builder->SetCurrentDebugLocation(
+                llvm::DebugLoc(llvm::DILocation::get(*ctx, line, 1, curDISub)));
+        } else {
+            curDISub = nullptr;
+        }
+
         auto entry = llvm::BasicBlock::Create(*ctx, "entry", f);
         builder->SetInsertPoint(entry);
         symTable.enterScope();
@@ -5209,6 +5703,7 @@ public:
         }
 
         symTable.exitScope();
+        curDISub = nullptr;
 
     // Verification gate (P0-3). The IR must be valid before it can be
         // JIT-run, emitted or linked: a bad PHI or a value defined in two
@@ -5227,6 +5722,14 @@ public:
     }
 
     void emitStmt(ExprAST* node) {
+        // --debug: statement-level line attribution. IRBuilder stamps this
+        // DLLocation onto every instruction it inserts until the next
+        // statement changes it, so instructions map to Flint source lines.
+        if (debugInfo && curDISub) {
+            unsigned dl = (unsigned)(node->loc.line ? node->loc.line : 1);
+            builder->SetCurrentDebugLocation(
+                llvm::DebugLoc(llvm::DILocation::get(*ctx, dl, 1, curDISub)));
+        }
         switch (node->kind) {
             case NodeKind::VarDecl: emitVarDecl(static_cast<VarDeclAST*>(node)); return;
             case NodeKind::Return:  emitReturn(static_cast<ReturnStmtAST*>(node)); return;
@@ -5248,6 +5751,15 @@ public:
     }
 
     llvm::Value* emitExpr(ExprAST* node) {
+        // --debug: block-tail statements reach here via emitBlockExpr's
+        // emitExpr path (bypassing emitStmt), so the line stamp lives here
+        // too. Multi-line expressions map to their own lines, which is
+        // still correct stepping.
+        if (debugInfo && curDISub && node->loc.line) {
+            unsigned el = (unsigned)node->loc.line;
+            builder->SetCurrentDebugLocation(
+                llvm::DebugLoc(llvm::DILocation::get(*ctx, el, 1, curDISub)));
+        }
         switch (node->kind) {
             case NodeKind::Number: {
                 auto* n = static_cast<NumberExprAST*>(node);
@@ -5622,6 +6134,8 @@ public:
             }
             case NodeKind::Call:   return emitCall(static_cast<CallExprAST*>(node));
             case NodeKind::Array:  return emitArrayLiteral(static_cast<ArrayExprAST*>(node));
+            case NodeKind::Cast:   return emitCast(static_cast<CastExprAST*>(node));
+            case NodeKind::Tensor: return emitTensorLiteral(static_cast<TensorLiteralAST*>(node));
             case NodeKind::MapLiteral: return emitMapLiteral(static_cast<MapLiteralAST*>(node));
             case NodeKind::Index:  return emitIndexAccess(static_cast<IndexExprAST*>(node));
             case NodeKind::Slice:  return emitSliceAccess(static_cast<SliceExprAST*>(node));
@@ -6095,6 +6609,101 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         return m;
     }
 
+    // Phase-2 `as` cast codegen: direct sitofp/fptosi (no runtime call).
+    // Same-type casts are a no-op passthrough (emitting sitofp i64->i64
+    // would be invalid IR).
+    // f64->i64 safety: fptosi on NaN/+-Inf is poison (surfaced as garbage
+    // values), so a non-finite check panics first with a clear message;
+    // finite values outside [-(2^63), 2^63) have no i64 image, so an
+    // overflow check panics second ("cast overflow"). Cost: 3 fcmps (uno
+    // + 2 oeq) + 2 ors + 1 br, then 2 fcmps (oge + olt) + 1 or + 1 br per
+    // f64->i64 cast; the panic calls live only in the cold blocks, so the
+    // hot path keeps no call (same inline-split shape as bounds/div
+    // checks). f64 cannot represent anything in (2^63 - 1024, 2^63), so
+    // OGE against exactly 2^63 misses no representable value below it;
+    // exactly -(2^63) itself is in range (ocr fptosi -> INT64_MIN).
+    llvm::Value* emitCast(CastExprAST* c) {
+        auto* v = emitExpr(c->expr.get());
+        if (!v) return nullptr;
+        bool wantF64 = c->target.kind == TypeKind::F64;
+        bool wantI64 = c->target.kind == TypeKind::I64;
+        if (!wantF64 && !wantI64)
+            return codegenError("as-cast target must be 'i64' or 'f64'");
+        llvm::Type* t = v->getType();
+        auto* dblTy = llvm::Type::getDoubleTy(*ctx);
+        if (wantF64) {
+            if (t->isDoubleTy()) return v;
+            if (t->isIntegerTy(64))
+                return builder->CreateSIToFP(v, dblTy, "as_f64");
+            return codegenError("as f64 needs an i64 or f64 value");
+        }
+        if (t->isIntegerTy(64)) return v;
+        if (t->isDoubleTy()) {
+            auto* panicFn = functionMap["flint_panic"];
+            if (panicFn) {
+                auto* curF = builder->GetInsertBlock()->getParent();
+                auto* okBB = llvm::BasicBlock::Create(*ctx, "cast_ok", curF);
+                auto* panicBB = llvm::BasicBlock::Create(*ctx, "cast_panic", curF);
+                auto* zero = llvm::ConstantFP::get(dblTy, 0.0);
+                auto* posInf = llvm::ConstantFP::getInfinity(dblTy, false);
+                auto* negInf = llvm::ConstantFP::getInfinity(dblTy, true);
+                auto* isNan = builder->CreateFCmpUNO(v, zero, "cast_nan");
+                auto* isPosInf = builder->CreateFCmpOEQ(v, posInf, "cast_posinf");
+                auto* isNegInf = builder->CreateFCmpOEQ(v, negInf, "cast_neginf");
+                auto* isInf = builder->CreateOr(isPosInf, isNegInf, "cast_inf");
+                auto* bad = builder->CreateOr(isNan, isInf, "cast_nonfinite");
+                builder->CreateCondBr(bad, panicBB, okBB, coldWeightsTrue(*ctx));
+                builder->SetInsertPoint(panicBB);
+                builder->CreateCall(panicFn,
+                    {builder->CreateGlobalString("f64 to i64 cast of non-finite value", "castmsg")});
+                builder->CreateBr(okBB);
+                builder->SetInsertPoint(okBB);
+                auto* two63 = llvm::ConstantFP::get(dblTy, 9223372036854775808.0);
+                auto* geBig = builder->CreateFCmpOGE(v, two63, "cast_ge_2p63");
+                auto* ltNeg = builder->CreateFCmpOLT(
+                    v, llvm::ConstantFP::get(dblTy, -9223372036854775808.0), "cast_lt_neg2p63");
+                auto* oob = builder->CreateOr(geBig, ltNeg, "cast_oob");
+                auto* oobBB = llvm::BasicBlock::Create(*ctx, "cast_oob_panic", curF);
+                auto* finBB = llvm::BasicBlock::Create(*ctx, "cast_finite", curF);
+                builder->CreateCondBr(oob, oobBB, finBB, coldWeightsTrue(*ctx));
+                builder->SetInsertPoint(oobBB);
+                builder->CreateCall(panicFn,
+                    {builder->CreateGlobalString("f64 to i64 cast overflow", "oobmsg")});
+                builder->CreateBr(finBB);
+                builder->SetInsertPoint(finBB);
+            }
+            return builder->CreateFPToSI(v, i64Ty, "as_i64");
+        }
+        return codegenError("as i64 needs an i64 or f64 value");
+    }
+
+    // Phase-2 tensor literal codegen: desugar to the existing builtins
+    // flint_create_1d/2d + flt_set (flat row-major). No runtime change.
+    llvm::Value* emitTensorLiteral(TensorLiteralAST* t) {
+        auto itC1 = functionMap.find("flt_create_1d");
+        auto itC2 = functionMap.find("flt_create_2d");
+        auto itSet = functionMap.find("flt_set");
+        if (itC1 == functionMap.end() || itC2 == functionMap.end() ||
+            itSet == functionMap.end())
+            return codegenError("tensor runtime not registered");
+        llvm::Value* ten = nullptr;
+        auto* dblTy = llvm::Type::getDoubleTy(*ctx);
+        if (t->rank == 1) {
+            ten = builder->CreateCall(itC1->second,
+                {llvm::ConstantInt::get(i64Ty, (uint64_t)t->rows)}, "tensor1");
+        } else {
+            ten = builder->CreateCall(itC2->second,
+                {llvm::ConstantInt::get(i64Ty, (uint64_t)t->rows),
+                 llvm::ConstantInt::get(i64Ty, (uint64_t)t->cols)}, "tensor2");
+        }
+        for (size_t i = 0; i < t->values.size(); i++) {
+            builder->CreateCall(itSet->second,
+                {ten, llvm::ConstantInt::get(i64Ty, i),
+                 llvm::ConstantFP::get(dblTy, t->values[i])});
+        }
+        return ten;
+    }
+
     llvm::Value* emitArrayLiteral(ArrayExprAST* arr) {
         size_t count = arr->elements.size();
 
@@ -6187,7 +6796,41 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         llvm::Value* index = emitExpr(idx->index.get());
         if (!base || !index) return nullptr;
 
+        // Map read: `m["k"]` / `m[k]`. Map keys are strings (LLVM ptr) while
+        // array/str indices are i64, so the index type discriminates (map and
+        // str bases are both LLVM ptr and otherwise indistinguishable).
+        // Same call as `m.get(k)` (flint_map_get); missing keys report via
+        // flint_set_err exactly like the method form.
+        if (index->getType()->isPointerTy()) {
+            if (base->getType()->isStructTy())
+                return codegenError("array index needs i64 (got str; map keys are strings)");
+            auto it = functionMap.find("flint_map_get");
+            if (it == functionMap.end())
+                return codegenError("map runtime not registered");
+            return builder->CreateCall(it->second, {base, index}, "map_get");
+        }
         // D1: string vs array — array is {ptr,i64}, string is ptr.
+        // m[0]: a statically-known map base with an i64 key is a loud
+        // compile-time error (map keys are strings); without static type
+        // info the ptr bases are indistinguishable, so only known-map
+        // bases get this error and everything else keeps the str-GEP path
+        // (dynamic `f()[0]` / `(x)[0]` remains the documented gap).
+        // Same lookup as the fa_* method lowering below.
+        bool baseIsMap = false;
+        ExprAST* be = idx->base.get();
+        if (be->kind == NodeKind::MapLiteral) baseIsMap = true;
+        else if (be->kind == NodeKind::Variable) {
+            auto* bv = static_cast<VariableExprAST*>(be);
+            auto* sym = symTable.lookup(bv->name);
+            if (sym && sym->type.kind == TypeKind::Map) baseIsMap = true;
+            else {
+                auto git = globalSymTable.find(bv->name);
+                if (git != globalSymTable.end() && git->second.type.kind == TypeKind::Map)
+                    baseIsMap = true;
+            }
+        }
+        if (index->getType()->isIntegerTy(64) && baseIsMap)
+            return codegenError("map index needs a str key (map keys are strings)");
         bool isArray = base->getType()->isStructTy();
         if (isArray) {
             llvm::Value* dataPtr = builder->CreateExtractValue(base, {0}, "arr_ptr");
@@ -6910,6 +7553,67 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             }
         }
 
+        // D2: bare len() over array/str/map (mirrors self-host e_expr len:
+        // array → extractvalue 1, str → flint_str_length, map → flint_map_len).
+        // No new syntax; dispatch on static kind + LLVM struct fallback.
+        if (call->callee == "len") {
+            if (call->args.size() != 1)
+                return codegenError("len() needs 1 argument");
+            ExprAST* a0 = call->args[0].get();
+            // Static kind: 4=array,3=str,6=map,0=unknown (self-host ETYPE codes).
+            int lenKind = 0;
+            if (a0->kind == NodeKind::String) lenKind = 3;
+            else if (a0->kind == NodeKind::Array) lenKind = 4;
+            else if (a0->kind == NodeKind::MapLiteral) lenKind = 6;
+            else if (a0->kind == NodeKind::Variable) {
+                auto* v = static_cast<VariableExprAST*>(a0);
+                TypeKind tk = TypeKind::Void;
+                if (auto* sym = symTable.lookup(v->name)) tk = sym->type.kind;
+                else {
+                    auto git = globalSymTable.find(v->name);
+                    if (git != globalSymTable.end()) tk = git->second.type.kind;
+                }
+                if (tk == TypeKind::Array) lenKind = 4;
+                else if (tk == TypeKind::Str) lenKind = 3;
+                else if (tk == TypeKind::Map) lenKind = 6;
+            } else if (a0->kind == NodeKind::Call) {
+                auto* c = static_cast<CallExprAST*>(a0);
+                if (c->callee == "flint_map_new") lenKind = 6;
+                else if (c->callee == "flint_array_alloc" || c->callee == "flint_array_concat") lenKind = 4;
+                else if (c->callee == "flint_str_concat" || c->callee == "flint_str_substring" ||
+                         c->callee == "flint_str_to_upper" || c->callee == "flint_str_to_lower" ||
+                         c->callee == "flint_str_trim" || c->callee == "flint_str_reverse" ||
+                         c->callee == "flint_str_replace" || c->callee == "flint_str_repeat" ||
+                         c->callee == "flint_str_join" || c->callee == "flint_i64_to_string" ||
+                         c->callee == "flint_f64_to_string" || c->callee == "flint_map_keys") lenKind = 3;
+                else {
+                    auto fit2 = functionDefs.find(c->callee);
+                    if (fit2 != functionDefs.end()) {
+                        TypeKind rk = fit2->second->returnType.kind;
+                        if (rk == TypeKind::Array) lenKind = 4;
+                        else if (rk == TypeKind::Str) lenKind = 3;
+                        else if (rk == TypeKind::Map) lenKind = 6;
+                    }
+                }
+            }
+            auto* aval = emitExpr(a0);
+            if (!aval) return nullptr;
+            // Array is {ptr,i64} struct — reliable even when static kind unknown.
+            if (aval->getType()->isStructTy())
+                return builder->CreateExtractValue(aval, {1}, "len");
+            if (lenKind == 6) {
+                auto lit = functionMap.find("flint_map_len");
+                if (lit != functionMap.end()) return builder->CreateCall(lit->second, {aval});
+                return codegenError("flint_map_len not linked");
+            }
+            if (lenKind == 3) {
+                auto lit = functionMap.find("flint_str_length");
+                if (lit != functionMap.end()) return builder->CreateCall(lit->second, {aval});
+                return codegenError("flint_str_length not linked");
+            }
+            return codegenError("len needs array, str or map");
+        }
+
         auto it = functionMap.find(call->callee);
         if (it == functionMap.end()) {
             // Leftover fa_ method call: the receiver type was unknown at
@@ -6941,8 +7645,9 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
 // INTERFACE SYSTEM — emit and load .flint.bc declaration files
 // ============================================================================
 
-static bool emitInterface(ProgramAST& prog, const std::string& outputPath) {
-    Codegen cg;
+static bool emitInterface(ProgramAST& prog, const std::string& outputPath,
+                          const std::string& targetTriple) {
+    Codegen cg(targetTriple);
     if (!cg.generateDeclarations(prog)) return false;
     std::error_code ec;
     llvm::raw_fd_ostream out(outputPath, ec);
@@ -7048,6 +7753,7 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
         (void)nameTok;
         return store;
     }
+    Token exprStartTok = peek(); // for static map-base index checks
     auto left = parseNudEmit();
     if (!left) return nullptr;
 
@@ -7059,6 +7765,18 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
         if (tt == TokenType::LBRACKET) {
             advance();
             auto idx = parseExpressionEmit();
+            if (!idx) return nullptr;
+            // m[0] emit-mode mirror of Codegen::emitIndexAccess: a
+            // statically-known map base with an i64 key is a loud error,
+            // not the string byte-GEP path (silent garbage read).
+            if (idx->getType()->isIntegerTy(64) &&
+                exprStartTok.type == TokenType::IDENTIFIER) {
+                auto mit = varTypeMap.find(exprStartTok.lexeme);
+                if (mit != varTypeMap.end() && mit->second.kind == TypeKind::Map) {
+                    parseError("map index needs a str key (map keys are strings)");
+                    return nullptr;
+                }
+            }
             consume(TokenType::RBRACKET, "expected ']' after index");
             if (check(TokenType::ASSIGN)) {
                 // Index-assign, emit path (0c2 mirror of the AST desugar)
@@ -7099,6 +7817,80 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
             }
             // Emit call directly with pre-parsed args (bypass emitCallEmit which re-consumes tokens)
             left = emitDirectCall(fName.lexeme, args);
+            } else if (tt == TokenType::IDENTIFIER && peek().lexeme == "as") {
+                // Phase-2 `as` cast, emit-mode mirror of the AST path
+                // (contextual IDENT, same trigger rule, same errors).
+                bool notYet = false;
+                int tk = castTargetKind(peek(1).type, peek(1).lexeme, &notYet);
+                if (tk == 0) break;
+                Token asTok = advance(); // 'as'
+                Token tyTok = advance(); // target
+                (void)asTok;
+                if (tk < 0) {
+                    if (notYet)
+                        parseError("as-cast to '" + tyTok.lexeme + "' is not yet supported (only 'i64' and 'f64'; f64->i64 truncates toward zero)");
+                    else
+                        parseError("as-casts support only 'i64' and 'f64' (got '" + tyTok.lexeme + "')");
+                    return nullptr;
+                }
+                bool wantF64 = (tk == 2);
+                llvm::Type* lt = left->getType();
+                auto* dblTy = llvm::Type::getDoubleTy(*cg->ctx);
+                if (wantF64) {
+                    if (lt->isDoubleTy()) { /* no-op */ }
+                    else if (lt->isIntegerTy(64))
+                        left = cg->builder->CreateSIToFP(left, dblTy, "as_f64");
+                    else {
+                        parseError("as f64 needs an i64 or f64 value");
+                        return nullptr;
+                    }
+                } else {
+                    if (lt->isIntegerTy(64)) { /* no-op */ }
+                    // f64->i64 truncates toward zero (LLVM fptosi); NaN/+-Inf
+                    // is poison, so panic first (same inline-split + cost as
+                    // the AST path: non-finite block, then an overflow block
+                    // for |v| >= 2^63), panic calls only in cold.
+                    else if (lt->isDoubleTy()) {
+                        auto* panicFn = cg->functionMap["flint_panic"];
+                        if (panicFn) {
+                            auto* curF = cg->builder->GetInsertBlock()->getParent();
+                            auto* okBB = llvm::BasicBlock::Create(*cg->ctx, "cast_ok", curF);
+                            auto* panicBB = llvm::BasicBlock::Create(*cg->ctx, "cast_panic", curF);
+                            auto* zero = llvm::ConstantFP::get(dblTy, 0.0);
+                            auto* posInf = llvm::ConstantFP::getInfinity(dblTy, false);
+                            auto* negInf = llvm::ConstantFP::getInfinity(dblTy, true);
+                            auto* isNan = cg->builder->CreateFCmpUNO(left, zero, "cast_nan");
+                            auto* isPosInf = cg->builder->CreateFCmpOEQ(left, posInf, "cast_posinf");
+                            auto* isNegInf = cg->builder->CreateFCmpOEQ(left, negInf, "cast_neginf");
+                            auto* isInf = cg->builder->CreateOr(isPosInf, isNegInf, "cast_inf");
+                            auto* bad = cg->builder->CreateOr(isNan, isInf, "cast_nonfinite");
+                            cg->builder->CreateCondBr(bad, panicBB, okBB, coldWeightsTrue(*cg->ctx));
+                            cg->builder->SetInsertPoint(panicBB);
+                            cg->builder->CreateCall(panicFn,
+                                {cg->builder->CreateGlobalString("f64 to i64 cast of non-finite value", "castmsg")});
+                            cg->builder->CreateBr(okBB);
+                            cg->builder->SetInsertPoint(okBB);
+                            auto* two63 = llvm::ConstantFP::get(dblTy, 9223372036854775808.0);
+                            auto* geBig = cg->builder->CreateFCmpOGE(left, two63, "cast_ge_2p63");
+                            auto* ltNeg = cg->builder->CreateFCmpOLT(
+                                left, llvm::ConstantFP::get(dblTy, -9223372036854775808.0), "cast_lt_neg2p63");
+                            auto* oob = cg->builder->CreateOr(geBig, ltNeg, "cast_oob");
+                            auto* oobBB = llvm::BasicBlock::Create(*cg->ctx, "cast_oob_panic", curF);
+                            auto* finBB = llvm::BasicBlock::Create(*cg->ctx, "cast_finite", curF);
+                            cg->builder->CreateCondBr(oob, oobBB, finBB, coldWeightsTrue(*cg->ctx));
+                            cg->builder->SetInsertPoint(oobBB);
+                            cg->builder->CreateCall(panicFn,
+                                {cg->builder->CreateGlobalString("f64 to i64 cast overflow", "oobmsg")});
+                            cg->builder->CreateBr(finBB);
+                            cg->builder->SetInsertPoint(finBB);
+                        }
+                        left = cg->builder->CreateFPToSI(left, cg->i64Ty, "as_i64");
+                    }
+                    else {
+                        parseError("as i64 needs an i64 or f64 value");
+                        return nullptr;
+                    }
+                }
             } else if (p > PREC_NONE) {
                 Token opTok = advance();
                 auto right = parseExpressionEmit(p + 1);
@@ -7110,6 +7902,178 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
         if (!left) return nullptr;
     }
     return left;
+}
+
+int Parser::parseTensorNumEmit(double& out, bool& isF) {
+    int depth = 0;
+    while (check(TokenType::LPAREN)) {
+        advance();
+        depth++;
+    }
+    bool neg = false;
+    if (check(TokenType::MINUS) && peek(1).type == TokenType::NUMBER_LITERAL) {
+        neg = true;
+        advance();
+    }
+    if (!check(TokenType::NUMBER_LITERAL)) return 0;
+    Token nt = advance();
+    for (int i = 0; i < depth; i++)
+        if (!match(TokenType::RPAREN)) return 0;
+    if (check(TokenType::IDENTIFIER) && isTensorDtypeSuffix(peek().lexeme)) {
+        parseError("numeric dtype suffix '" + peek().lexeme + "' is not yet supported (tensor literals are f64-only; convert with `as f64` / `as i64`)");
+        return -1;
+    }
+    std::string lit = nt.lexeme;
+    bool f = false;
+    if (!lit.empty() && lit.back() == 'd') {
+        f = true;
+        lit.pop_back();
+    }
+    double v = 0.0;
+    int64_t iv = 0;
+    if (!f && parseI64Exact(lit, iv)) {
+        v = static_cast<double>(iv);
+    } else {
+        v = std::stod(lit);
+        if (!f) {
+            double ip;
+            if (std::modf(v, &ip) != 0.0) f = true;
+        }
+    }
+    out = neg ? -v : v;
+    isF = f;
+    return 1;
+}
+
+int Parser::tryParseTensorEmit(TensorLiteralAST& t) {
+    size_t afterOpen = getPos();
+    if (check(TokenType::RBRACKET)) return 0; // [] stays an array
+    if (check(TokenType::ELLIPSIS)) return 0; // spread: array path
+    struct Row { std::vector<double> v; bool f = false; };
+    std::vector<double> flat;
+    std::vector<Row> rows;
+    bool flatFloat = false, flatNums = true, allRows = true, poisoned = false;
+    size_t nelems = 0;
+    auto soft = [&]() -> int {
+        setPos(afterOpen);
+        return 0;
+    };
+    auto hard = [&](const std::string& m) -> int {
+        parseError(m);
+        int depth = 1;
+        while (depth > 0 && !isAtEnd()) {
+            if (check(TokenType::LBRACKET)) depth++;
+            else if (check(TokenType::RBRACKET)) depth--;
+            advance();
+        }
+        return -1;
+    };
+    while (!check(TokenType::RBRACKET) && !isAtEnd()) {
+        nelems++;
+        if (check(TokenType::LBRACKET)) {
+            poisoned = true;
+            flatNums = false;
+            advance(); // inner '['
+            Row r;
+            bool ok = !check(TokenType::RBRACKET);
+            while (ok && !check(TokenType::RBRACKET) && !isAtEnd()) {
+                if (check(TokenType::LBRACKET))
+                    return hard("tensor literals support only rank 1 and 2 (f64)");
+                if (check(TokenType::ELLIPSIS)) {
+                    ok = false;
+                    break;
+                }
+                double d = 0.0;
+                bool f = false;
+                int rc = parseTensorNumEmit(d, f);
+                if (rc < 0) return -1; // suffix error already reported; ']' unconsumed but progress made
+                if (rc == 0) {
+                    ok = false;
+                    break;
+                }
+                r.v.push_back(d);
+                r.f = r.f || f;
+                if (!match(TokenType::COMMA)) break;
+            }
+            if (!ok) return hard("tensor literal rows must be non-empty all-numeric f64 literal lists");
+            consume(TokenType::RBRACKET, "expected ']' to close tensor row");
+            rows.push_back(std::move(r));
+        } else {
+            double d = 0.0;
+            bool f = false;
+            int rc = parseTensorNumEmit(d, f);
+            if (rc < 0) return -1;
+            if (rc == 0) {
+                // Non-numeric element: consume one expression so the later
+                // array path (or error) starts at a sane position, then mark.
+                // Consumption is harmless: soft rewinds, hard skips.
+                auto sink = parseExpressionEmit();
+                (void)sink;
+                flatNums = false;
+                allRows = false;
+            } else {
+                flat.push_back(d);
+                flatFloat = flatFloat || f;
+                allRows = false;
+                if (f) poisoned = true;
+            }
+        }
+        if (!match(TokenType::COMMA)) break;
+    }
+    if (!poisoned) return soft(); // pure int/var/str/call: old array path
+    if (flatNums) {
+        t.rank = 1;
+        t.rows = (int64_t)flat.size();
+        t.values = std::move(flat);
+        consume(TokenType::RBRACKET, "expected ']' after tensor literal");
+        return 1;
+    }
+    if (allRows && rows.size() == nelems) {
+        size_t cols = rows[0].v.size();
+        bool ragged = false, anyF = false;
+        for (auto& r : rows) {
+            if (r.v.size() != cols) ragged = true;
+            anyF = anyF || r.f;
+        }
+        if (ragged) return hard("ragged tensor literal: all rows must have the same length");
+        if (!anyF)
+            return hard("tensor literal needs at least one f64 element (add a decimal point); nested i64 arrays are not supported");
+        t.rank = 2;
+        t.rows = (int64_t)rows.size();
+        t.cols = (int64_t)cols;
+        for (auto& r : rows)
+            for (double v : r.v) t.values.push_back(v);
+        consume(TokenType::RBRACKET, "expected ']' after tensor literal");
+        return 1;
+    }
+    return hard("tensor-shaped array literal is neither a flat f64 list nor equal-length f64 rows (use bare f64 literals, or build dynamic tensors with flint_create_1d/2d + flt_set)");
+}
+
+llvm::Value* Parser::emitTensorLiteralEmit(TensorLiteralAST& t) {
+    auto itC1 = cg->functionMap.find("flt_create_1d");
+    auto itC2 = cg->functionMap.find("flt_create_2d");
+    auto itSet = cg->functionMap.find("flt_set");
+    if (itC1 == cg->functionMap.end() || itC2 == cg->functionMap.end() ||
+        itSet == cg->functionMap.end()) {
+        parseError("tensor runtime not registered");
+        return nullptr;
+    }
+    auto* dblTy = llvm::Type::getDoubleTy(*cg->ctx);
+    llvm::Value* ten = nullptr;
+    if (t.rank == 1) {
+        ten = cg->builder->CreateCall(itC1->second,
+            {llvm::ConstantInt::get(cg->i64Ty, (uint64_t)t.rows)}, "tensor1");
+    } else {
+        ten = cg->builder->CreateCall(itC2->second,
+            {llvm::ConstantInt::get(cg->i64Ty, (uint64_t)t.rows),
+             llvm::ConstantInt::get(cg->i64Ty, (uint64_t)t.cols)}, "tensor2");
+    }
+    for (size_t i = 0; i < t.values.size(); i++) {
+        cg->builder->CreateCall(itSet->second,
+            {ten, llvm::ConstantInt::get(cg->i64Ty, i),
+             llvm::ConstantFP::get(dblTy, t.values[i])});
+    }
+    return ten;
 }
 
 llvm::Value* Parser::parseNudEmit() {
@@ -7140,6 +8104,15 @@ llvm::Value* Parser::parseNudEmit() {
         return cg->builder->CreateGlobalString(previous().lexeme, "str");
     }
     if (match(TokenType::LBRACKET)) {
+        // Phase-2: tensor-shaped float literals desugar to flint_create_*.
+        // Soft-fail rewinds to the array path below (identical rule to the
+        // AST path, so both agree exactly).
+        size_t afterOpen = getPos();
+        TensorLiteralAST tensor;
+        int trc = tryParseTensorEmit(tensor);
+        if (trc > 0) return emitTensorLiteralEmit(tensor);
+        if (trc < 0) return nullptr;
+        setPos(afterOpen);
         std::vector<llvm::Value*> elems;
         if (!check(TokenType::RBRACKET)) {
             do {
@@ -7503,6 +8476,20 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
 }
 
 llvm::Value* Parser::emitIndexEmit(llvm::Value* base, llvm::Value* index) {
+    // Map read (emit-mode mirror of Codegen::emitIndexAccess): str index
+    // (ptr) on a ptr base is `m["k"]` -> flint_map_get, same as `m.get(k)`.
+    if (index->getType()->isPointerTy()) {
+        if (base->getType()->isStructTy()) {
+            parseError("array index needs i64 (got str; map keys are strings)");
+            return nullptr;
+        }
+        auto it = cg->functionMap.find("flint_map_get");
+        if (it == cg->functionMap.end()) {
+            parseError("map runtime not registered");
+            return nullptr;
+        }
+        return cg->builder->CreateCall(it->second, {base, index}, "map_get");
+    }
     llvm::Value* dataPtr = cg->builder->CreateExtractValue(base, {0}, "arr_ptr");
     llvm::Value* len = cg->builder->CreateExtractValue(base, {1}, "arr_len");
     cg->emitBoundsCheckInline(index, len);
@@ -8919,6 +9906,12 @@ class BorrowChecker {
             case NodeKind::FieldAccess:
                 checkExpr(static_cast<FieldAccessAST*>(node)->base.get());
                 break;
+            case NodeKind::Cast:
+                // The cast reads its operand (a moved non-copy value must
+                // still be rejected here).
+                checkExpr(static_cast<CastExprAST*>(node)->expr.get());
+                break;
+            // Tensor holds only doubles: nothing to check.
             default: break;
         }
     }
@@ -9663,6 +10656,12 @@ class QbeEmitter {
             case NodeKind::Lambda:
                 std::cerr << "QBE: lambdas not supported yet\n";
                 return "0";
+            case NodeKind::Cast:
+                std::cerr << "QBE: as-casts not supported yet\n";
+                return "0";
+            case NodeKind::Tensor:
+                std::cerr << "QBE: tensor literals not supported yet\n";
+                return "0";
             default: return "0";
         }
     }
@@ -9927,6 +10926,8 @@ int main(int argc, char* argv[]) {
     std::string inputPath;
     std::string outputPath;
     std::string linkFlags;
+    std::string targetTripleSpec;
+    bool debugFlag = false;
     bool emitInterfaceMode = false;
     bool runMode = true; // ORC JIT is the default
     std::vector<std::string> useInterfaces;
@@ -9994,6 +10995,14 @@ int main(int argc, char* argv[]) {
             runMode = false;
         } else if (arg == "--link" && i + 1 < argc) {
             linkFlags = argv[++i];
+        } else if (arg == "--target" && i + 1 < argc) {
+            targetTripleSpec = argv[++i];
+            if (targetTripleSpec.empty()) {
+                std::cerr << "error: --target requires a triple\n";
+                return 1;
+            }
+        } else if (arg == "--debug") {
+            debugFlag = true; // DWARF line tables (JIT + emit)
         } else if (arg == "--emit-interface") {
             emitInterfaceMode = true;
         } else if (arg == "--use-interface" && i + 1 < argc) {
@@ -10062,6 +11071,24 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Diagnostics live in artifacts (.ll text, .o/linked binaries) — real
+    // DWARF for llvm-dwarfdump/lldb. The ORC JIT with debug metadata
+    // reliably hangs at mainFn (reproduced with and without only one
+    // variable: the module carrying DIBuilder metadata), so bare-run mode
+    // refuses loudly instead of wedging; -o gives a one-command artifact
+    // (flintc file.fl --debug -o prog && ./prog).
+    if (!targetTripleSpec.empty() && runMode) {
+        std::cerr << "error: --target '" << targetTripleSpec
+                  << "' requires an emit output (-o path.ll or path.o); JIT execution is host-triple only\n";
+        return 1;
+    }
+    if (debugFlag && runMode) {
+        std::cerr << "error: --debug builds an artifact with DWARF: use "
+                  << "-o (e.g. 'flintc file.fl --debug -o prog' then ./prog); "
+                  << "JIT run with debug metadata is unsupported\n";
+        return 1;
+    }
+
     // Registry: fetch flint.toml deps into the local cache (or verify the
     // cache in --offline mode) before any parsing/import resolution.
     if (!fetchRegistryDeps(inputPath, libPaths, offlineMode)) return 1;
@@ -10077,7 +11104,7 @@ int main(int argc, char* argv[]) {
         parser.setSkipBodies(true);
         auto combined = parser.parseProgram();
         if (parser.hadError()) { std::cerr << parser.errorMsg() << "\n"; return 1; }
-        if (!emitInterface(*combined, outputPath)) {
+        if (!emitInterface(*combined, outputPath, targetTripleSpec)) {
             std::cerr << "error: failed to emit interface\n";
             return 1;
         }
@@ -10132,7 +11159,7 @@ int main(int argc, char* argv[]) {
     }
     PROFILE_END(); // iface_hash
     uint64_t sourceHash =
-        fnv1a(cacheSalt(optLevel, releaseMode, backend, argv[0], loopOpt) + std::string(1, '\0') + sourceRef.str() +
+        fnv1a(cacheSalt(optLevel, releaseMode, backend, argv[0], loopOpt, targetTripleSpec, debugFlag) + std::string(1, '\0') + sourceRef.str() +
               std::string(1, '\0') + ifaceFp + std::string(1, '\0') + linkFp);
     if (getenv("FLINT_LOG_CACHE"))
         std::cerr << "cache: key iface=[" << ifaceFp << "] link=[" << linkFp << "]\n";
@@ -10162,7 +11189,11 @@ int main(int argc, char* argv[]) {
             PROFILE_END(); // cache_check
             {
                 PROFILE_BEGIN("llvm_opt");
+                // --debug: cached modules follow the same O0-pass rule (see
+                // the fresh-codegen comment). The cache salt already keys
+                // on --debug, so a cached module was saved WITH the flag.
                 llvm::OptimizationLevel ol = llvm::OptimizationLevel::O2;
+                if (debugFlag) ol = llvm::OptimizationLevel::O0;
                 runLLVMOptimizations(cachedMod.get(), ol);
                 PROFILE_END(); // llvm_opt
             }
@@ -10441,7 +11472,8 @@ int main(int argc, char* argv[]) {
     }
 
     PROFILE_BEGIN("codegen");
-    Codegen codegen;
+    Codegen codegen(targetTripleSpec);
+    if (debugFlag) codegen.initDebugSource(inputPath);
     codegen.releaseMode = releaseMode;
     codegen.loopOpt = loopOpt;
     codegen.setParser(&parser);
@@ -10495,6 +11527,11 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // --debug: seal the DIBuilder BEFORE any consumer (bitcode, .ll text, .o
+    // object, JIT). finalize() replaces temporary subprogram nodes and is
+    // also what makes the CU worth emitting at all.
+    codegen.finishDebug();
+
     // Run LLVM IR optimization passes — O2 by default with overflow checks for safety
     long checksBeforeOpt = -1;
     if (checkBce) checksBeforeOpt = countChecks(codegen.mod.get());
@@ -10502,6 +11539,11 @@ int main(int argc, char* argv[]) {
         PROFILE_BEGIN("llvm_opt");
         llvm::OptimizationLevel ol = llvm::OptimizationLevel::O2;
         if (!releaseMode) { /* safe mode: overflow checks added at codegen level */ }
+        // --debug opts the module passes down to O0: O2 constant-folds and
+        // merges statements, which erases per-statement DILocations from the
+        // IR and the line table. A debuggable build keeps the source-line
+        // mapping exact; use FLINT_NO_OPT semantics deliberately here.
+        if (debugFlag) ol = llvm::OptimizationLevel::O0;
         if (!getenv("FLINT_NO_OPT")) runLLVMOptimizations(codegen.mod.get(), ol);
         PROFILE_END(); // llvm_opt
     }
