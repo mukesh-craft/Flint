@@ -1422,20 +1422,8 @@ int64_t flint_time_ns_monotonic(void) {
     return flint_time_ns();
 }
 
-char* flint_time_format(const char* fmt) {
-    if (!fmt) return NULL;
-    time_t now = time(NULL);
-    struct tm result;
-#ifdef _WIN32
-    // localtime_s takes (out, in) — reversed vs localtime_r.
-    if (localtime_s(&result, &now) != 0) return NULL;
-#else
-    localtime_r(&now, &result);
-#endif
-    char buf[256];
-    if (strftime(buf, sizeof(buf), fmt, &result) == 0) return NULL;
-    return strdup(buf);
-}
+// (Retired 1-arg flint_time_format: the civil-time 3-arg version in
+// flint_time.c owns the name now; strftime-now had no callers.)
 
 // ==================== TESTING ====================
 

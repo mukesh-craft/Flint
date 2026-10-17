@@ -34,9 +34,38 @@ fn main() -> i64 {
     print(flt_sum(c))
     print(flint_blas_available())
 
+    # ---- Phase-2 tensor literals: f64 rank<=2 desugar to flt_create_*+flt_set
+    t1 = [1.0, 2.0]
+    print(flt_size(t1))
+    print(flt_get(t1, 0))
+    print(flt_get(t1, 1))
+    t2 = [[1.0, 2.0], [3.0, 4.0]]
+    print(flt_size(t2))
+    print(flt_shape(t2, 0))
+    print(flt_shape(t2, 1))
+    print(flt_sum(t2))
+    # int elements promote; negated elements stay exact
+    tm = [1, 2.0]
+    print(flt_get(tm, 0))
+    tn = [-1.5, 2.5]
+    print(flt_sum(tn))
+    # the literal matches a hand-built tensor exactly
+    h = flt_create_2d(2, 2)
+    mut q: i64 = 0
+    while q < 4 {
+        flt_set(h, q, (q + 1) * 1.0)
+        q = q + 1
+    }
+    print(flt_sum(h))
+
     flt_destroy(c)
     flt_destroy(d)
     flt_destroy(a)
     flt_destroy(b)
+    flt_destroy(t1)
+    flt_destroy(t2)
+    flt_destroy(tm)
+    flt_destroy(tn)
+    flt_destroy(h)
     0
 }

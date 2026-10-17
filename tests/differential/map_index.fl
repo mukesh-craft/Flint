@@ -1,0 +1,11 @@
+# Map subscript read: m["k"] and m[k] must agree (C++ vs self-host).
+# len(m) already worked; only index-read crashed (P0-1 LLVM ICmp abort).
+# Same call as m.get(k) (flint_map_get); map index-assign stays rejected.
+fn main() -> i64 {
+    m = map{"k": 7}
+    print(m["k"])
+    k = "k"
+    print(m[k])
+    print(len(m))
+    0
+}

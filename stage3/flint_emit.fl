@@ -1097,6 +1097,8 @@ fn e_llvm_type(ty: str) -> str {
     }
 }
 # (num RAW[d]) -> inline constant. Sets ETYPE (2 if float else 1).
+# Float text goes through e_dbl_text so exponent-without-dot forms
+# (1e2, 1E+4) gain the point LLVM IR requires (1.0e2).
 fn e_num() -> str {
     raw = e_word()
     mut v: str = flint_str_concat(raw, "")
@@ -1105,13 +1107,12 @@ fn e_num() -> str {
         v = v
     } else {
         if flint_str_char_at(v, flint_str_length(v) - 1) == 100 {
-            v = flint_str_substring(v, 0, flint_str_length(v) - 1)
             float = 1
         }
     }
     if float == 1 {
         ETYPE = 2
-        v
+        e_dbl_text(raw)
     } else {
         ETYPE = 1
         v
@@ -1376,7 +1377,477 @@ fn e_array_dynamic() -> str {
         cur
     }
 }
-# (index A I): array -> i64 element; str -> i64 byte. Bounds-checked.
+# Phase-2 f64 tensor literal `(tensor ...)`: flat bare numerics (rank 1) or
+# all-numeric rows (rank 2). Desugars to flint_create_1d/2d + flt_set (flat
+# row-major) — the exact calls users write by hand, no runtime change.
+# Ragged/deep/non-numeric shapes are LOUD errors (stage2 never validates).
+# Two passes like e_array (validate+count, rewind, emit). Yields ptr (ETYPE=3).
+# ETF side-channel: e_tensor_num sets it (1 = float element seen).
+mut ETF: i64 = 0
+# LLVM double text from an S-expr num RAW (`1.0d`/`5`): strip the `d`
+# marker; bare ints need `.0` (`double 5` is invalid IR).
+fn e_dbl_text(raw: str) -> str {
+    v = raw
+    n = flint_str_length(v)
+    if n == 0 {
+        "0.0"
+    } else {
+        mut w: str = flint_str_concat(v, "")
+        mut m: i64 = n
+        if flint_str_char_at(w, n - 1) == 100 {
+            w = flint_str_substring(w, 0, n - 1)
+            m = n - 1
+        }
+        mut dot: i64 = 0
+        mut exp: i64 = -1
+        mut i: i64 = 0
+        while i < m {
+            c = flint_str_char_at(w, i)
+            if c == 46 {
+                dot = 1
+            } else {
+                if c == 101 {
+                    if exp == -1 {
+                        exp = i
+                    }
+                } else {
+                    if c == 69 {
+                        if exp == -1 {
+                            exp = i
+                        }
+                    }
+                }
+            }
+            i = i + 1
+        }
+        if dot == 1 {
+            w
+        } else {
+            if exp == -1 {
+                w + ".0"
+            } else {
+                # Exponent without a dot (1e2, 1E+4): LLVM IR needs the
+                # point (1.0e2), so splice ".0" before the exponent.
+                flint_str_substring(w, 0, exp) + ".0" + flint_str_substring(w, exp, m)
+            }
+        }
+    }
+}
+# One `(num RAW)` / `(neg (num RAW))` form at the cursor. Returns the LLVM
+# double text ("" + EERR when the shape is wrong). Sets ETF for floats.
+fn e_tensor_num() -> str {
+    e_skip()
+    if e_peek() == 40 {
+        e_adv()
+        e_skip()
+        w = e_word()
+        if w == "num" {
+            e_skip()
+            raw = e_word()
+            e_skip()
+            if e_peek() == 41 {
+                e_adv()
+                if flint_str_length(raw) == 0 {
+                    EERR = EERR + 1
+                    print("emit error: bad tensor number")
+                    ""
+                } else {
+                    if flint_str_char_at(raw, flint_str_length(raw) - 1) == 100 {
+                        ETF = 1
+                    }
+                    e_dbl_text(raw)
+                }
+            } else {
+                EERR = EERR + 1
+                print("emit error: bad tensor number")
+                ""
+            }
+        } else {
+            if w == "neg" {
+                inner = e_tensor_num()
+                e_skip()
+                if e_peek() == 41 {
+                    e_adv()
+                    if flint_str_length(inner) == 0 {
+                        ""
+                    } else {
+                        "-" + inner
+                    }
+                } else {
+                    EERR = EERR + 1
+                    print("emit error: bad tensor negation")
+                    ""
+                }
+            } else {
+                EERR = EERR + 1
+                print("emit error: tensor literals support only f64 numbers and rank<=2 rows")
+                ""
+            }
+        }
+    } else {
+        EERR = EERR + 1
+        print("emit error: tensor literals support only f64 numbers and rank<=2 rows")
+        ""
+    }
+}
+fn e_tensor() -> str {
+    e_rt_declare("flt_create_1d", e_rt_sig("flt_create_1d"))
+    e_rt_declare("flt_create_2d", e_rt_sig("flt_create_2d"))
+    e_rt_declare("flt_set", e_rt_sig("flt_set"))
+    estart = e_pos()
+    # Pass 1: validate + count (no emission).
+    mut n: i64 = 0
+    mut flatOk: i64 = 1
+    mut anyF: i64 = 0
+    mut rowsOk: i64 = 1
+    mut rows: i64 = 0
+    mut cols: i64 = -1
+    mut rowsEqual: i64 = 1
+    mut rowsF: i64 = 0
+    mut rank: i64 = 0
+    mut go: i64 = 1
+    while go == 1 {
+        e_skip()
+        if e_peek() == 41 {
+            go = 0
+        } else {
+            if e_peek() == -1 {
+                EERR = EERR + 1
+                return ""
+            } else {
+                cstart = e_pos()
+                e_adv()
+                e_skip()
+                w = e_word()
+                if w == "num" {
+                    flint_vec_set(EC, 0, cstart)
+                    ETF = 0
+                    v = e_tensor_num()
+                    if flint_str_length(v) == 0 {
+                        return ""
+                    }
+                    n = n + 1
+                    if ETF == 1 {
+                        anyF = 1
+                    }
+                    rowsOk = 0
+                } else {
+                    if w == "neg" {
+                        flint_vec_set(EC, 0, cstart)
+                        ETF = 0
+                        v2 = e_tensor_num()
+                        if flint_str_length(v2) == 0 {
+                            return ""
+                        }
+                        n = n + 1
+                        if ETF == 1 {
+                            anyF = 1
+                        }
+                        rowsOk = 0
+                    } else {
+                        if w == "tensor" {
+                            flatOk = 0
+                            mut rc: i64 = 0
+                            mut rf: i64 = 0
+                            mut rok: i64 = 1
+                            mut rgo: i64 = 1
+                            while rgo == 1 {
+                                e_skip()
+                                if e_peek() == 41 {
+                                    rgo = 0
+                                } else {
+                                    if e_peek() == -1 {
+                                        EERR = EERR + 1
+                                        return ""
+                                    } else {
+                                        ETF = 0
+                                        rv = e_tensor_num()
+                                        if flint_str_length(rv) == 0 {
+                                            return ""
+                                        }
+                                        rc = rc + 1
+                                        if ETF == 1 {
+                                            rf = 1
+                                        }
+                                    }
+                                }
+                            }
+                            e_skip()
+                            if e_peek() == 41 {
+                                e_adv()
+                            } else {
+                                EERR = EERR + 1
+                                print("emit error: bad tensor row")
+                                return ""
+                            }
+                            if rc == 0 {
+                                EERR = EERR + 1
+                                print("emit error: tensor literal rows must be non-empty all-numeric f64 literal lists")
+                                return ""
+                            }
+                            rows = rows + 1
+                            if cols == -1 {
+                                cols = rc
+                            } else {
+                                if rc != cols {
+                                    rowsEqual = 0
+                                }
+                            }
+                            if rf == 1 {
+                                rowsF = 1
+                            }
+                        } else {
+                            if w == "array" {
+                                # stage2 array child (all-int rows land here):
+                                # same row walk, ints promote like C++.
+                                flatOk = 0
+                                mut rc2: i64 = 0
+                                mut rf2: i64 = 0
+                                mut rgo2: i64 = 1
+                                while rgo2 == 1 {
+                                    e_skip()
+                                    if e_peek() == 41 {
+                                        rgo2 = 0
+                                    } else {
+                                        if e_peek() == -1 {
+                                            EERR = EERR + 1
+                                            return ""
+                                        } else {
+                                            ETF = 0
+                                            rv2 = e_tensor_num()
+                                            if flint_str_length(rv2) == 0 {
+                                                return ""
+                                            }
+                                            rc2 = rc2 + 1
+                                            if ETF == 1 {
+                                                rf2 = 1
+                                            }
+                                        }
+                                    }
+                                }
+                                e_skip()
+                                if e_peek() == 41 {
+                                    e_adv()
+                                } else {
+                                    EERR = EERR + 1
+                                    print("emit error: bad tensor row")
+                                    return ""
+                                }
+                                if rc2 == 0 {
+                                    EERR = EERR + 1
+                                    print("emit error: tensor literal rows must be non-empty all-numeric f64 literal lists")
+                                    return ""
+                                }
+                                rows = rows + 1
+                                if cols == -1 {
+                                    cols = rc2
+                                } else {
+                                    if rc2 != cols {
+                                        rowsEqual = 0
+                                    }
+                                }
+                                if rf2 == 1 {
+                                    rowsF = 1
+                                }
+                            } else {
+                                EERR = EERR + 1
+                                print("emit error: tensor literals support only f64 numbers and rank<=2 rows")
+                                return ""
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if flatOk == 1 {
+        if anyF == 0 {
+            EERR = EERR + 1
+            print("emit error: tensor literal needs at least one f64 element")
+            return ""
+        }
+        rank = 1
+    } else {
+        if rowsOk == 0 {
+            EERR = EERR + 1
+            print("emit error: tensor literal is neither a flat f64 list nor equal-length f64 rows")
+            return ""
+        } else {
+            if rowsEqual == 0 {
+                EERR = EERR + 1
+                print("emit error: ragged tensor literal: all rows must have the same length")
+                return ""
+            } else {
+                if rowsF == 0 {
+                    EERR = EERR + 1
+                    print("emit error: tensor literal needs at least one f64 element")
+                    return ""
+                } else {
+                    rank = 2
+                }
+            }
+        }
+    }
+    # Pass 2: rewind, emit create + flat row-major sets.
+    flint_vec_set(EC, 0, estart)
+    t = e_fresh()
+    if rank == 1 {
+        e_emit("  " + t + " = call ptr @flt_create_1d(i64 " + flint_i64_to_string(n) + ")\n")
+    } else {
+        e_emit("  " + t + " = call ptr @flt_create_2d(i64 " + flint_i64_to_string(rows) + ", i64 " + flint_i64_to_string(cols) + ")\n")
+    }
+    mut idx: i64 = 0
+    mut go2: i64 = 1
+    while go2 == 1 {
+        e_skip()
+        if e_peek() == 41 {
+            # Do NOT consume the closer: e_expr (our caller) consumes it,
+            # mirroring e_array. Eating it here made every tensor literal
+            # fail with a silent EERR (e_expr saw no `)` after our return).
+            go2 = 0
+        } else {
+            cstart2 = e_pos()
+            e_adv()
+            e_skip()
+            w2 = e_word()
+            if w2 == "num" {
+                flint_vec_set(EC, 0, cstart2)
+                v3 = e_tensor_num()
+                e_emit("  call void @flt_set(ptr " + t + ", i64 " + flint_i64_to_string(idx) + ", double " + v3 + ")\n")
+                idx = idx + 1
+            } else {
+                if w2 == "neg" {
+                    flint_vec_set(EC, 0, cstart2)
+                    v4 = e_tensor_num()
+                    e_emit("  call void @flt_set(ptr " + t + ", i64 " + flint_i64_to_string(idx) + ", double " + v4 + ")\n")
+                    idx = idx + 1
+                } else {
+                    # Row: re-walk children, same order as pass 1.
+                    mut rgo3: i64 = 1
+                    while rgo3 == 1 {
+                        e_skip()
+                        if e_peek() == 41 {
+                            e_adv()
+                            rgo3 = 0
+                        } else {
+                            v5 = e_tensor_num()
+                            e_emit("  call void @flt_set(ptr " + t + ", i64 " + flint_i64_to_string(idx) + ", double " + v5 + ")\n")
+                            idx = idx + 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ETYPE = 3
+    t
+}
+# (cast E T): Phase-2 `as` codegen. Same-type is a passthrough (a sitofp
+# i64->i64 would be invalid IR); i64->f64 is sitofp, f64->i64 is fptosi
+# (truncates toward zero). fptosi on NaN/+-Inf is poison, so a non-finite
+# check panics first (same message as C++); finite values outside
+# [-(2^63), 2^63) have no i64 image, so an overflow check panics second
+# ("f64 to i64 cast overflow"). Cost: 3 fcmps + 2 ors + br, then 2 fcmps
+# + or + br, panic calls only in the cold blocks. f64 cannot represent
+# anything in (2^63 - 1024, 2^63), so OGE against exactly
+# 0x43E0000000000000 (2^63) misses no representable value below it;
+# exactly -(2^63) itself is in range (fptosi -> INT64_MIN).
+fn e_cast() -> str {
+    v = e_expr()
+    vc = ETYPE
+    e_skip()
+    ty = e_word()
+    mut want: i64 = 0
+    if flint_str_compare(ty, "i64") == 0 {
+        want = 1
+    } else {
+        if flint_str_compare(ty, "f64") == 0 {
+            want = 2
+        }
+    }
+    if want == 0 {
+        EERR = EERR + 1
+        print("emit error: bad cast type")
+        print(ty)
+        ""
+    } else {
+        if vc == want {
+            ETYPE = want
+            v
+        } else {
+            if vc == 1 {
+                if want == 2 {
+                    t = e_fresh()
+                    e_emit("  " + t + " = sitofp i64 " + v + " to double\n")
+                    ETYPE = 2
+                    t
+                } else {
+                    EERR = EERR + 1
+                    print("emit error: bad cast")
+                    ""
+                }
+            } else {
+                if vc == 2 {
+                    if want == 1 {
+                        isn = e_fresh()
+                        e_emit("  " + isn + " = fcmp uno double " + v + ", 0.0\n")
+                        isp = e_fresh()
+                        e_emit("  " + isp + " = fcmp oeq double " + v + ", 0x7FF0000000000000\n")
+                        isn2 = e_fresh()
+                        e_emit("  " + isn2 + " = fcmp oeq double " + v + ", 0xFFF0000000000000\n")
+                        isinf = e_fresh()
+                        e_emit("  " + isinf + " = or i1 " + isp + ", " + isn2 + "\n")
+                        bad = e_fresh()
+                        e_emit("  " + bad + " = or i1 " + isn + ", " + isinf + "\n")
+                        pnb = e_label("cast_panic.")
+                        okb = e_label("cast_ok.")
+                        e_emit("  br i1 " + bad + ", label %" + pnb + ", label %" + okb + "\n")
+                        e_emit(pnb + ":\n")
+                        ECUR = pnb
+                        e_rt_declare("flint_panic", e_rt_sig("flint_panic"))
+                        pm = e_panic_msg("f64 to i64 cast of non-finite value")
+                        e_emit("  call void @flint_panic(ptr " + pm + ")\n")
+                        e_emit("  br label %" + okb + "\n")
+                        e_emit(okb + ":\n")
+                        ECUR = okb
+                        geo = e_fresh()
+                        e_emit("  " + geo + " = fcmp oge double " + v + ", 0x43E0000000000000\n")
+                        ltn = e_fresh()
+                        e_emit("  " + ltn + " = fcmp olt double " + v + ", 0xC3E0000000000000\n")
+                        oob = e_fresh()
+                        e_emit("  " + oob + " = or i1 " + geo + ", " + ltn + "\n")
+                        opb = e_label("cast_oob_panic.")
+                        finb = e_label("cast_finite.")
+                        e_emit("  br i1 " + oob + ", label %" + opb + ", label %" + finb + "\n")
+                        e_emit(opb + ":\n")
+                        ECUR = opb
+                        om = e_panic_msg("f64 to i64 cast overflow")
+                        e_emit("  call void @flint_panic(ptr " + om + ")\n")
+                        e_emit("  br label %" + finb + "\n")
+                        e_emit(finb + ":\n")
+                        ECUR = finb
+                        f = e_fresh()
+                        e_emit("  " + f + " = fptosi double " + v + " to i64\n")
+                        ETYPE = 1
+                        f
+                    } else {
+                        EERR = EERR + 1
+                        print("emit error: bad cast")
+                        ""
+                    }
+                } else {
+                    EERR = EERR + 1
+                    print("emit error: as-cast needs i64 or f64 value")
+                    ""
+                }
+            }
+        }
+    }
+}
+# (index A I): array -> i64 element; str -> i64 byte; map[str] -> i64 value.
+# Map read is the same call as m.get(k) (flint_map_get). The index code
+# discriminates (str key = 3 vs i64 = 1) because map/str bases share code 6/3
+# pointer shapes. Array with a str index is a loud error, never a map lookup.
 # Inline bounds fast path (R1): icmp ult + br; the cold block reuses
 # flint_bounds_check so the panic message is byte-identical. ECUR moves to
 # the ok block so later PHI predecessors stay honest. `ult` covers
@@ -1400,9 +1871,27 @@ fn e_index() -> str {
     ac = ETYPE
     i = e_expr()
     ic = ETYPE
+    if ic == 3 {
+        if ac == 6 {
+            e_rt_declare("flint_map_get", e_rt_sig("flint_map_get"))
+            t = e_fresh()
+            e_emit("  " + t + " = call i64 @flint_map_get(ptr " + a + ", ptr " + i + ")\n")
+            ETYPE = 1
+            t
+        } else {
+            EERR = EERR + 1
+            print("emit error: index needs i64")
+            ""
+        }
+    } else {
     if ic != 1 {
         EERR = EERR + 1
         print("emit error: index needs i64")
+        return ""
+    }
+    if ac == 6 {
+        EERR = EERR + 1
+        print("emit error: map index needs a str key (map keys are strings)")
         return ""
     }
     if ac == 4 {
@@ -1435,6 +1924,7 @@ fn e_index() -> str {
             print("emit error: index needs array or str")
             ""
         }
+    }
     }
 }
 # (idx-set A I V): array element store (strings immutable). Yields void.
@@ -1531,6 +2021,13 @@ fn e_conv(val: str, from: i64, want: i64) -> str {
             }
         } else {
             if want == 1 {
+                if from == 2 {
+                    # f64->i64 truncates toward zero (LLVM fptosi; out of
+                    # range is poison, unchecked — mirrors C++ emitCast).
+                    f = e_fresh()
+                    e_emit("  " + f + " = fptosi double " + val + " to i64\n")
+                    f
+                } else {
                 if from == 3 {
                     u = e_fresh()
                     e_emit("  " + u + " = ptrtoint ptr " + val + " to i64\n")
@@ -1551,6 +2048,7 @@ fn e_conv(val: str, from: i64, want: i64) -> str {
                             ""
                         }
                     }
+                }
                 }
             } else {
                 if from == 3 {
@@ -2510,11 +3008,47 @@ fn e_rt_sig(name: str) -> str {
                                                                                                                                                         if name == "flint_map_set" {
                                                                                                                                                             "0:6,3,1"
                                                                                                                                                         } else {
-                                                                                                                                                            if name == "flint_map_len" {
-                                                                                                                                                                "1:6"
-                                                                                                                                                            } else {
-                                                                                                                                                                ""
-                                                                                                                                                            }
+                                                                                                                                                             if name == "flint_map_len" {
+                                                                                                                                                                 "1:6"
+                                                                                                                                                             } else {
+                                                                                                                                                                 if name == "flt_create_1d" {
+                                                                                                                                                                     "3:1"
+                                                                                                                                                                 } else {
+                                                                                                                                                                     if name == "flt_create_2d" {
+                                                                                                                                                                         "3:1,1"
+                                                                                                                                                                     } else {
+                                                                                                                                                                 if name == "flt_set" {
+                                                                                                                                                                     "0:3,1,2"
+                                                                                                                                                                 } else {
+                                                                                                                                                                     if name == "flint_f64_to_string" {
+                                                                                                                                                                         "3:2"
+                                                                                                                                                                     } else {
+                                                                                                                                                                         if name == "flt_size" {
+                                                                                                                                                                             "1:3"
+                                                                                                                                                                         } else {
+                                                                                                                                                                             if name == "flt_get" {
+                                                                                                                                                                                 "2:3,1"
+                                                                                                                                                                             } else {
+                                                                                                                                                                                 if name == "flt_sum" {
+                                                                                                                                                                                     "2:3"
+                                                                                                                                                                                 } else {
+                                                                                                                                                                                     if name == "flt_shape" {
+                                                                                                                                                                                         "1:3,1"
+                                                                                                                                                                                     } else {
+                                                                                                                                                                                         if name == "flt_destroy" {
+                                                                                                                                                                                             "0:3"
+                                                                                                                                                                                         } else {
+                                                                                                                                                                                             ""
+                                                                                                                                                                                         }
+                                                                                                                                                                                     }
+                                                                                                                                                                                 }
+                                                                                                                                                                             }
+                                                                                                                                                                         }
+                                                                                                                                                                     }
+                                                                                                                                                                     }
+                                                                                                                                                                 }
+                                                                                                                                                             }
+                                                                                                                                                             }
                                                                                                                                                         }
                                                                                                                                                     }
                                                                                                                                                 }
@@ -3158,6 +3692,26 @@ fn e_infer_init() -> i64 {
                             e_skip_rest()
                             4
                         } else {
+                            if tag == "tensor" {
+                                e_skip_rest()
+                                3
+                            } else {
+                            if tag == "cast" {
+                                ic = e_infer_init()
+                                e_skip()
+                                ty = e_word()
+                                e_skip_rest()
+                                if flint_str_compare(ty, "i64") == 0 {
+                                    1
+                                } else {
+                                    if flint_str_compare(ty, "f64") == 0 {
+                                        2
+                                    } else {
+                                        EERR = EERR + 1
+                                        0
+                                    }
+                                }
+                            } else {
                             if tag == "slice" {
                                 e_skip_rest()
                                 4
@@ -3357,6 +3911,8 @@ fn e_infer_init() -> i64 {
                                         }
                                     }
                                 }
+                            }
+                            }
                             }
                         }
                     }
@@ -3821,9 +4377,19 @@ fn e_expr_tagged(tag: str) -> str {
                         } else {
                             if tag == "neg" {
                                 e = e_expr()
+                                nc = ETYPE
                                 t = e_fresh()
-                                e_emit("  " + t + " = sub i64 0, " + e + "\n")
-                                ETYPE = 1
+                                if nc == 2 {
+                                    # Float negation: `sub i64 0, <double>`
+                                    # is invalid IR (broke `-7.9 as i64` and
+                                    # any negated f64 on the self path; the
+                                    # C++ backends emit fsub for 0.0 - x).
+                                    e_emit("  " + t + " = fsub double 0.0, " + e + "\n")
+                                    ETYPE = 2
+                                } else {
+                                    e_emit("  " + t + " = sub i64 0, " + e + "\n")
+                                    ETYPE = 1
+                                }
                                 t
                             } else {
                                 if tag == "not" {
@@ -3843,10 +4409,16 @@ fn e_expr_tagged(tag: str) -> str {
                                             if tag == "if" {
                                                 e_if_expr()
                                             } else {
-                                                if tag == "array" {
-                                                    e_array()
-                                                } else {
-                                                    if tag == "index" {
+                                            if tag == "array" {
+                                                e_array()
+                                            } else {
+                                            if tag == "tensor" {
+                                                e_tensor()
+                                            } else {
+                                            if tag == "cast" {
+                                                e_cast()
+                                            } else {
+                                            if tag == "index" {
                                                         e_index()
                                                     } else {
                                                         if tag == "idx-set" {
@@ -3910,6 +4482,8 @@ fn e_expr_tagged(tag: str) -> str {
                                                         }
                                                     }
                                                 }
+                                            }
+                                            }
                                             }
                                         }
                                     }

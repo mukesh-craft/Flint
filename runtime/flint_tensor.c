@@ -1677,3 +1677,161 @@ void flt_print_shape(void* t) {
     }
     printf("]\n");
 }
+
+// =========================================================================
+// Weight checkpoints (FLWT v1) — inspectable, versioned tensor serialization.
+//
+// File layout, all little-endian, host byte order (the build targets
+// aarch64 LE; a BE reader would need byte-swapping and is out of scope):
+//   magic  "FLWT" (4 bytes)
+//   u32    format version (1)
+//   u32    number of tensor records
+//   records, each:
+//     u16    dtype (0 = f64, 1 = f32)
+//     u16    rank
+//     i64    rank dimension values
+//     raw    element bytes in that dtype, row-major order
+//
+// Flint cannot hand-write an i64 array (the header comment on flt_create
+// documents why), so the API is per-tensor: save one tensor per call,
+// fresh or appended, then load each record back by index with its exact
+// shape and dtype. Records are independent of each other, so stopping the
+// program between the two is safe.
+// =========================================================================
+
+static void _flwt_u32(FILE* fp, uint32_t v) { fwrite(&v, sizeof v, 1, fp); }
+
+static int _flwt_magic_ok(FILE* fp, uint32_t* version) {
+    char m[4];
+    if (fread(m, 1, 4, fp) != 4) return 0;
+    if (memcmp(m, "FLWT", 4) != 0) return 0;
+    if (fread(version, sizeof(uint32_t), 1, fp) != 1) return 0;
+    return *version == 1;
+}
+
+int64_t flt_weights_save(const char* path, void* t, int64_t append) {
+    FlintTensor* ts = _as_tensor(t);
+    if (!path || !ts) { fprintf(stderr, "weights_save: invalid tensor or path\n"); return 0; }
+    FILE* fp = fopen(path, append ? "ab" : "wb");
+    if (!fp) { fprintf(stderr, "weights_save: cannot open %s\n", path); return 0; }
+    if (!append) {
+        fwrite("FLWT", 1, 4, fp);
+        _flwt_u32(fp, 1);
+        // The count field is a snapshot of nothing (records are appended
+        // by later calls across the same or a fresh process); it stays 0
+        // here by definition and flt_weights_count re-walks records, which
+        // is the authoritative value.
+        _flwt_u32(fp, 0);
+    }
+    uint16_t dtype = (uint16_t)(ts->dtype == FLT_F32 ? 1 : 0);
+    uint16_t rank = (uint16_t)ts->ndim;
+    fwrite(&dtype, sizeof dtype, 1, fp);
+    fwrite(&rank, sizeof rank, 1, fp);
+    for (int64_t i = 0; i < ts->ndim; i++)
+        fwrite(&ts->shape[i], sizeof(int64_t), 1, fp);
+    int64_t n = ts->size;
+    if (ts->dtype == FLT_F32) fwrite(ts->data32, sizeof(float), (size_t)n, fp);
+    else fwrite(ts->data, sizeof(double), (size_t)n, fp);
+    if (ferror(fp)) { fprintf(stderr, "weights_save: write failed on %s\n", path); fclose(fp); return 0; }
+    fclose(fp);
+    return 1;
+}
+
+void* flt_weights_load(const char* path, int64_t index) {
+    if (!path) return NULL;
+    FILE* fp = fopen(path, "rb");
+    if (!fp) { fprintf(stderr, "weights_load: cannot open %s\n", path); return NULL; }
+    uint32_t version = 0;
+    if (!_flwt_magic_ok(fp, &version)) {
+        fprintf(stderr, "weights_load: not a FLWT v1 file: %s\n", path);
+        fclose(fp);
+        return NULL;
+    }
+    // magic (4) + version (4) + count (4): records start at offset 12.
+    (void)fseek(fp, 4 + 4 + 4, SEEK_SET);
+    int64_t i = 0;
+    void* found = NULL;
+    for (;;) {
+        uint16_t dtype = 0, rank = 0;
+        if (fread(&dtype, sizeof dtype, 1, fp) != 1) break;
+        if (fread(&rank, sizeof rank, 1, fp) != 1) break;
+        int64_t dims[8];
+        if (rank == 0 || rank > 5) { fprintf(stderr, "weights_load: bad rank %u\n", rank); break; }
+        if (fread(dims, sizeof(int64_t), rank, fp) != rank) break;
+        int64_t n = 1;
+        int bad = 0;
+        for (int64_t k = 0; k < rank; k++) {
+            if (dims[k] <= 0) { bad = 1; break; }
+            n *= dims[k];
+        }
+        if (bad) { fprintf(stderr, "weights_load: bad dims\n"); break; }
+        int64_t data_offset = ftell(fp);
+        long skip = (long)n * (dtype == 1 ? (long)sizeof(float) : (long)sizeof(double));
+        if (i == index) {
+            // Rank 1-5 dispatch to the fixed-arity creators the header
+            // documents for Flint-side use.
+            void* out = NULL;
+            if (dtype == 1) {
+                switch (rank) {
+                    case 1: out = flt_create_f32_1d(dims[0]); break;
+                    case 2: out = flt_create_f32_2d(dims[0], dims[1]); break;
+                    case 3: out = flt_create_f32_3d(dims[0], dims[1], dims[2]); break;
+                    case 4: out = flt_create_f32_4d(dims[0], dims[1], dims[2], dims[3]); break;
+                }
+            } else {
+                switch (rank) {
+                    case 1: out = flt_create_1d(dims[0]); break;
+                    case 2: out = flt_create_2d(dims[0], dims[1]); break;
+                    case 3: out = flt_create_3d(dims[0], dims[1], dims[2]); break;
+                    case 4: out = flt_create_4d(dims[0], dims[1], dims[2], dims[3]); break;
+                    case 5: out = flt_create_5d(dims[0], dims[1], dims[2], dims[3], dims[4]); break;
+                }
+            }
+            if (!out) { fprintf(stderr, "weights_load: rank %u is not supported for this dtype\n", (unsigned)rank); break; }
+            FlintTensor* to = _as_tensor(out);
+            if (dtype == 1) {
+                if (fread(to->data32, sizeof(float), (size_t)n, fp) != (size_t)n) { fprintf(stderr, "weights_load: truncated record\n"); break; }
+            } else {
+                if (fread(to->data, sizeof(double), (size_t)n, fp) != (size_t)n) { fprintf(stderr, "weights_load: truncated record\n"); break; }
+            }
+            if (!out) { fclose(fp); return NULL; }
+            found = out;
+            break;
+        }
+        (void)fseek(fp, data_offset + skip, SEEK_SET);
+        i++;
+    }
+    fclose(fp);
+    return found;
+}
+
+int64_t flt_weights_count(const char* path) {
+    if (!path) return 0;
+    FILE* fp = fopen(path, "rb");
+    if (!fp) return 0;
+    uint32_t version = 0;
+    if (!_flwt_magic_ok(fp, &version)) { fclose(fp); return 0; }
+    (void)fseek(fp, 4 + 4 + 4, SEEK_SET);
+    int64_t count = 0;
+    for (;;) {
+        uint16_t dtype = 0, rank = 0;
+        if (fread(&dtype, sizeof dtype, 1, fp) != 1) break;
+        if (fread(&rank, sizeof rank, 1, fp) != 1) break;
+        if (rank == 0 || rank > 5) break;
+        int64_t dims[8];
+        if (fread(dims, sizeof(int64_t), rank, fp) != rank) break;
+        int64_t n = 1;
+        int bad = 0;
+        for (int64_t k = 0; k < rank; k++) {
+            if (dims[k] <= 0) { bad = 1; break; }
+            n *= dims[k];
+        }
+        if (bad) break;
+        long skip = (long)n * (dtype == 1 ? (long)sizeof(float) : (long)sizeof(double));
+        int64_t here = ftell(fp);
+        if (fseek(fp, here + skip, SEEK_SET) != 0) break;
+        count++;
+    }
+    fclose(fp);
+    return count;
+}

@@ -1,0 +1,137 @@
+# Date/time/timezone, battle-tested from Flint. Every expected value is either
+# hand-computable or independently known, so the run is verifiable rather than
+# "it printed something".
+
+fn main() -> i64 {
+    # ---- calendar
+    print(flint_is_leap(2024))          # 1
+    print(flint_is_leap(2023))          # 0
+    print(flint_is_leap(1900))          # 0 (century rule)
+    print(flint_is_leap(2000))          # 1 (divisible by 400)
+    print(flint_days_in_month(2024, 2)) # 29
+    print(flint_days_in_month(2023, 2)) # 28
+    print(flint_days_from_civil(1970, 1, 1))  # 0
+
+    # ---- timezone offsets (fixed zones)
+    print(flint_tz_offset_at("UTC", 0))       # 0
+    print(flint_tz_offset_at("IST", 0))       # 19800  (+05:30)
+    print(flint_tz_offset_at("JST", 0))       # 32400  (+09:00)
+    print(flint_tz_offset_at("Nowhere/X", 0)) # 0 (unknown -> UTC)
+
+    # ---- DST, northern hemisphere: America/New_York
+    # Jan 15 2026 is winter -> EST (-18000); Jul 15 is summer -> EDT (-14400)
+    jan = flint_days_from_civil(2026, 1, 15) * 86400
+    jul = flint_days_from_civil(2026, 7, 15) * 86400
+    print(flint_tz_offset_at("America/New_York", jan))
+    print(flint_tz_offset_at("America/New_York", jul))
+    # want: -18000 / -14400
+
+    # ---- DST, southern hemisphere: Australia/Sydney wraps the new year
+    # Jan 15 2026 is summer -> AEDT (+39600); Jul 15 is winter -> AEST (+36000)
+    print(flint_tz_offset_at("Australia/Sydney", jan))
+    print(flint_tz_offset_at("Australia/Sydney", jul))
+    # want: 39600 / 36000
+
+    # ---- a zone with no DST must not shift
+    print(flint_tz_offset_at("America/Phoenix", jan))
+    print(flint_tz_offset_at("America/Phoenix", jul))
+    # want: -25200 / -25200
+
+    # ---- conversion: 2026-01-01T00:00:00Z seen from Tokyo is 09:00 same day
+    nyd = flint_days_from_civil(2026, 1, 1) * 86400
+    t = flint_tz_convert(nyd, "Asia/Tokyo")
+    print(flint_dt_hour(t))
+    print(flint_dt_day(t))
+    flint_dt_free(t)
+    # want: 9 / 1
+
+    # ---- formatting: 2026-10-07T09:30:15Z
+    e = flint_days_from_civil(2026, 10, 7) * 86400 + 9 * 3600 + 30 * 60 + 15
+    s1 = flint_time_format("%Y-%m-%dT%H:%M:%SZ", e, "UTC")
+    flint_println(s1)
+    flint_str_free(s1)
+    # want: 2026-10-07T09:30:15Z
+
+    s2 = flint_time_format("%A %B %d %Y", e, "UTC")
+    flint_println(s2)
+    flint_str_free(s2)
+    # want: Wednesday October 07 2026
+
+    # ---- parsing and a round trip
+    cell: ptr = flint_atomic_new(0)
+    ok = flint_time_parse("2026-10-07T09:30:15", "UTC", cell)
+    print(ok)
+    print(flint_atomic_get(cell) == e)
+    # want: 0 / 1
+
+    # an offset in the text wins over the zone argument
+    cell2: ptr = flint_atomic_new(0)
+    flint_time_parse("2026-10-07T09:30:15+02:00", "UTC", cell2)
+    print(flint_atomic_get(cell2) == e - 9 * 3600 + 7 * 3600)
+    # want: 1
+
+    # malformed input is rejected, not silently accepted
+    print(flint_time_parse("garbage", "UTC", cell2) != 0)
+    print(flint_time_parse("2026-02-30", "UTC", cell2) != 0)
+    # want: 1 / 1
+
+    # ---- durations
+    dur1 = flint_time_duration(90061)
+    flint_println(dur1)
+    flint_str_free(dur1)
+    # want: 1d01:01:01
+    dur2 = flint_time_duration(-3661)
+    flint_println(dur2)
+    flint_str_free(dur2)
+    # want: -0d01:01:01  (1h 1m 1s before the sign, zero days)
+
+    print(flint_time_diff(100, 40))
+    # want: 60
+
+    # ---- DST transition edges (rules, not fixed dates)
+    # US 2026: forward Mar 8 07:00Z, back Nov 1 06:00Z
+    us_fwd = flint_days_from_civil(2026, 3, 8) * 86400 + 7 * 3600
+    print(flint_tz_offset_at("America/New_York", us_fwd - 1))
+    print(flint_tz_offset_at("America/New_York", us_fwd))
+    # want: -18000 / -14400
+    us_back = flint_days_from_civil(2026, 11, 1) * 86400 + 6 * 3600
+    print(flint_tz_offset_at("America/New_York", us_back - 1))
+    print(flint_tz_offset_at("America/New_York", us_back))
+    # want: -14400 / -18000
+
+    # Sydney 2026: back Apr 4 16:00Z, forward Oct 3 16:00Z
+    sy_back = flint_days_from_civil(2026, 4, 4) * 86400 + 16 * 3600
+    print(flint_tz_offset_at("Australia/Sydney", sy_back - 1))
+    print(flint_tz_offset_at("Australia/Sydney", sy_back))
+    # want: 39600 / 36000
+
+    # Denver observes US DST (a fixed -7 entry here was a data bug)
+    print(flint_tz_offset_at("America/Denver", jul))
+    # want: -21600
+
+    # %Z reports the live abbrev, not "DST"
+    s3 = flint_time_format("%Z", jul, "America/New_York")
+    flint_println(s3)
+    flint_str_free(s3)
+    # want: EDT
+
+    # a zone argument applies when the text carries no offset
+    cell3: ptr = flint_atomic_new(0)
+    flint_time_parse("2026-07-15T12:00", "America/New_York", cell3)
+    print(flint_atomic_get(cell3) == flint_days_from_civil(2026, 7, 15) * 86400 + 16 * 3600)
+    # want: 1
+
+    print(flint_tz_known("local"))
+    # want: 1
+
+    # ---- zone info accessors (flint_tz_info's data, Flint-reachable):
+    # abbrev + live DST flag for the same instants as the offset block.
+    print(flint_tz_abbrev_at("America/New_York", jan))
+    print(flint_tz_is_dst_at("America/New_York", jan))
+    print(flint_tz_abbrev_at("America/New_York", jul))
+    print(flint_tz_is_dst_at("America/New_York", jul))
+    print(flint_tz_abbrev_at("Nowhere/X", 0))
+    print(flint_tz_is_dst_at("IST", 0))
+    # want: EST 0 EDT 1 UTC 0
+    0
+}
