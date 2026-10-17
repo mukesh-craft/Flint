@@ -34,26 +34,35 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: bad lambda param type`
 - `emit error: arg type mismatch calling`
 - `emit error: arrays support only + in G3`
+- `emit error: as-cast needs i64 or f64 value`
 - `emit error: assign to undeclared`
+- `emit error: bad cast`
+- `emit error: bad cast type`
 - `emit error: bad compound operand`
 - `emit error: bad conversion`
 - `emit error: bad extern member`
 - `emit error: bad global type`
 - `emit error: bad handle conversion`
 - `emit error: bad int conversion`
+- `emit error: bad lambda param type`
 - `emit error: bad map conversion`
 - `emit error: bad match pattern`
 - `emit error: bad payload type`
 - `emit error: bad str conversion`
 - `emit error: bad struct field type`
+- `emit error: bad tensor negation`
+- `emit error: bad tensor number`
+- `emit error: bad tensor row`
 - `emit error: bad to-int conversion`
 - `emit error: bad top-level form`
 - `emit error: binop needs numeric/str/array`
 - `emit error: break outside loop`
 - `emit error: cannot bind empty variant`
 - `emit error: cannot bind tag-only variant`
+- `emit error: cannot reassign lambda`
 - `emit error: continue outside loop`
 - `emit error: default type mismatch calling`
+- `emit error: default type mismatch calling lambda`
 - `emit error: deref needs a pointer`
 - `emit error: duplicate field`
 - `emit error: duplicate function`
@@ -76,9 +85,16 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: if-expr arms must match types in G1`
 - `emit error: index needs array or str`
 - `emit error: index needs i64`
+- `emit error: lambda arg mismatch calling`
+- `emit error: lambda cannot assign to captured`
+- `emit error: lambda cannot capture unknown`
+- `emit error: lambda cannot leave its function`
+- `emit error: lambda must be bound`
+- `emit error: lambdas cannot be passed as values`
 - `emit error: len needs array, str or map`
 - `emit error: main must return i64 in G2`
 - `emit error: main takes no params in G2`
+- `emit error: map index needs a str key (map keys are strings)`
 - `emit error: map keys need str in G6`
 - `emit error: map values need i64 in G6`
 - `emit error: match arm enum mismatch`
@@ -88,6 +104,7 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: method arg mismatch`
 - `emit error: methods need str/map in G7`
 - `emit error: missing arg, no default calling`
+- `emit error: missing arg, no default calling lambda`
 - `emit error: mixed-type binop needs conversion`
 - `emit error: node needs a later group`
 - `emit error: non-exhaustive match`
@@ -102,6 +119,7 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: payload type mismatch`
 - `emit error: print is reserved`
 - `emit error: print needs i64/f64/str in G3`
+- `emit error: ragged tensor literal: all rows must have the same length`
 - `emit error: range bounds need i64`
 - `emit error: ref needs a variable in G7`
 - `emit error: ref of undeclared`
@@ -114,8 +132,13 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: spread needs an array`
 - `emit error: strings support only +/==/!= in G6`
 - `emit error: struct literal missing fields`
+- `emit error: tensor literal is neither a flat f64 list nor equal-length f64 rows`
+- `emit error: tensor literal needs at least one f64 element`
+- `emit error: tensor literal rows must be non-empty all-numeric f64 literal lists`
+- `emit error: tensor literals support only f64 numbers and rank<=2 rows`
 - `emit error: too few args calling runtime`
 - `emit error: too many args calling`
+- `emit error: too many args calling lambda`
 - `emit error: too many args calling runtime`
 - `emit error: too many payload args`
 - `emit error: undefined variable`
@@ -138,4 +161,4 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: void initializer`
 - `emit error: void variadic arg`
 
-Total: 116 messages.
+Total: 128 messages.

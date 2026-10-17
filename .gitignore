@@ -36,3 +36,6 @@ flint-test
 # Profiler output (generated in CWD by flintc_prof runs)
 profile_report.json
 compile_commands.json
+
+# External audit scratch (ultracode wave 2026-10-17: logs + probe artifacts)
+/.audit/
