@@ -6,7 +6,43 @@ All notable changes to Flint are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- **The Python language server is removed** (`flint-lsp`, 522 lines), replaced
+  by the Rust server in `lsp/` described below. It had no tests, wrote its
+  scratch file to a hardcoded `/tmp` (absent on Android, where Flint targets),
+  shipped a keyword list missing `continue`/`and`/`or`/`not`, and offered no
+  `references` request. README, REQUIREMENTS and ROADMAP now describe the Rust
+  server, and the README gap list no longer calls the server untested.
+
 ### Added
+- **`lsp/`: the Flint language server, rewritten in Rust, and gated.** One
+  static binary whose only dependency is `serde_json`. Diagnostics come from the
+  real `flintc` (never a re-implemented parser), edits are debounced 300 ms on
+  a worker thread, a compiler that cannot be executed reports one explicit
+  diagnostic instead of a false all-clear, scratch files honour `$TMPDIR` /
+  `$PREFIX/tmp` and are always removed, and stdout carries the protocol and
+  nothing else. Capabilities: diagnostics, completion (30 keywords + literals
+  + in-buffer declarations + all 515 registered builtins), hover with doc
+  comment and signature, go-to-definition, find-references, document outline;
+  unknown methods answer `-32601` instead of hanging the client.
+  Verified by `tests/test_lsp.sh`: 21 `cargo test` unit tests (framing incl.
+  split/malformed frames and UTF-8 byte lengths, diagnostics parsing against
+  real compiler output, analyzer behavior) + 31 protocol checks driving the
+  real binary over pipes + two drift gates (server keywords must equal the
+  compiler lexer's 30; server builtins must equal the compiler's 515
+  registrations).
+- **`editors/vscode/`: VS Code extension for Flint.** Manifest, TextMate
+  grammar (26 patterns: `#` and `//` comments, strings with escapes, ints /
+  floats / scientific notation, control/declaration/type/operator keywords,
+  builtin and tensor-function recognition, calls, operators, punctuation),
+  language configuration (brackets, auto-closing pairs, `#` comment
+  continuation, region folding, word pattern), and a dependency-free stdio
+  client. Grammar keywords are generated from the compiler lexer;
+  `tools/check_vscode_extension.py` fails on drift in either direction so the
+  highlighter cannot quietly fall behind the language. Settings:
+  `flint.lsp.serverPath`, `flint.lsp.arguments`, `flint.lsp.trace`.
+- **`tools/gen_lsp_builtins.py`**: regenerates the server's builtin table from
+  `src/main.cpp`; `--check` fails when it is stale.
 - **C-ABI interop proven in both directions, with Rust on both sides.**
   Flint could call C (`examples/ffi_demo.fl`), but nothing called *Flint*:
   the README's "FFI both directions" claim had no reverse test. Two facts

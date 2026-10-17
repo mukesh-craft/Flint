@@ -1,0 +1,104 @@
+{
+  "name": "Flint",
+  "displayName": "Flint",
+  "description": "Flint language support: syntax highlighting, semantic highlighting scope, and the Rust-based flint-lsp language server (diagnostics, completion, hover, go-to-definition, references, outline).",
+  "version": "0.22.0",
+  "publisher": "flint-lang",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flint-lang/flint"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "flint",
+    "compiler",
+    "language-server"
+  ],
+  "activationEvents": [
+    "onLanguage:flint",
+    "onCommand:flint.restartLanguageServer"
+  ],
+  "main": "./client.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "flint",
+        "aliases": [
+          "Flint",
+          "flint"
+        ],
+        "extensions": [
+          ".fl"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "flint",
+        "scopeName": "source.flint",
+        "path": "./syntaxes/flint.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.python": "python"
+        }
+      }
+    ],
+    "configuration": {
+      "title": "Flint",
+      "properties": {
+        "flint.lsp.serverPath": {
+          "type": "string",
+          "default": "flint-lsp",
+          "markdownDescription": "Absolute path to the `flint-lsp` binary (the Rust language server). Set this if it is not on your `PATH`."
+        },
+        "flint.lsp.trace": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Trace the JSON-RPC traffic between VS Code and flint-lsp."
+        },
+        "flint.lsp.arguments": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "--flintc",
+            "flintc"
+          ],
+          "markdownDescription": "Arguments passed to `flint-lsp`. `--flintc <path>` points the server at your compiler binary, which it invokes for diagnostics."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "flint.restartLanguageServer",
+        "title": "Flint: Restart Language Server"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "flint.restartLanguageServer",
+          "when": "editorLangId == flint"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "node -e \"console.log('packaging')\""
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

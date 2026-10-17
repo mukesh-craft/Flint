@@ -39,3 +39,7 @@ compile_commands.json
 
 # External audit scratch (ultracode wave 2026-10-17: logs + probe artifacts)
 /.audit/
+/lsp/target/
+/editors/vscode/node_modules/
+/editors/vscode/bin/
+/editors/vscode/.keywords.json

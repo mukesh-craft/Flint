@@ -134,7 +134,7 @@ for f in examples/*.fl; do timeout 30 ./flintc "$f" 2>&1 | head -5; done
 Requires Python 3.x.
 
 ```bash
-python3 flint-lsp   # LSP server (stdio)
+lsp/target/release/flint-lsp   # Rust language server (stdio)
 python3 flint-fmt source.fl   # format to stdout
 python3 flint-fmt source.fl -o formatted.fl   # format to file
 python3 flint-doc source.fl   # extract docs to stdout
@@ -157,7 +157,7 @@ flint/
 │   └── flint_net.c       # Network functions
 ├── examples/             # 36 example programs
 ├── benchmarks/           # Performance benchmarks
-├── flint-lsp             # Python LSP server
+├── lsp/                  # Rust language server (cargo)
 ├── flint-fmt              # Python formatter
 ├── flint-doc              # Python documentation generator
 ├── build.sh              # Build script

@@ -93,7 +93,7 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
   auto-fetch on first build into `~/.cache/flint_pkgs`, `flint.lock`
   pins revisions, `--offline` uses cache only (verified: registry gate)
 - **Developer tools** — `python3 flint-fmt` (format/`--check`),
-  `python3 flint-doc` (docs), `python3 flint-lsp` (basic LSP);
+  `python3 flint-doc` (docs), `flint-lsp` (Rust language server);
   direct `./flint-*` execution fails on Termux (shebang), always
   invoke via `python3`
 
@@ -363,7 +363,9 @@ flags plus standalone Python scripts:
 ./flintc --dump-tokens main.fl       # stable token dump (matches stage1)
 python3 flint-fmt main.fl [--check]  # format (--check fails if unformatted)
 python3 flint-doc main.fl            # docs to stdout
-python3 flint-lsp                    # basic LSP server over stdio
+lsp/target/release/flint-lsp         # Rust language server (stdio):
+                                     # diagnostics, completion, hover,
+                                     # definition, references, outline
 ./flintc_prof main.fl -o app         # profiled build, writes profile_report.json
 python3 tools/flamegraph.py profile_report.json flame.svg  # tree SVG view
 python3 tools/flamegraph.py profile_report.json --folded   # folded stacks
@@ -376,8 +378,10 @@ Known tooling gaps (do not rely on these):
   not flags: the **output extension** picks the artifact form
   (`.ll` = IR text, `.o` = object, other = linked executable), so
   `--emit-llvm` in older docs is wrong — drop it.
-- `flint-lsp` has no test gate yet; hover is line-based and there is no
-  `references` request.
+- `flint-lsp` covers diagnostics, completion, hover, definition, references
+  and outline; it has no semantic tokens, no formatting request, and refuses
+  `rename` with `-32601` rather than half-doing it. VS Code users install the
+  extension in `editors/vscode/` instead of wiring the binary by hand.
 
 ## Learn
 
@@ -635,6 +639,8 @@ What exists and how to run it (file lists and line counts verified
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | loop above |
 | `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) + 2 Rust oracle mirrors | 386 | `clang -O2` / `g++` / `python3` / `rustc` |
 | `tests/rust/` FFI + oracle | 4 Rust sources, 2 Flint FFI programs; both ABI directions + 2 result oracles | — | `bash tests/test_rust_ffi.sh ./flintc` · `bash tests/test_rust_oracle.sh ./flintc` |
+| `lsp/` language server | Rust, `serde_json` only; 21 unit tests + 31 protocol checks + keyword/builtin drift gates | — | `bash tests/test_lsp.sh ./flintc` |
+| `editors/vscode/` extension | manifest, TextMate grammar (26 patterns), language config, stdio client | — | `python3 tools/check_vscode_extension.py` |
 | `tutorial/` lessons | 8 (`01_hello`–`08_wrap`), each with `EXPECT` checks | 198 | `bash tests/run_tutorial.sh ./flintc` |
 | `stage1/` Flint lexer | `flint_lex.fl` + edge corpora, byte-identical to `--dump-tokens` | — | `bash tests/test_lexdiff.sh ./flintc` |
 | `agent-bench/` tasks | 5 tasks (`TASK.md` + `expected.txt` + `reference.fl` each, 136 lines) + `check.sh` 24 | 160 | `bash agent-bench/check.sh ./flintc` |
