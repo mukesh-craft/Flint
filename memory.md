@@ -3283,6 +3283,29 @@ README gap-list surgery → --help/--version → registry content-hash MVP
 reverse-FFI test → LSP test+TMPDIR → CI set alignment. Garbled tail of
 the ultracode output (--emit-core, "-guard nom 624", 6.60) = drifted
 echo, REFUTED, not in repo.
+
+**2026-10-17 QUICK WINS + RUST PHASE (all gated, commit 716f38f + the
+rust-ffi commit):** Apache-2.0 LICENSE added (audit item 1; the repo had
+none, so third parties could not legally reuse Flint); flintc --help/
+--version implemented (usage read from the parser so it cannot drift;
+smoke 25 -> 27, docs_check wants updated 53->63/114->124);
+flint-fmt applied to stage1-3 canon files (fmt gate was RED since
+809a172; whitespace-only, lexdiff 112/0 + fixpoint 113 + selfhost
+byte-identical); docs/errors.md regenerated from stage3 (116 -> 128) and
+test_errors.sh gained --fix so the catalog can never drift again; README
+tooling section corrected (--target DOES exist; output extension, not
+--emit-llvm, picks .ll/.o/binary; --test DOES run tests — both claims
+were stale). RUST 1.99.1 (pkg) then used where it actually pays, NOT as a
+port: (a) tests/test_rust_ffi.sh 8/8 proves the C-ABI in BOTH directions
+— flintc emits user fns as unmangled globals so a main-less .fl links
+straight into a Rust binary that calls add() and flint_str_length(), while
+a rustc staticlib is linked BY Flint via --link; (b)
+tests/test_rust_oracle.sh 2/2 compares RESULTS (not timings) against
+Rust mirrors with checked arithmetic — it caught my own inverted sieve on
+first run (9335420 vs 664579). Rust rewrite of src/main.cpp or runtime/
+remains REJECTED: it would destroy the differential C++-vs-self-host oracle
+and the self-host fixed point for no measured gain (runtime perf is
+LLVM/BLAS-bound, not host-language-bound).
 Drop 1: (9) `_unchecked` (gating already correct, no work). Defer 5: (6)
 races, (7) capabilities / supply-chain sandboxing (boundary-only idea
 stays in §7(5) SLSA context), (13) ONNX, (16)
