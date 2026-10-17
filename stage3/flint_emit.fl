@@ -1884,47 +1884,47 @@ fn e_index() -> str {
             ""
         }
     } else {
-    if ic != 1 {
-        EERR = EERR + 1
-        print("emit error: index needs i64")
-        return ""
-    }
-    if ac == 6 {
-        EERR = EERR + 1
-        print("emit error: map index needs a str key (map keys are strings)")
-        return ""
-    }
-    if ac == 4 {
-        dp = e_fresh()
-        e_emit("  " + dp + " = extractvalue {{ptr, i64}} " + a + ", 0\n")
-        ln = e_fresh()
-        e_emit("  " + ln + " = extractvalue {{ptr, i64}} " + a + ", 1\n")
-        e_bounds_inline(i, ln)
-        ep = e_fresh()
-        e_emit("  " + ep + " = getelementptr i64, ptr " + dp + ", i64 " + i + "\n")
-        t = e_fresh()
-        e_emit("  " + t + " = load i64, ptr " + ep + "\n")
-        ETYPE = 1
-        t
-    } else {
-        if ac == 3 {
-            ln2 = e_fresh()
-            e_emit("  " + ln2 + " = call i64 @flint_str_length(ptr " + a + ")\n")
-            e_bounds_inline(i, ln2)
-            ep2 = e_fresh()
-            e_emit("  " + ep2 + " = getelementptr i8, ptr " + a + ", i64 " + i + "\n")
-            b = e_fresh()
-            e_emit("  " + b + " = load i8, ptr " + ep2 + "\n")
-            t2 = e_fresh()
-            e_emit("  " + t2 + " = zext i8 " + b + " to i64\n")
-            ETYPE = 1
-            t2
-        } else {
+        if ic != 1 {
             EERR = EERR + 1
-            print("emit error: index needs array or str")
-            ""
+            print("emit error: index needs i64")
+            return ""
         }
-    }
+        if ac == 6 {
+            EERR = EERR + 1
+            print("emit error: map index needs a str key (map keys are strings)")
+            return ""
+        }
+        if ac == 4 {
+            dp = e_fresh()
+            e_emit("  " + dp + " = extractvalue {{ptr, i64}} " + a + ", 0\n")
+            ln = e_fresh()
+            e_emit("  " + ln + " = extractvalue {{ptr, i64}} " + a + ", 1\n")
+            e_bounds_inline(i, ln)
+            ep = e_fresh()
+            e_emit("  " + ep + " = getelementptr i64, ptr " + dp + ", i64 " + i + "\n")
+            t = e_fresh()
+            e_emit("  " + t + " = load i64, ptr " + ep + "\n")
+            ETYPE = 1
+            t
+        } else {
+            if ac == 3 {
+                ln2 = e_fresh()
+                e_emit("  " + ln2 + " = call i64 @flint_str_length(ptr " + a + ")\n")
+                e_bounds_inline(i, ln2)
+                ep2 = e_fresh()
+                e_emit("  " + ep2 + " = getelementptr i8, ptr " + a + ", i64 " + i + "\n")
+                b = e_fresh()
+                e_emit("  " + b + " = load i8, ptr " + ep2 + "\n")
+                t2 = e_fresh()
+                e_emit("  " + t2 + " = zext i8 " + b + " to i64\n")
+                ETYPE = 1
+                t2
+            } else {
+                EERR = EERR + 1
+                print("emit error: index needs array or str")
+                ""
+            }
+        }
     }
 }
 # (idx-set A I V): array element store (strings immutable). Yields void.
@@ -2028,27 +2028,27 @@ fn e_conv(val: str, from: i64, want: i64) -> str {
                     e_emit("  " + f + " = fptosi double " + val + " to i64\n")
                     f
                 } else {
-                if from == 3 {
-                    u = e_fresh()
-                    e_emit("  " + u + " = ptrtoint ptr " + val + " to i64\n")
-                    u
-                } else {
-                    if from == 6 {
-                        u2 = e_fresh()
-                        e_emit("  " + u2 + " = ptrtoint ptr " + val + " to i64\n")
-                        u2
+                    if from == 3 {
+                        u = e_fresh()
+                        e_emit("  " + u + " = ptrtoint ptr " + val + " to i64\n")
+                        u
                     } else {
-                        if from == 7 {
-                            u3 = e_fresh()
-                            e_emit("  " + u3 + " = ptrtoint ptr " + val + " to i64\n")
-                            u3
+                        if from == 6 {
+                            u2 = e_fresh()
+                            e_emit("  " + u2 + " = ptrtoint ptr " + val + " to i64\n")
+                            u2
                         } else {
-                            EERR = EERR + 1
-                            print("emit error: bad to-int conversion")
-                            ""
+                            if from == 7 {
+                                u3 = e_fresh()
+                                e_emit("  " + u3 + " = ptrtoint ptr " + val + " to i64\n")
+                                u3
+                            } else {
+                                EERR = EERR + 1
+                                print("emit error: bad to-int conversion")
+                                ""
+                            }
                         }
                     }
-                }
                 }
             } else {
                 if from == 3 {
@@ -3008,47 +3008,47 @@ fn e_rt_sig(name: str) -> str {
                                                                                                                                                         if name == "flint_map_set" {
                                                                                                                                                             "0:6,3,1"
                                                                                                                                                         } else {
-                                                                                                                                                             if name == "flint_map_len" {
-                                                                                                                                                                 "1:6"
-                                                                                                                                                             } else {
-                                                                                                                                                                 if name == "flt_create_1d" {
-                                                                                                                                                                     "3:1"
-                                                                                                                                                                 } else {
-                                                                                                                                                                     if name == "flt_create_2d" {
-                                                                                                                                                                         "3:1,1"
-                                                                                                                                                                     } else {
-                                                                                                                                                                 if name == "flt_set" {
-                                                                                                                                                                     "0:3,1,2"
-                                                                                                                                                                 } else {
-                                                                                                                                                                     if name == "flint_f64_to_string" {
-                                                                                                                                                                         "3:2"
-                                                                                                                                                                     } else {
-                                                                                                                                                                         if name == "flt_size" {
-                                                                                                                                                                             "1:3"
-                                                                                                                                                                         } else {
-                                                                                                                                                                             if name == "flt_get" {
-                                                                                                                                                                                 "2:3,1"
-                                                                                                                                                                             } else {
-                                                                                                                                                                                 if name == "flt_sum" {
-                                                                                                                                                                                     "2:3"
-                                                                                                                                                                                 } else {
-                                                                                                                                                                                     if name == "flt_shape" {
-                                                                                                                                                                                         "1:3,1"
-                                                                                                                                                                                     } else {
-                                                                                                                                                                                         if name == "flt_destroy" {
-                                                                                                                                                                                             "0:3"
-                                                                                                                                                                                         } else {
-                                                                                                                                                                                             ""
-                                                                                                                                                                                         }
-                                                                                                                                                                                     }
-                                                                                                                                                                                 }
-                                                                                                                                                                             }
-                                                                                                                                                                         }
-                                                                                                                                                                     }
-                                                                                                                                                                     }
-                                                                                                                                                                 }
-                                                                                                                                                             }
-                                                                                                                                                             }
+                                                                                                                                                            if name == "flint_map_len" {
+                                                                                                                                                                "1:6"
+                                                                                                                                                            } else {
+                                                                                                                                                                if name == "flt_create_1d" {
+                                                                                                                                                                    "3:1"
+                                                                                                                                                                } else {
+                                                                                                                                                                    if name == "flt_create_2d" {
+                                                                                                                                                                        "3:1,1"
+                                                                                                                                                                    } else {
+                                                                                                                                                                        if name == "flt_set" {
+                                                                                                                                                                            "0:3,1,2"
+                                                                                                                                                                        } else {
+                                                                                                                                                                            if name == "flint_f64_to_string" {
+                                                                                                                                                                                "3:2"
+                                                                                                                                                                            } else {
+                                                                                                                                                                                if name == "flt_size" {
+                                                                                                                                                                                    "1:3"
+                                                                                                                                                                                } else {
+                                                                                                                                                                                    if name == "flt_get" {
+                                                                                                                                                                                        "2:3,1"
+                                                                                                                                                                                    } else {
+                                                                                                                                                                                        if name == "flt_sum" {
+                                                                                                                                                                                            "2:3"
+                                                                                                                                                                                        } else {
+                                                                                                                                                                                            if name == "flt_shape" {
+                                                                                                                                                                                                "1:3,1"
+                                                                                                                                                                                            } else {
+                                                                                                                                                                                                if name == "flt_destroy" {
+                                                                                                                                                                                                    "0:3"
+                                                                                                                                                                                                } else {
+                                                                                                                                                                                                    ""
+                                                                                                                                                                                                }
+                                                                                                                                                                                            }
+                                                                                                                                                                                        }
+                                                                                                                                                                                    }
+                                                                                                                                                                                }
+                                                                                                                                                                            }
+                                                                                                                                                                        }
+                                                                                                                                                                    }
+                                                                                                                                                                }
+                                                                                                                                                            }
                                                                                                                                                         }
                                                                                                                                                     }
                                                                                                                                                 }
@@ -3696,197 +3696,199 @@ fn e_infer_init() -> i64 {
                                 e_skip_rest()
                                 3
                             } else {
-                            if tag == "cast" {
-                                ic = e_infer_init()
-                                e_skip()
-                                ty = e_word()
-                                e_skip_rest()
-                                if flint_str_compare(ty, "i64") == 0 {
-                                    1
-                                } else {
-                                    if flint_str_compare(ty, "f64") == 0 {
-                                        2
-                                    } else {
-                                        EERR = EERR + 1
-                                        0
-                                    }
-                                }
-                            } else {
-                            if tag == "slice" {
-                                e_skip_rest()
-                                4
-                            } else {
-                                if tag == "map-lit" {
+                                if tag == "cast" {
+                                    ic = e_infer_init()
+                                    e_skip()
+                                    ty = e_word()
                                     e_skip_rest()
-                                    6
-                                } else {
-                                    if tag == "struct-lit" {
-                                        e_skip()
-                                        snm = e_word()
-                                        sc = e_ent_lookup(snm)
-                                        e_skip_rest()
-                                        if sc == -1 {
+                                    if flint_str_compare(ty, "i64") == 0 {
+                                        1
+                                    } else {
+                                        if flint_str_compare(ty, "f64") == 0 {
+                                            2
+                                        } else {
                                             EERR = EERR + 1
                                             0
-                                        } else {
-                                            sc
                                         }
+                                    }
+                                } else {
+                                    if tag == "slice" {
+                                        e_skip_rest()
+                                        4
                                     } else {
-                                        if tag == "enum-lit" {
-                                            e_skip()
-                                            enm = e_word()
-                                            ec = e_ent_lookup(enm)
+                                        if tag == "map-lit" {
                                             e_skip_rest()
-                                            if ec == -1 {
-                                                EERR = EERR + 1
-                                                0
-                                            } else {
-                                                ec
-                                            }
+                                            6
                                         } else {
-                                            if tag == "var" {
+                                            if tag == "struct-lit" {
                                                 e_skip()
-                                                vn = e_word()
+                                                snm = e_word()
+                                                sc = e_ent_lookup(snm)
                                                 e_skip_rest()
-                                                if ETYPEMAP.has(vn) == 1 {
-                                                    ETYPEMAP.get(vn)
-                                                } else {
+                                                if sc == -1 {
                                                     EERR = EERR + 1
-                                                    print("emit error: unknown name in global init")
-                                                    print(vn)
                                                     0
+                                                } else {
+                                                    sc
                                                 }
                                             } else {
-                                                if tag == "index" {
+                                                if tag == "enum-lit" {
+                                                    e_skip()
+                                                    enm = e_word()
+                                                    ec = e_ent_lookup(enm)
                                                     e_skip_rest()
-                                                    1
-                                                } else {
-                                                    if tag == "field" {
-                                                        e_skip_rest()
+                                                    if ec == -1 {
                                                         EERR = EERR + 1
-                                                        print("emit error: field global init needs annotation")
                                                         0
                                                     } else {
-                                                        if tag == "bin" {
-                                                            e_skip()
-                                                            bo = e_word()
-                                                            lc = e_infer_init()
-                                                            rc = e_infer_init()
-                                                            e_skip_rest()
-                                                            if lc == 2 {
-                                                                2
-                                                            } else {
-                                                                1
-                                                            }
+                                                        ec
+                                                    }
+                                                } else {
+                                                    if tag == "var" {
+                                                        e_skip()
+                                                        vn = e_word()
+                                                        e_skip_rest()
+                                                        if ETYPEMAP.has(vn) == 1 {
+                                                            ETYPEMAP.get(vn)
                                                         } else {
-                                                            if tag == "lambda" {
+                                                            EERR = EERR + 1
+                                                            print("emit error: unknown name in global init")
+                                                            print(vn)
+                                                            0
+                                                        }
+                                                    } else {
+                                                        if tag == "index" {
+                                                            e_skip_rest()
+                                                            1
+                                                        } else {
+                                                            if tag == "field" {
                                                                 e_skip_rest()
-                                                                8
+                                                                EERR = EERR + 1
+                                                                print("emit error: field global init needs annotation")
+                                                                0
                                                             } else {
-                                                                if tag == "call" {
+                                                                if tag == "bin" {
                                                                     e_skip()
-                                                                    cn = e_word()
-                                                                    if cn == "print" {
-                                                                        e_skip_rest()
-                                                                        0
+                                                                    bo = e_word()
+                                                                    lc = e_infer_init()
+                                                                    rc = e_infer_init()
+                                                                    e_skip_rest()
+                                                                    if lc == 2 {
+                                                                        2
                                                                     } else {
-                                                                        if cn == "len" {
-                                                                            e_skip_rest()
-                                                                            1
-                                                                        } else {
-                                                                            si = e_sig_lookup(cn)
-                                                                            if si == -1 {
-                                                                                rs = e_rt_sig(cn)
-                                                                                if rs == "" {
-                                                                                    e_skip_rest()
-                                                                                    EERR = EERR + 1
-                                                                                    0
-                                                                                } else {
-                                                                                    e_skip_rest()
-                                                                                    flint_str_char_at(rs, 0) - 48
-                                                                                }
-                                                                            } else {
-                                                                                e_skip_rest()
-                                                                                flint_vec_get(EFNRET, si)
-                                                                            }
-                                                                        }
+                                                                        1
                                                                     }
                                                                 } else {
-                                                                    if tag == "decl" {
+                                                                    if tag == "lambda" {
                                                                         e_skip_rest()
-                                                                        0
+                                                                        8
                                                                     } else {
-                                                                        if tag == "assign" {
-                                                                            e_skip_rest()
-                                                                            0
-                                                                        } else {
-                                                                            if tag == "return" {
+                                                                        if tag == "call" {
+                                                                            e_skip()
+                                                                            cn = e_word()
+                                                                            if cn == "print" {
                                                                                 e_skip_rest()
                                                                                 0
                                                                             } else {
-                                                                                if tag == "break" {
+                                                                                if cn == "len" {
+                                                                                    e_skip_rest()
+                                                                                    1
+                                                                                } else {
+                                                                                    si = e_sig_lookup(cn)
+                                                                                    if si == -1 {
+                                                                                        rs = e_rt_sig(cn)
+                                                                                        if rs == "" {
+                                                                                            e_skip_rest()
+                                                                                            EERR = EERR + 1
+                                                                                            0
+                                                                                        } else {
+                                                                                            e_skip_rest()
+                                                                                            flint_str_char_at(rs, 0) - 48
+                                                                                        }
+                                                                                    } else {
+                                                                                        e_skip_rest()
+                                                                                        flint_vec_get(EFNRET, si)
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        } else {
+                                                                            if tag == "decl" {
+                                                                                e_skip_rest()
+                                                                                0
+                                                                            } else {
+                                                                                if tag == "assign" {
                                                                                     e_skip_rest()
                                                                                     0
                                                                                 } else {
-                                                                                    if tag == "continue" {
+                                                                                    if tag == "return" {
                                                                                         e_skip_rest()
                                                                                         0
                                                                                     } else {
-                                                                                        if tag == "while" {
+                                                                                        if tag == "break" {
                                                                                             e_skip_rest()
                                                                                             0
                                                                                         } else {
-                                                                                            if tag == "for" {
+                                                                                            if tag == "continue" {
                                                                                                 e_skip_rest()
                                                                                                 0
                                                                                             } else {
-                                                                                                if tag == "idx-set" {
+                                                                                                if tag == "while" {
                                                                                                     e_skip_rest()
                                                                                                     0
                                                                                                 } else {
-                                                                                                    if tag == "expr" {
-                                                                                                        e_skip()
-                                                                                                        r2 = e_infer_init()
-                                                                                                        e_skip()
-                                                                                                        if e_peek() == 41 {
-                                                                                                            e_adv()
-                                                                                                        }
-                                                                                                        r2
+                                                                                                    if tag == "for" {
+                                                                                                        e_skip_rest()
+                                                                                                        0
                                                                                                     } else {
-                                                                                                        if tag == "if" {
-                                                                                                            e_infer_if()
+                                                                                                        if tag == "idx-set" {
+                                                                                                            e_skip_rest()
+                                                                                                            0
                                                                                                         } else {
-                                                                                                            if tag == "match" {
-                                                                                                                e_infer_match()
+                                                                                                            if tag == "expr" {
+                                                                                                                e_skip()
+                                                                                                                r2 = e_infer_init()
+                                                                                                                e_skip()
+                                                                                                                if e_peek() == 41 {
+                                                                                                                    e_adv()
+                                                                                                                }
+                                                                                                                r2
                                                                                                             } else {
-                                                                                                                if tag == "ref" {
-                                                                                                                    e_skip_rest()
-                                                                                                                    8
+                                                                                                                if tag == "if" {
+                                                                                                                    e_infer_if()
                                                                                                                 } else {
-                                                                                                                    if tag == "deref" {
-                                                                                                                        e_skip_rest()
-                                                                                                                        1
+                                                                                                                    if tag == "match" {
+                                                                                                                        e_infer_match()
                                                                                                                     } else {
-                                                                                                                        if tag == "compound-assign" {
+                                                                                                                        if tag == "ref" {
                                                                                                                             e_skip_rest()
-                                                                                                                            0
+                                                                                                                            8
                                                                                                                         } else {
-                                                                                                                            if tag == "method" {
-                                                                                                                                e_skip()
-                                                                                                                                if e_peek() == 40 {
-                                                                                                                                    e_skip_value()
-                                                                                                                                }
-                                                                                                                                e_skip()
-                                                                                                                                mn = e_word()
+                                                                                                                            if tag == "deref" {
                                                                                                                                 e_skip_rest()
-                                                                                                                                if mn == "set" {
+                                                                                                                                1
+                                                                                                                            } else {
+                                                                                                                                if tag == "compound-assign" {
+                                                                                                                                    e_skip_rest()
                                                                                                                                     0
                                                                                                                                 } else {
-                                                                                                                                    1
+                                                                                                                                    if tag == "method" {
+                                                                                                                                        e_skip()
+                                                                                                                                        if e_peek() == 40 {
+                                                                                                                                            e_skip_value()
+                                                                                                                                        }
+                                                                                                                                        e_skip()
+                                                                                                                                        mn = e_word()
+                                                                                                                                        e_skip_rest()
+                                                                                                                                        if mn == "set" {
+                                                                                                                                            0
+                                                                                                                                        } else {
+                                                                                                                                            1
+                                                                                                                                        }
+                                                                                                                                    } else {
+                                                                                                                                        e_skip_rest()
+                                                                                                                                        0
+                                                                                                                                    }
                                                                                                                                 }
-                                                                                                                            } else {
-                                                                                                                                e_skip_rest()
-                                                                                                                                0
                                                                                                                             }
                                                                                                                         }
                                                                                                                     }
@@ -3911,8 +3913,6 @@ fn e_infer_init() -> i64 {
                                         }
                                     }
                                 }
-                            }
-                            }
                             }
                         }
                     }
@@ -4409,64 +4409,66 @@ fn e_expr_tagged(tag: str) -> str {
                                             if tag == "if" {
                                                 e_if_expr()
                                             } else {
-                                            if tag == "array" {
-                                                e_array()
-                                            } else {
-                                            if tag == "tensor" {
-                                                e_tensor()
-                                            } else {
-                                            if tag == "cast" {
-                                                e_cast()
-                                            } else {
-                                            if tag == "index" {
-                                                        e_index()
+                                                if tag == "array" {
+                                                    e_array()
+                                                } else {
+                                                    if tag == "tensor" {
+                                                        e_tensor()
                                                     } else {
-                                                        if tag == "idx-set" {
-                                                            e_idx_set()
+                                                        if tag == "cast" {
+                                                            e_cast()
                                                         } else {
-                                                            if tag == "struct-lit" {
-                                                                e_struct_lit()
+                                                            if tag == "index" {
+                                                                e_index()
                                                             } else {
-                                                                if tag == "field" {
-                                                                    e_field()
+                                                                if tag == "idx-set" {
+                                                                    e_idx_set()
                                                                 } else {
-                                                                    if tag == "enum-lit" {
-                                                                        e_enum_lit()
+                                                                    if tag == "struct-lit" {
+                                                                        e_struct_lit()
                                                                     } else {
-                                                                        if tag == "match" {
-                                                                            e_match()
+                                                                        if tag == "field" {
+                                                                            e_field()
                                                                         } else {
-                                                                            if tag == "map-lit" {
-                                                                                e_map_lit()
+                                                                            if tag == "enum-lit" {
+                                                                                e_enum_lit()
                                                                             } else {
-                                                                                if tag == "method" {
-                                                                                    e_method()
+                                                                                if tag == "match" {
+                                                                                    e_match()
                                                                                 } else {
-                                                                                    if tag == "ref" {
-                                                                                        e_ref()
+                                                                                    if tag == "map-lit" {
+                                                                                        e_map_lit()
                                                                                     } else {
-                                                                                        if tag == "deref" {
-                                                                                            e_deref()
+                                                                                        if tag == "method" {
+                                                                                            e_method()
                                                                                         } else {
-                                                                                            if tag == "slice" {
-                                                                                                e_slice()
+                                                                                            if tag == "ref" {
+                                                                                                e_ref()
                                                                                             } else {
-                                                                                                if tag == "unwrap" {
-                                                                                                    e_unwrap()
+                                                                                                if tag == "deref" {
+                                                                                                    e_deref()
                                                                                                 } else {
-                                                                                                    if tag == "try" {
-                                                                                                        e_unwrap()
+                                                                                                    if tag == "slice" {
+                                                                                                        e_slice()
                                                                                                     } else {
-                                                                                                        if tag == "lambda" {
-                                                                                                            EERR = EERR + 1
-                                                                                                            print("emit error: lambda must be bound")
-                                                                                                            ""
+                                                                                                        if tag == "unwrap" {
+                                                                                                            e_unwrap()
                                                                                                         } else {
-                                                                                                            EERR = EERR + 1
-                                                                                                            print("emit error: node needs a later group")
-                                                                                                            print(tag)
-                                                                                                            e_skip_balanced()
-                                                                                                            ""
+                                                                                                            if tag == "try" {
+                                                                                                                e_unwrap()
+                                                                                                            } else {
+                                                                                                                if tag == "lambda" {
+                                                                                                                    EERR = EERR + 1
+                                                                                                                    print("emit error: lambda must be bound")
+                                                                                                                    ""
+                                                                                                                } else {
+                                                                                                                    EERR = EERR + 1
+                                                                                                                    print("emit error: node needs a later group")
+                                                                                                                    print(tag)
+                                                                                                                    e_skip_balanced()
+                                                                                                                    ""
+                                                                                                                }
+                                                                                                            }
                                                                                                         }
                                                                                                     }
                                                                                                 }
@@ -4482,8 +4484,6 @@ fn e_expr_tagged(tag: str) -> str {
                                                         }
                                                     }
                                                 }
-                                            }
-                                            }
                                             }
                                         }
                                     }

@@ -48,6 +48,16 @@ check_fail() { # $1=file $2=expected-error-substring: must exit nonzero with mes
     if printf '%s\n' "$out" | grep -qF -- "$want"; then pass=$((pass+1));
     else echo "FAIL $file (missing error '$want')"; echo "$out" | head -n 5; fail=$((fail+1)); fi
 }
+check_flag() { # $1=flag $2=expected-prefix: --help/--version must exit 0 and print it
+    local flag="$1" want="$2" out rc
+    out="$("$FLINTC" "$flag" 2>&1)"
+    rc=$?
+    if [ $rc -ne 0 ]; then echo "FAIL $flag (exit $rc)"; fail=$((fail+1)); return; fi
+    if printf '%s\n' "$out" | grep -qF -- "$want"; then pass=$((pass+1));
+    else echo "FAIL $flag (missing '$want')"; echo "$out" | head -n 3; fail=$((fail+1)); fi
+}
+check_flag --help "USAGE"
+check_flag --version "flintc "
 check_fail tests/t_for_bad.fl "for-in needs an array or str collection"
 echo "smoke: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

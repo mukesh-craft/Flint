@@ -10928,6 +10928,8 @@ int main(int argc, char* argv[]) {
     std::string linkFlags;
     std::string targetTripleSpec;
     bool debugFlag = false;
+    bool helpFlag = false;
+    bool versionFlag = false;
     bool emitInterfaceMode = false;
     bool runMode = true; // ORC JIT is the default
     std::vector<std::string> useInterfaces;
@@ -10972,7 +10974,11 @@ int main(int argc, char* argv[]) {
     int progArgStart = argc; // index where program args begin
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
-        if (arg == "--") {
+        if (arg == "--help" || arg == "-h") {
+            helpFlag = true;
+        } else if (arg == "--version" || arg == "-V") {
+            versionFlag = true;
+        } else if (arg == "--") {
             progArgStart = i + 1;
             break;
         } else if (arg == "--unsafe") {
@@ -11065,6 +11071,49 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    if (versionFlag) {
+        std::cout << "flintc " << kFlintVersion << "\n";
+        return 0;
+    }
+    if (helpFlag) {
+        std::cout
+            << "flintc " << kFlintVersion << " — Flint compiler (LLVM backend)\n\n"
+            << "USAGE\n"
+            << "  flintc [options] <input.fl> [-o <output>] [-- prog args...]\n"
+            << "  flintc --emit-interface <input.fl> <out.flint.bc>\n"
+            << "  flintc --use-interface <in.flint.bc> <input.fl> <out> [--link flags]\n\n"
+            << "Default mode (no -o) compiles and runs in-memory via the ORC JIT.\n"
+            << "With -o, the output extension picks the form: .ll = LLVM IR text,\n"
+            << ".o = object file, any other name = linked executable.\n\n"
+            << "OUTPUT\n"
+            << "  -o, --output <path>      Emit instead of JIT-running\n"
+            << "  --link <flags>           Extra linker flags (with -o)\n"
+            << "  --emit-interface         Emit a .flint.bc program interface\n"
+            << "  --use-interface <path>   Reuse an emitted interface (repeatable)\n\n"
+            << "CODEGEN\n"
+            << "  --opt-level <0|1|2|3>    Optimization level (default 2)\n"
+            << "  --target <triple>        Emit for a target triple (requires -o)\n"
+            << "                           e.g. x86_64-pc-linux-gnu, wasm32-unknown-wasi\n"
+            << "  --debug                  Emit DWARF line tables (requires -o)\n"
+            << "  --parallel <N>           Parallel codegen threads (capped at hw*4)\n"
+            << "  --loop-opt               Loop-friendly check attributes\n"
+            << "  --backend <llvm|qbe>     Backend (llvm default; qbe experimental)\n"
+            << "  --lib-path <dir>         Extra runtime/library search dir\n\n"
+            << "SAFETY\n"
+            << "  (default)                Overflow checks ON\n"
+            << "  --unsafe                 Disable overflow checks\n"
+            << "  --safe, --release        Explicit safety posture (no-ops, compat)\n\n"
+            << "DIAGNOSTICS AND MODES\n"
+            << "  --check-bce              Report bounds-check counts (changes nothing)\n"
+            << "  --test                   Run test_ functions after JIT compile\n"
+            << "  --dump-tokens <path>     Write the stable token dump and exit\n"
+            << "  --run                    Explicit JIT run (the default)\n"
+            << "  --offline                Registry: cache only, fail if missing\n"
+            << "  --fast                   Compat no-op (kept for flag stability)\n"
+            << "  -h, --help               This text\n"
+            << "  -V, --version            Version\n";
+        return 0;
+    }
     if (inputPath.empty()) {
         std::cerr << "usage: flintc [options] <input.fl> [-o <output>]\n";
         std::cerr << "Default mode: compile & run via ORC JIT (no output file)\n";

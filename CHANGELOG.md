@@ -7,6 +7,25 @@ All notable changes to Flint are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- **LICENSE (Apache-2.0) + license pointer in README.** The repository had
+  no license file, which legally blocked third-party reuse of Flint source
+  and artifacts. The full Apache-2.0 text is now in `LICENSE` (copyright
+  line: 2026 mukesh-craft), and README carries a `License:` line linking it.
+- **`flintc --help` / `--version`** (`-h` / `-V`). Neither existed:
+  `--help` fell through to "cannot open '--help'" and the usage text was
+  reachable only on the bare-no-args error path. `--help` prints the full
+  flag inventory grouped by purpose (output, codegen, safety, diagnostics
+  and modes), each entry read from the parser so the text cannot drift
+  from the flags it documents; `--version` prints the build-stamped
+  version (`flintc 0.22.0`). Both exit 0 and are smoke-gated
+  (`tests/run.sh`, 25 -> 27 checks).
+- **`tests/test_errors.sh --fix`: the error catalog regenerates itself.**
+  The 12 diagnostics added with the as-cast / tensor-literal / map-index
+  work (commit 809a172) shipped without catalog entries, so the catalog's
+  "generated list" provenance claim was false (116 documented vs 128
+  emitted, and its own gate said so). `--fix` regenerates the list from
+  `stage3/flint_emit.fl` in the curated shape (lambda family first, the rest
+  sorted) and recomputes the total: `errors-catalog: 128/128 in sync`.
 - **`--debug`: real DWARF line tables in artifacts.** The module previously
   carried no debug info, so gdb/lldb/llvm-dwarfdump could not map anything
   back to Flint source. The flag builds a DIBuilder compile unit + file +
@@ -77,6 +96,22 @@ All notable changes to Flint are documented here. Format follows
 - **`tests/test_ai.sh`** — the standard-library and AI gate, now 17 checks.
 
 ### Fixed
+- **`flint-fmt` applied to the three self-host canon files**
+  (`stage1/flint_lex.fl`, `stage2/flint_parse.fl`, `stage3/flint_emit.fl`).
+  `tests/test_fmt.sh` had been failing since commit 809a172 landed new
+  diagnostics without re-formatting. The reformat is whitespace-only (491
+  lines changed in, 491 changed back) and pipeline-verified: `test_fmt.sh`
+  0 failures, `test_lexdiff.sh` 112/0, `test_fixpoint.sh` 113 pass,
+  `test_selfhost.sh` Phase C byte-identical with stable promotion OK.
+- **README tooling section corrected against reality.** It claimed
+  `--target`/`--emit-llvm` do not exist (both stale: `--target` has worked
+  since its restoration, and the *output extension* — not a flag — selects
+  `.ll` text / `.o` object / linked executable), and that `--test` "does
+  not run tests" (it does: it runs every `test_` function and prints a
+  pass/fail summary). The `--target` recipe carried the phantom
+  `--emit-llvm`, now removed. The gap list states only real gaps: no
+  `<subcommand>` verbs, no `--cgu`/`--no-strip`/`--emit-obj`/`--emit-header`,
+  and an untested `flint-lsp` whose hover is line-based.
 - **The JIT could not run programs using the utility/time layers** — it died
   with a `JIT session error: Symbols not found: [...]` fix since the runtime
   `.o` files were compiled with LLVM outline-atomics, whose `__aarch64_*`

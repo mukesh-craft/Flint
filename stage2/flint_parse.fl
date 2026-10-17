@@ -402,22 +402,22 @@ fn p_expr_code(e: str) -> i64 {
                             }
                         }
                     } else {
-                if p_starts_with(e, "(call ") == 1 {
-                    rest = flint_str_substring(e, 6, flint_str_length(e))
-                    sp = flint_str_index_of(rest, " ")
-                    mut nm: str = flint_str_concat(rest, "")
-                    if sp >= 0 {
-                        nm = flint_str_substring(flint_str_concat(nm, ""), 0, sp)
-                    }
-                    p_call_code(nm)
-                } else {
-                    vn = p_var_name(e)
-                    if vn == "" {
-                        0
-                    } else {
-                        p_type_of(vn)
-                    }
-                }
+                        if p_starts_with(e, "(call ") == 1 {
+                            rest = flint_str_substring(e, 6, flint_str_length(e))
+                            sp = flint_str_index_of(rest, " ")
+                            mut nm: str = flint_str_concat(rest, "")
+                            if sp >= 0 {
+                                nm = flint_str_substring(flint_str_concat(nm, ""), 0, sp)
+                            }
+                            p_call_code(nm)
+                        } else {
+                            vn = p_var_name(e)
+                            if vn == "" {
+                                0
+                            } else {
+                                p_type_of(vn)
+                            }
+                        }
                     }
                 }
             }
@@ -983,73 +983,74 @@ fn p_postfix(base: str) -> str {
                 go = 0
             }
         } else {
-        if k == 54 {
-            p_next()
-            idx = p_expr()
-            if p_is_err(idx) == 1 {
-                go = 0
-            } else {
-                if p_kind() == 58 {
-                    # Slice a[l:r] (mirrors C++ order: colon before close).
-                    p_next()
-                    r2 = p_expr()
-                    if p_is_err(r2) == 1 {
-                        go = 0
-                    } else {
-                        if p_accept(55) == 1 {
-                            b = "(slice " + b + " " + idx + " " + r2 + ")"
+            if k == 54 {
+                p_next()
+                idx = p_expr()
+                if p_is_err(idx) == 1 {
+                    go = 0
+                } else {
+                    if p_kind() == 58 {
+                        # Slice a[l:r] (mirrors C++ order: colon before close).
+                        p_next()
+                        r2 = p_expr()
+                        if p_is_err(r2) == 1 {
+                            go = 0
                         } else {
+                            if p_accept(55) == 1 {
+                                b = "(slice " + b + " " + idx + " " + r2 + ")"
+                            } else {
+                                p_note_err()
+                                go = 0
+                            }
+                        }
+                    } else {
+                        if p_accept(55) == 0 {
                             p_note_err()
                             go = 0
-                        }
-                    }
-                } else {
-                    if p_accept(55) == 0 {
-                        p_note_err()
-                        go = 0
-                    } else {
-                        if p_kind() == 73 {
-                            # a[i] = v (raw form, Array-gated like C++).
-                            p_next()
-                            rhs = p_expr()
-                            if p_is_err(rhs) == 1 {
-                                go = 0
-                            } else {
-                                bn = p_var_name(b)
-                                if bn == "" {
-                                    p_note_err()
+                        } else {
+                            if p_kind() == 73 {
+                                # a[i] = v (raw form, Array-gated like C++).
+                                p_next()
+                                rhs = p_expr()
+                                if p_is_err(rhs) == 1 {
                                     go = 0
                                 } else {
-                                    if p_type_of(bn) == 4 {
-                                        b = "(idx-set " + b + " " + idx + " " + rhs + ")"
-                                    } else {
+                                    bn = p_var_name(b)
+                                    if bn == "" {
                                         p_note_err()
                                         go = 0
+                                    } else {
+                                        if p_type_of(bn) == 4 {
+                                            b = "(idx-set " + b + " " + idx + " " + rhs + ")"
+                                        } else {
+                                            p_note_err()
+                                            go = 0
+                                        }
                                     }
                                 }
-                            }
-                        } else {
-                            if p_kind() == 63 {
-                                p_compound_index()
-                                go = 0
                             } else {
-                                if p_kind() == 66 {
+                                if p_kind() == 63 {
                                     p_compound_index()
                                     go = 0
                                 } else {
-                                    if p_kind() == 68 {
+                                    if p_kind() == 66 {
                                         p_compound_index()
                                         go = 0
                                     } else {
-                                        if p_kind() == 70 {
+                                        if p_kind() == 68 {
                                             p_compound_index()
                                             go = 0
                                         } else {
-                                            if p_kind() == 72 {
+                                            if p_kind() == 70 {
                                                 p_compound_index()
                                                 go = 0
                                             } else {
-                                                b = "(index " + b + " " + idx + ")"
+                                                if p_kind() == 72 {
+                                                    p_compound_index()
+                                                    go = 0
+                                                } else {
+                                                    b = "(index " + b + " " + idx + ")"
+                                                }
                                             }
                                         }
                                     }
@@ -1058,38 +1059,37 @@ fn p_postfix(base: str) -> str {
                         }
                     }
                 }
-            }
-        } else {
-            if k == 82 {
-                p_next()
-                if p_kind() == 1 {
-                    name = p_text()
+            } else {
+                if k == 82 {
                     p_next()
-                    if p_kind() == 50 {
+                    if p_kind() == 1 {
+                        name = p_text()
                         p_next()
-                        a = p_arg_list()
-                        if p_accept(51) == 1 {
-                            b = "(method " + b + " " + name + a + ")"
+                        if p_kind() == 50 {
+                            p_next()
+                            a = p_arg_list()
+                            if p_accept(51) == 1 {
+                                b = "(method " + b + " " + name + a + ")"
+                            } else {
+                                p_note_err()
+                                go = 0
+                            }
                         } else {
-                            p_note_err()
-                            go = 0
+                            b = "(field " + b + " " + name + ")"
                         }
                     } else {
-                        b = "(field " + b + " " + name + ")"
+                        p_note_err()
+                        go = 0
                     }
                 } else {
-                    p_note_err()
-                    go = 0
-                }
-            } else {
-                if k == 86 {
-                    p_next()
-                    b = "(unwrap " + b + ")"
-                } else {
-                    go = 0
+                    if k == 86 {
+                        p_next()
+                        b = "(unwrap " + b + ")"
+                    } else {
+                        go = 0
+                    }
                 }
             }
-        }
         }
     }
     b
@@ -3080,19 +3080,19 @@ fn pp_tagged3(src: str, tag: str) -> str {
                                         e + " as " + ty
                                     }
                                 } else {
-                                if tag == "ref" {
-                                    e = pp_node(src)
-                                    PPPREC = 100
-                                    "&" + e
-                                } else {
-                                    if tag == "deref" {
+                                    if tag == "ref" {
                                         e = pp_node(src)
                                         PPPREC = 100
-                                        "*" + e
+                                        "&" + e
                                     } else {
-                                        pp_tagged4(src, tag)
+                                        if tag == "deref" {
+                                            e = pp_node(src)
+                                            PPPREC = 100
+                                            "*" + e
+                                        } else {
+                                            pp_tagged4(src, tag)
+                                        }
                                     }
-                                }
                                 }
                             }
                         }

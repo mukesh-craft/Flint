@@ -3258,6 +3258,31 @@ Keep-12 + Mod-3 + Split/Drop/Defer verdicts are now ALL executed or
 recorded as decisions (2026-10-17). Future work lives in the
 DROPPED/DEFERRED list above (design/demand/rustc-host triggers), not in
 this ledger.
+
+**2026-10-17 EXTERNAL AUDIT (ultracode wave, hostile-neutral, logs
+.audit/):** all 7 named gates re-ran green independently (smoke 25, diff
+11, ai 26, dwarf 16, target 9, docs 0, aegis 16) AND matmul re-run
+43.0ms ≈ numpy 42.2ms N=500. New verified facts the ledger lacked:
+[1] tests/test_fmt.sh RED (stage1-3 canon files need-format — fmt gate
+broken by 809a172 without re-format), [2] tests/test_errors.sh RED
+(12 new as-cast/tensor-map diagnostics missing from docs/errors.md,
+catalog claims 116 vs 128 emitted), [3] NO LICENSE file (third-party
+reuse legally blocked), [4] registry fetch has ZERO hash/checksum
+verification (rg 9431-9666 = none; 2026 npm/supply-chain incidents make
+this a live risk), [5] C→Flint FFI untested (Flint→C proven via
+ffi_demo), [6] CI workflow flint.yml omits ai/aegis/dwarf/target gates,
+[7] flint-lsp hardcodes /tmp temp path (Termux risk), [8] flintc has no
+--help/--version, [9] README self-contradicts: --target recipe at :347
+vs "do not exist" list :363+, [10] bench/compile_time unfinished.
+Deposit this basis (mine, dual-weight): adoption 6.45 / moat 7.02 —
+the 7.4 rode generous testing(9.0→8.5)/process(8.0→7.0)/docs(7.5→7.0)/
+ecosystem(2.5→2.0); stdlib 5.5→6.0 (net+crypto+serial are real). Fix
+path (S-first): LICENSE → fmt 3 canon files → errors.md regen (128) →
+README gap-list surgery → --help/--version → registry content-hash MVP
+→ git-URL fetch test → TLS libcurl → sqlite/csv/image modules →
+reverse-FFI test → LSP test+TMPDIR → CI set alignment. Garbled tail of
+the ultracode output (--emit-core, "-guard nom 624", 6.60) = drifted
+echo, REFUTED, not in repo.
 Drop 1: (9) `_unchecked` (gating already correct, no work). Defer 5: (6)
 races, (7) capabilities / supply-chain sandboxing (boundary-only idea
 stays in §7(5) SLSA context), (13) ONNX, (16)

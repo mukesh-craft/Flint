@@ -4,6 +4,8 @@ A safe, small, fast compiled language for **every device** — phone, laptop,
 server. Native binaries via LLVM, Rust-like ownership plus generational
 leases, Python-style ergonomics, batteries-included tooling.
 
+**License:** Apache-2.0 — see [LICENSE](LICENSE).
+
 > Every command below was executed against this tree on Termux AArch64
 > on 2026-10-10. Anything not verified is marked as such — see Status.
 
@@ -325,13 +327,17 @@ clang output.ll runtime.o -o hello
 
 ## Tooling (verified flags only)
 
-There is no `flintc --help` and no `flintc <subcommand>` — bare
-`./flintc` with no usable input prints usage. The real interface is
+`./flintc --help` lists every flag; `./flintc --version` prints the
+version. There are no `flintc <subcommand>` verbs — the interface is
 flags plus standalone Python scripts:
 
 ```bash
+./flintc --help                       # every flag, grouped
+./flintc --version                    # flintc 0.22.0
 ./flintc main.fl -o myapp            # native binary (AOT)
 ./flintc main.fl out.ll              # LLVM IR text (by output extension)
+./flintc main.fl out.o               # object file (by output extension)
+./flintc --test main.fl              # run every test_ function, prints a summary
 ./flintc --opt-level 0 main.fl       # 0|1|2|3, default 2
 ./flintc --fast main.fl              # accepted anywhere; currently a no-op tier flag
 ./flintc --unsafe main.fl            # skip overflow/bounds checks (--safe is default)
@@ -344,9 +350,9 @@ flags plus standalone Python scripts:
                                      # vs surviving O2 (changes nothing)
 ./flintc --emit-interface a.fl b.flint.bc  # declarations only
 ./flintc --use-interface b.flint.bc main.fl -o app  # build against them
-./flintc main.fl --target x86_64-pc-linux-gnu --emit-llvm -o main.x86.ll
+./flintc --target x86_64-pc-linux-gnu main.fl -o main.x86.ll
                                      # cross-target emit (.ll text or .o
-                                     # object); JIT execution stays host-only
+                                     # object; JIT execution stays host-only)
 ./flintc --debug main.fl -o prog     # DWARF line tables in the artifact
                                      # (llvm-dwarfdump/lldb); `--debug` needs
                                      # -o, bare run refuses (JIT can't carry
@@ -361,12 +367,14 @@ python3 tools/flamegraph.py profile_report.json --folded   # folded stacks
 ```
 
 Known tooling gaps (do not rely on these):
-- `flintc run/build/test/fmt/doc/lsp/fetch/new/api/help` subcommands
-  do not exist; `flintc --help` does not exist.
-- `--test` exists as a flag but does not run tests (silently builds on
-  cache hit, `JIT creation failed` on miss).
-- `--target`, `--cgu`, `--no-strip`, `--emit-llvm`, `--emit-obj`,
-  `--emit-header` do not exist.
+- `flintc run/build/test/fmt/doc/lsp/fetch/new/api` subcommands do not
+  exist — use the flags above plus `flint-fmt`/`flint-doc`/`flint-lsp`.
+- `--cgu`, `--no-strip`, `--emit-obj`, `--emit-header`, `--emit-llvm` are
+  not flags: the **output extension** picks the artifact form
+  (`.ll` = IR text, `.o` = object, other = linked executable), so
+  `--emit-llvm` in older docs is wrong — drop it.
+- `flint-lsp` has no test gate yet; hover is line-based and there is no
+  `references` request.
 
 ## Learn
 
@@ -620,7 +628,7 @@ What exists and how to run it (file lists and line counts verified
 | Suite | Files | Lines | Run |
 |-------|-------|-------|-----|
 | `tests/` smoke tests | 5 `.fl` (`t_hello` 8, `t_arith` 26, `t_flow` 48, `t_funcs` 15, `t_types` 23) | 120 | `bash tests/run.sh ./flintc` |
-| `tests/` runners | `run.sh` 53, `run_tutorial.sh` 18, `test_registry.sh` 43 | 114 | `bash tests/test_registry.sh` |
+| `tests/` runners | `run.sh` 63, `run_tutorial.sh` 18, `test_registry.sh` 43 | 124 | `bash tests/test_registry.sh` |
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | loop above |
 | `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) | 386 | `clang -O2` / `g++` / `python3` |
 | `tutorial/` lessons | 8 (`01_hello`–`08_wrap`), each with `EXPECT` checks | 198 | `bash tests/run_tutorial.sh ./flintc` |
