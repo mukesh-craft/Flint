@@ -3243,6 +3243,21 @@ Jerusalem-KEEP / Casablanca-DEFER.
     strips debug metadata defensively in runWithJIT. Remaining open
     (recorded in IMPROVEMENT-PLAN): lldb/gdb driver validation, VS Code
     extension stays DEFERRED past this.
+(22) paper re-fetch gate — CLOSED (see its section above, 2026-10-17).
+(23) uncommitted-stack hygiene — CLOSED: battery green fresh first
+    (smoke 25/25, differential 11/0, stdlib-ai 26/26, --target 9/9, dwarf
+    16/16, selfhost stable promote OK, docs-check 0), then the full
+    2026-10-15→17 stack committed in three theme commits — dc41e7b
+    (runtime+pipelines+gates, 31 files), 809a172 (compiler: casts,
+    panics, maps, --target, --debug, registrations), d26ca2e (docs, paper
+    draft, ledger); .gitignore gained compile_commands.json; `git status`
+    clean after. Phase-0a lesson applied: ~/.cache/flintc purged before
+    the --debug cache experiments.
+
+Keep-12 + Mod-3 + Split/Drop/Defer verdicts are now ALL executed or
+recorded as decisions (2026-10-17). Future work lives in the
+DROPPED/DEFERRED list above (design/demand/rustc-host triggers), not in
+this ledger.
 Drop 1: (9) `_unchecked` (gating already correct, no work). Defer 5: (6)
 races, (7) capabilities / supply-chain sandboxing (boundary-only idea
 stays in §7(5) SLSA context), (13) ONNX, (16)
