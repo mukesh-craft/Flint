@@ -3309,8 +3309,39 @@ LLVM/BLAS-bound, not host-language-bound).
 Drop 1: (9) `_unchecked` (gating already correct, no work). Defer 5: (6)
 races, (7) capabilities / supply-chain sandboxing (boundary-only idea
 stays in §7(5) SLSA context), (13) ONNX, (16)
-pre-1970, (18) VS Code extension. 12+3+2+1+5 = 23 ✓. D1-D4 (from
+pre-1970. 12+3+2+1+4 = 22 ✓. (18) VS Code extension LIFTED OUT OF THE
+DEFERRAL 2026-10-17 — delivered as editors/vscode/ with a Rust server
+(see the LSP section at the end of this ledger). D1-D4 (from
 CONSTRAINTS, not the inventory) all KEEP in Phase 1; §7(4)(5)(6)
 NIST/SLSA/PoisonCap ADOPT in Phase 6. Corrected 2026-10-10 after hostile
 re-check caught a miscount (14/3/3/6 = 26) in the first draft.
 
+**2026-10-17 RUST LSP + VS CODE EXTENSION (user directive: Rust wherever it
+pays, no subagents):** the Python flint-lsp is DELETED, replaced by lsp/ — a
+Rust binary with one dependency (serde_json). 21 cargo unit tests (framing
+incl. split/malformed frames and UTF-8 byte-length headers, diagnostics parsing
+against real compiler output, analyzer) + tests/test_lsp.py driving the real
+binary over pipes (31 protocol checks) + tests/test_lsp.sh wrapping them with
+TWO DRIFT GATES: server keywords == compiler lexer keywords (30 == 30) and
+server builtins == compiler registrations (515 == 515, regenerable via
+tools/gen_lsp_builtins.py --check). editors/vscode/ ships manifest + TextMate
+grammar (26 patterns, keywords GENERATED from src/main.cpp) + language config +
+a dependency-free stdio client, verified by tools/check_vscode_extension.py
+(fails on keyword drift in either direction).
+
+Hard-won details worth not relearning:
+- The gate once tested a STALE binary because it only built when the file was
+  missing; it now rebuilds whenever any lsp/src/*.rs is newer than the binary.
+  Phantom protocol failures followed immediately.
+- A compiler that cannot be spawned must publish ONE explicit diagnostic.
+  Returning zero diagnostics is a false all-clear — the worst failure mode an
+  editor can have.
+- The emitter's `codegen:` errors carry NO position; they are reported at line 0
+  labelled `emitter:` rather than given an invented location.
+- LSP positions are UTF-16 code units, so columns must be converted, not counted
+  in bytes. ASCII sources hide this bug completely.
+- Grammar extraction lesson: scanning a raw regex pattern for words reads
+  `\bpython\b` as the words "b" and "bpython"; strip escapes first.
+- RAM note: this Termux has NO root (su blocked, pm trim-caches denied,
+  dumpsys returns nothing), so caches cannot be dropped from the shell at all;
+  the largest resident process was opencode itself (755 MB).
