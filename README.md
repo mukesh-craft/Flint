@@ -638,6 +638,7 @@ What exists and how to run it (file lists and line counts verified
 | `tests/` runners | `run.sh` 63, `run_tutorial.sh` 18, `test_registry.sh` 43 | 124 | `bash tests/test_registry.sh` |
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | loop above |
 | `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) + 2 Rust oracle mirrors | 386 | `clang -O2` / `g++` / `python3` / `rustc` |
+| `runtime/rust/` stdlib modules | `no_std` Rust: CSV parser (arena-based, RFC 4180 + comments), 15 unit tests | — | `bash tests/test_rust_stdlib.sh ./flintc` |
 | `tests/rust/` FFI + oracle | 4 Rust sources, 2 Flint FFI programs; both ABI directions + 2 result oracles | — | `bash tests/test_rust_ffi.sh ./flintc` · `bash tests/test_rust_oracle.sh ./flintc` |
 | `lsp/` language server | Rust, `serde_json` only; 21 unit tests + 31 protocol checks + keyword/builtin drift gates | — | `bash tests/test_lsp.sh ./flintc` |
 | `editors/vscode/` extension | manifest, TextMate grammar (26 patterns), language config, stdio client | — | `python3 tools/check_vscode_extension.py` |

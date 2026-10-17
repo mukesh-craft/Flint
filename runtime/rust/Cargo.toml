@@ -1,0 +1,33 @@
+[package]
+name = "flint_std"
+version = "0.22.0"
+edition = "2021"
+description = "Flint standard library modules written in Rust"
+license = "Apache-2.0"
+
+# staticlib, not rlib/cdylib: Flint links modules the same way it links C
+# objects (`flintc prog.fl --link libflint_std.a`, plus `ld -r` into a single
+# flint_std.o for the JIT symbol pool), so a staticlib is the shape that fits
+# both execution paths with no compiler change.
+[lib]
+name = "flint_std"
+# staticlib only. The crate is #![no_std] (see src/lib.rs) for two verified
+# reasons: Rust std cannot live in JIT memory (TLS handle aborts on Android),
+# and two Rust staticlibs cannot share a link (duplicate std symbols). With
+# no_std, one flattened object serves BOTH the AOT link line and the JIT
+# symbol pool, and user Rust libraries still link alongside it.
+crate-type = ["staticlib"]
+
+# No dependencies. A stdlib must build from source on any device with a Rust
+# toolchain, and every dependency is a version-drift and supply-chain risk for
+# code that ships inside every user's binary.
+[dependencies]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+# no_std has nowhere to unwind to, and panics must never cross the FFI
+# boundary, so panics abort loudly inside this module.
+panic = "abort"

@@ -75,6 +75,12 @@ RUNTIME_OBJS=()
 for o in "$ROOT"/runtime.o "$ROOT"/flint_*.o; do
     case "$o" in
         */pyruntime.o|*/ffi_helper.o) continue ;;
+        # flint_std.o is Rust std; linking it together with this gate's own
+        # Rust staticlib produces duplicate std symbols (rust_eh_personality,
+        # std::panicking::EMPTY_PANIC). That constraint is real and documented:
+        # one Rust std per link. The stdlib modules get their own gate
+        # (tests/test_rust_stdlib.sh), which links them on their own.
+        */flint_std.o) continue ;;
     esac
     RUNTIME_OBJS+=(-C "link-arg=$o")
 done

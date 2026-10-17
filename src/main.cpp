@@ -25,6 +25,7 @@
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
+#include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
 #include "llvm/Passes/PassBuilder.h"
 #include <dlfcn.h>
 #include "llvm/Passes/OptimizationLevel.h"
@@ -272,7 +273,7 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
                              "flint_coll.o", "flint_nn.o", "flint_util.o",
                              "flint_value.o", "flint_toml.o", "flint_yaml.o", "flint_time.o",
                              "flint_serial.o", "flint_crypto.o", "flint_net.o",
-                             "flint_aegis.o", "flint_chan.o",
+                             "flint_aegis.o", "flint_chan.o", "flint_std.o",
                              "ffi_helper.o"};
     for (auto* lib : stdLibs) {
         if (stat(lib, &st) == 0) args.push_back(lib);
@@ -437,8 +438,15 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
         if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
     for (auto* objName : aiObjs)
         if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
+    // Rust stdlib modules (runtime/rust) load as a plain object, exactly like
+    // the C modules, because they are #![no_std]: no allocator, no TLS, no
+    // libc handles. That is what makes this work at all -- a Rust `std` object
+    // aborts inside JIT memory on Android ("increment_dso_handle_reference_
+    // counter: Couldn't find soinfo by dso_handle"), and two Rust staticlibs
+    // cannot share one link (duplicate std symbols). Both were measured, not
+    // guessed; tests/test_rust_stdlib.sh guards both properties.
     const char* stdObjs[] = {"flint_serial.o", "flint_crypto.o", "flint_net.o",
-                             "flint_aegis.o", "flint_chan.o"};
+                             "flint_aegis.o", "flint_chan.o", "flint_std.o"};
     for (auto* objName : stdObjs)
         if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
     if (stat("pyruntime.o", &st) == 0 && !loadOne("pyruntime.o", true)) return false;
@@ -2024,6 +2032,7 @@ public:
             "flint_println_i64", "flint_println_str", "flint_println_f64",
             "flint_panic", "flint_py_init", "flint_py_run", "flint_py_fini",
             "flint_bounds_check", "flint_str_free", "flint_print", "flint_println",
+            "flint_csv_free",
             "flint_free", "flint_array_write_i64", "flint_array_free",
             "flint_null_check", "flint_array_set_ptr", "flint_srand",
             "flint_vec_free", "flint_vec_set", "flint_vec_push", "flint_vec_clear",
@@ -4684,6 +4693,17 @@ public:
         // ──────────────────────────────────────────────────────
         auto ptrTy3 = llvm::PointerType::get(*ctx, 0);
         // Vec
+        // CSV parsing (runtime/rust — Rust stdlib module, see flint_std.o).
+        // flint_csv_get returns a string the caller releases with
+        // flint_csv_free; allocation and release stay in Rust, so no allocator
+        // identity is assumed across the boundary. flint_csv_error returns
+        // static storage and must NOT be freed.
+        add("flint_csv_parse", i64Ty, {i8PtrTy, i8PtrTy}, false);
+        add("flint_csv_rows", i64Ty, {}, false);
+        add("flint_csv_cols", i64Ty, {i64Ty}, false);
+        add("flint_csv_get", i8PtrTy, {i64Ty, i64Ty}, false);
+        add("flint_csv_free", voidTy, {i8PtrTy}, false);
+        add("flint_csv_error", i8PtrTy, {}, false);
         add("flint_vec_new", ptrTy3, {}, false);
         add("flint_vec_free", voidTy, {ptrTy3}, false);
         add("flint_vec_len", i64Ty, {ptrTy3}, false);

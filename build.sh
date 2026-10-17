@@ -179,6 +179,35 @@ echo "  flint_crypto: ./flint_crypto.o"
 echo "  flint_net:    ./flint_net.o"
 echo "  flint_aegis:  ./flint_aegis.o"
 echo "  flint_chan:   ./flint_chan.o"
+[ -f flint_std.o ] && echo "  flint_std:    ./flint_std.o"
+
+echo "=== Building Rust standard-library modules ==="
+# Rust stdlib modules build to a static library, which is then flattened into a
+# single relocatable object with `ld -r`. The flattened object is what the JIT
+# loads and what the AOT link line names, so both execution paths share one
+# artifact. (No --whole-archive: pulling every archive member drags in
+# compiler_builtins the JIT cannot resolve.)
+#
+# Skipped with a warning rather than failing the build when cargo is absent:
+# a C-only checkout still produces a working compiler without the Rust modules,
+# and the module gate reports them as skipped instead of silently missing.
+if command -v cargo >/dev/null 2>&1; then
+    # Seed the exported symbols with -u so `ld` pulls only the archive members
+    # the module actually needs. --whole-archive would drag in every
+    # compiler_builtins member (hundreds of float/atomic intrinsics the JIT
+    # cannot resolve), which is the difference between a 12 KB object and a
+    # 2 MB one that fails to load.
+    FLINT_RUST_Syms="-u flint_csv_parse -u flint_csv_rows -u flint_csv_cols -u flint_csv_get -u flint_csv_free -u flint_csv_error -u flint_csv_arena_bytes"
+    if cargo build --release --manifest-path runtime/rust/Cargo.toml >/dev/null 2>&1 \
+       && ld -r $FLINT_RUST_Syms runtime/rust/target/release/libflint_std.a -o flint_std.o; then
+        echo "  flint_std:    ./flint_std.o (Rust stdlib, both paths)"
+    else
+        echo "  WARNING: Rust stdlib build failed; Rust modules unavailable" >&2
+        rm -f flint_std.o
+    fi
+else
+    echo "  WARNING: cargo not found; skipping Rust stdlib modules (pkg install rust)" >&2
+fi
 
 echo "=== Build complete ==="
 echo "  compiler:     ./flintc"

@@ -15,6 +15,33 @@ All notable changes to Flint are documented here. Format follows
   server, and the README gap list no longer calls the server untested.
 
 ### Added
+- **`runtime/rust/`: the first Rust standard-library module (CSV), working
+  through both execution paths.** Flint's stdlib now has a Rust module and the
+  pipeline it needs: `cargo build` -> staticlib -> `ld -r` into `flint_std.o` ->
+  loaded by the JIT and named on the AOT link line. `flint_csv_parse`,
+  `flint_csv_rows`, `flint_csv_cols`, `flint_csv_get`, `flint_csv_free`,
+  `flint_csv_error` and `flint_csv_arena_bytes` are registered builtins; the
+  dialect is RFC 4180 with `#` comment lines, blank-line skipping, CRLF, and
+  doubled-quote escapes.
+  Two constraints were discovered by experiment and are now enforced by the
+  gate rather than discovered by users:
+  - **The module is `#![no_std]`.** Rust's `std` resolves thread-local handles
+    through libc, and a `std` object loaded into JIT memory aborts the process
+    on Android with `increment_dso_handle_reference_counter: Couldn't find
+    soinfo by dso_handle`. `no_std` also means the flattened object carries no
+    `std` symbols, so a user's own Rust static library can link in the same
+    binary -- two `std` copies collide (`rust_eh_personality`,
+    `std::panicking::EMPTY_PANIC`). The cost is a fixed 1 MiB parse arena
+    instead of a heap; overflow is reported as an error, never truncated.
+  - **The archive is flattened with seeded `-u`, not `--whole-archive`.**
+    Whole-archive pulls every `compiler_builtins` member (hundreds of float and
+    atomic intrinsics the JIT cannot resolve); seeded flattening produces an
+    11.6 KB object with exactly three undefined symbols (`abort`, `memcpy`,
+    `memset`), all libc.
+  Verified by `tests/test_rust_stdlib.sh` (7 checks): the crate's 15 unit
+  tests, JIT and AOT runs of `tests/t_csv.fl` including quoted fields and the
+  malformed-input error path, byte-identical JIT/AOT output, a `no_std` symbol
+  assertion, and that a typo'd module symbol still fails loudly.
 - **`lsp/`: the Flint language server, rewritten in Rust, and gated.** One
   static binary whose only dependency is `serde_json`. Diagnostics come from the
   real `flintc` (never a re-implemented parser), edits are debounced 300 ms on

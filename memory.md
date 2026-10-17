@@ -3345,3 +3345,34 @@ Hard-won details worth not relearning:
 - RAM note: this Termux has NO root (su blocked, pm trim-caches denied,
   dumpsys returns nothing), so caches cannot be dropped from the shell at all;
   the largest resident process was opencode itself (755 MB).
+
+**2026-10-17 FIRST RUST STDLIB MODULE (CSV) — the Rust decision, tested:**
+the user's instruction was "use Rust instead of C/C++ for stdlib". Two measured
+facts shaped the design, and both were counter-intuitive:
+- Rust `std` CANNOT be linked into Flint's JIT: std resolves TLS handles via
+  libc, and inside JIT memory Android aborts the process with
+  "increment_dso_handle_reference_counter: Couldn't find soinfo by dso_handle".
+  So the module is #![no_std] (arena, no allocator, no TLS) and loads as a
+  PLAIN OBJECT like the C modules — no dlopen, no ORC symbol plumbing.
+- TWO Rust staticlibs cannot share one link: std symbols collide
+  (rust_eh_personality, std::panicking::EMPTY_PANIC). no_std modules remove
+  that, so a user's own Rust .a still links alongside Flint's.
+- Flattening the archive needs SEEDED `ld -r -u <exported symbols>`, not
+  --whole-archive: whole-archive drags in every compiler_builtins member and the
+  JIT cannot resolve them. 11.6 KB / 3 undefined libc symbols vs ~2 MB / 800.
+- Trap: a no_std #[panic_handler] using `svc #0` is delivered by Android as
+  SIGSEGV with no message — it turned an ordinary assertion failure into an
+  unattributable segfault. Use libc `abort()` via extern "C".
+- Trap: tests must not stack-construct Doc (~41 KiB even scaled down for test);
+  it overflows the test harness threads here. Tests heap-allocate.
+- Trap: `ld -r` without -u pulls NOTHING out of an archive (no undefined
+  symbols to resolve) and yields an object with no symbols at all.
+- Trap: ORC in LLVM 21 has no DynamicLibrarySearchGenerator::GetProcessSymbols
+  and no absoluteSymbols in Core.h (my training memory was stale). The pattern
+  that does exist: llvm::orc::absoluteSymbols(SymbolMap) in
+  ExecutionEngine/Orc/AbsoluteSymbols.h, keyed by pool.intern(name).
+  (Not needed in the end, because no_std loads as a plain object.)
+- GATE lesson: differential went 1/10 after a compiler rebuild because the
+  self-host binaries under $TMPDIR/slipstream/self were invalidated. Rebuild
+  with `bash tests/test_selfhost.sh` before judging it a regression.
+

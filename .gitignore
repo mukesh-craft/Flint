@@ -43,3 +43,4 @@ compile_commands.json
 /editors/vscode/node_modules/
 /editors/vscode/bin/
 /editors/vscode/.keywords.json
+/runtime/rust/target/
