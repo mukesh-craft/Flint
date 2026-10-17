@@ -35,3 +35,4 @@ flint-test
 /c_*.txt
 # Profiler output (generated in CWD by flintc_prof runs)
 profile_report.json
+compile_commands.json

@@ -199,10 +199,12 @@ Item 1 is one line and should land first regardless of anything else here.
 
 - `verifyModule` + a `--check-bce` default-on report → a *measured* safety/perf
   story rather than an asserted one.
-- DWARF line tables via `DIBuilder` → real `gdb`/`lldb` debugging (currently the
-  default is `--no-strip`, so nothing is debuggable).
 - Stage-2-backed LSP (hover/goto-def/diagnostics) instead of regexes.
-- WASI `_start` so `--target wasm32` actually *executes*, not just emits objects.
+  (DWARF line tables SHIPPED 2026-10-17: `--debug` via DIBuilder,
+  `tests/test_dwarf.sh`; lldb/gdb driver validation still open.)
+- WASI `_start` — `--target wasm32` now EMITS objects and canonical IR
+  (2026-10-17, `tests/test_target.sh`); the remaining piece is sysroot/libc
+linkage so it actually *executes*.
 
 ### Explicitly not recommended
 
