@@ -279,6 +279,7 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
         (void)flag;
     };
     addLib("libsqlite3.so", "-lsqlite3");
+    addLib("libcurl.so", "-lcurl");
 
     // Include standard library .o files if they exist
     struct stat st;
@@ -532,6 +533,26 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
             "sqlite3_column_text", "sqlite3_errmsg", "sqlite3_changes",
             "sqlite3_libversion"};
         std::vector<std::string> names(std::begin(kSqliteSymbols), std::end(kSqliteSymbols));
+        publishJITLibrary(JIT, candidates, names);
+    }
+
+    // libcurl, for the Rust stdlib's HTTPS client. Same reasoning as libsqlite3:
+    // a shared library's symbols are not libc symbols, so they must be
+    // published into the ORC session explicitly.
+    {
+        char cand[512];
+        std::vector<const char*> candidates = {nullptr, nullptr, nullptr};
+        if (const char* pfx = getenv("PREFIX")) {
+            snprintf(cand, sizeof cand, "%s/lib/libcurl.so", pfx);
+            candidates[0] = cand;
+        }
+        candidates[1] = "./libcurl.so";
+        candidates[2] = "/usr/lib/libcurl.so";
+        static const char* kCurlSymbols[] = {
+            "curl_easy_init", "curl_easy_cleanup", "curl_easy_setopt",
+            "curl_easy_perform", "curl_easy_getinfo", "curl_global_init",
+            "curl_easy_strerror", "curl_version"};
+        std::vector<std::string> names(std::begin(kCurlSymbols), std::end(kCurlSymbols));
         publishJITLibrary(JIT, candidates, names);
     }
     if (stat("pyruntime.o", &st) == 0 && !loadOne("pyruntime.o", true)) return false;
@@ -4921,6 +4942,9 @@ public:
         add("flint_tcp_set_timeout", i64Ty, {i64Ty, i64Ty}, false);
         add("flint_dns_resolve", i8PtrTy, {i8PtrTy}, false);
         add("flint_http_get", i8PtrTy, {i8PtrTy, i64Ty}, false);
+        // Status of the last HTTP(S) request, so a caller can distinguish 404
+        // from 200 without parsing. Registered with the rest of the net module.
+        add("flint_http_status", i64Ty, {}, false);
         add("flint_http_post", i8PtrTy, {i8PtrTy, i8PtrTy, i8PtrTy, i64Ty}, false);
         // ──────────────────────────────────────────────────────
         // AEGIS LEASES (flint_aegis.o) — generational memory safety.
