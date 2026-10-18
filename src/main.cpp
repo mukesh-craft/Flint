@@ -9069,6 +9069,26 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
         auto* cmp = cg->builder->CreateFCmp(pred, l, r, "fcmp");
         return cg->builder->CreateZExt(cmp, cg->i64Ty, "fcmp_ext");
     }
+    // Aggregate operands: `==`/`!=` compare field-by-field, recursively.
+    //
+    // The single-pass parser emits comparisons here while the AST path emits
+    // them in Codegen, and the two sites drifted -- the AST one got the
+    // aggregate lowering and this one did not, so `E.B(3) == E.B(3)` aborted
+    // with "Invalid operand types for ICmp instruction" while struct equality
+    // worked. Same lowering, same recursion, so a nested struct field is
+    // compared structurally rather than by pointer value.
+    if (l->getType()->isStructTy() || r->getType()->isStructTy()) {
+        if (opTok.lexeme != "==" && opTok.lexeme != "!=") {
+            parseError("'" + opTok.lexeme + "' is not defined for structs or enums; use == or !=");
+            return nullptr;
+        }
+        llvm::Value* eq = cg->emitAggregateEqual(l, r, 0);
+        if (!eq) return nullptr;
+        if (opTok.lexeme == "==")
+            return cg->builder->CreateZExt(eq, cg->i64Ty, "agg_eq");
+        return cg->builder->CreateZExt(cg->builder->CreateNot(eq), cg->i64Ty, "agg_ne");
+    }
+
     llvm::CmpInst::Predicate pred;
     std::string& op = opTok.lexeme;
     if (op == "==") pred = llvm::CmpInst::ICMP_EQ;
