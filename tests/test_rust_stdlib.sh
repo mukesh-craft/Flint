@@ -94,6 +94,16 @@ else
     bad "JIT: tests/t_sqlite.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
 fi
 
+# FTS5, snippet() and the math functions: the SQLite build on this device has
+# them compiled in, and this proves a Flint program can actually use them --
+# "the library supports it" and "a language can reach it" are different claims.
+if out="$(timeout -s KILL 300 "$FLINTC" tests/t_fts5.fl 2>&1)"; then
+    expect_all "JIT: FTS5 match, snippet, zero-result, math" "$out" \
+        "Flint" "transfer data over the [network]" "4" "fts5-ok"
+else
+    bad "JIT: tests/t_fts5.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+fi
+
 # --- AOT path ---------------------------------------------------------------
 if timeout -s KILL 600 "$FLINTC" tests/t_csv.fl -o "$WORK/t_csv.bin" > "$WORK/aot.log" 2>&1; then
     if out="$("$WORK/t_csv.bin" 2>&1)"; then
