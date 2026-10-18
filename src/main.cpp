@@ -1755,7 +1755,9 @@ struct EnumConstructAST : ExprAST {
 struct MatchArm {
     std::string enumName;
     std::string variantName;
-    std::string bindName;
+    // A variant can carry several payloads (`Node(i64, i64)` binds as
+    // `Node(a, b)`), so this holds one name per payload field.
+    std::vector<std::string> bindNames;
     std::unique_ptr<ExprAST> body;
 };
 
@@ -2569,11 +2571,24 @@ private:
         }
     }
 
+    // Consumes a token, or reports and RECOVERS.
+    //
+    // Recovery means ADVANCING. The previous version reported the error and
+    // returned a default Token without moving the position, so any parse loop
+    // driven by `while (!check(X) && !isAtEnd())` could spin forever: nothing
+    // in the loop body changed the position, so neither did the loop's exit
+    // condition. A malformed `match` arm on a multi-payload variant did exactly
+    // that and the compiler hung with no message, no exit code, and no CPU
+    // spike -- the worst failure mode a compiler has.
+    //
+    // Every recover-and-continue parser must make progress. Returning the token
+    // actually at the cursor (rather than a default-constructed one) keeps the
+    // caller's `lexeme` meaningful in diagnostics.
     Token consume(TokenType t, const std::string& err) {
         if (check(t)) return advance();
         parseError(err);
-        auto& toks = lexer.getTokens();
-        return toks.empty() ? Token{} : toks[0];
+        if (isAtEnd()) return Token{};
+        return advance();
     }
 
     // ---- type ----
@@ -3580,7 +3595,7 @@ private:
                 collectLambdaUses(m->scrutinee.get(), bound, uses, err);
                 for (auto& arm : m->arms) {
                     auto ab = bound;
-                    if (!arm.bindName.empty()) ab.insert(arm.bindName);
+                    for (auto& bn : arm.bindNames) ab.insert(bn);
                     collectLambdaUses(arm.body.get(), ab, uses, err);
                 }
                 break;
@@ -4200,9 +4215,13 @@ private:
                 arm.enumName = enumTk.lexeme;
                 arm.variantName = varTk.lexeme;
                 if (match(TokenType::LPAREN)) {
-                    Token bind = consume(TokenType::IDENTIFIER, "expected binding name");
-                    arm.bindName = bind.lexeme;
-                    consume(TokenType::RPAREN, "expected ')'");
+                    if (!check(TokenType::RPAREN)) {
+                        do {
+                            arm.bindNames.push_back(
+                                consume(TokenType::IDENTIFIER, "expected binding name").lexeme);
+                        } while (match(TokenType::COMMA));
+                    }
+                    consume(TokenType::RPAREN, "expected ')' after pattern bindings");
                 }
                 consume(TokenType::FAT_ARROW, "expected '=>' after match arm pattern");
                 if (check(TokenType::LBRACE)) {
@@ -7331,20 +7350,32 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             for (size_t v = 0; v < ed.variants.size(); v++) {
                 if (ed.variants[v].name == arm.variantName) { armTag = (int)v; break; }
             }
-            if (!arm.bindName.empty() && armTag >= 0 && !ed.variants[armTag].payloadTypes.empty()) {
+            if (!arm.bindNames.empty() && armTag >= 0 && !ed.variants[armTag].payloadTypes.empty()) {
                 auto& vt = ed.variants[armTag];
                 std::vector<llvm::Type*> fldTys = {i8Ty};
                 for (auto& pt : ed.variants[armTag].payloadTypes)
                     fldTys.push_back(llvmType(pt, *ctx, mod.get()));
                 auto* varTy = llvm::StructType::get(*ctx, fldTys);
                 auto* bcPtr = builder->CreateBitCast(alloca, i8PtrTy);
-                // For single-field payload, bind directly
-                if (ed.variants[armTag].payloadTypes.size() == 1) {
-                    auto* valPtr = builder->CreateStructGEP(varTy, bcPtr, 1);
-                    auto* val = builder->CreateLoad(llvmType(ed.variants[armTag].payloadTypes[0], *ctx, mod.get()), valPtr, arm.bindName);
-                    auto* bindAlloca = createEntryAlloca(val->getType(), arm.bindName);
+                // The pattern must bind exactly the payloads the variant
+                // carries. A mismatch used to be silently ignored, so `Node(a)`
+                // on a two-payload variant compiled with `a` bound to nothing
+                // and failed later with a confusing "undefined var".
+                if (arm.bindNames.size() != vt.payloadTypes.size()) {
+                    return codegenError("pattern " + arm.enumName + "." + arm.variantName +
+                        " binds " + std::to_string(arm.bindNames.size()) +
+                        " value(s) but the variant has " +
+                        std::to_string(vt.payloadTypes.size()));
+                }
+                // One binding per payload field, in order.
+                for (size_t bi = 0; bi < arm.bindNames.size(); bi++) {
+                    const std::string& name = arm.bindNames[bi];
+                    auto* valPtr = builder->CreateStructGEP(varTy, bcPtr, (unsigned)(bi + 1));
+                    auto* fieldTy = llvmType(vt.payloadTypes[bi], *ctx, mod.get());
+                    auto* val = builder->CreateLoad(fieldTy, valPtr, name);
+                    auto* bindAlloca = createEntryAlloca(val->getType(), name);
                     builder->CreateStore(val, bindAlloca);
-                    symTable.declare(arm.bindName, {vt.payloadTypes[0], bindAlloca, nullptr, false, false, 0});
+                    symTable.declare(name, {vt.payloadTypes[bi], bindAlloca, nullptr, false, false, 0});
                 }
             }
             llvm::Value* armVal = nullptr;
@@ -9169,7 +9200,12 @@ llvm::Value* Parser::parseMatchEmit() {
     cg->builder->CreateStore(scrutinee, alloca);
 
     struct MatchArmEmit {
-        std::string enumName, variantName, bindName;
+        std::string enumName, variantName;
+        // A vector, not a single name: a variant may carry several payloads
+        // (`Node(i64, i64)` binds as `Node(a, b)`). The parser accepted exactly
+        // one identifier here, so any multi-payload pattern was a parse error,
+        // which the non-advancing `consume` turned into an infinite loop.
+        std::vector<std::string> bindNames;
         size_t bodyStart, bodyEnd;
     };
     std::vector<MatchArmEmit> arms;
@@ -9181,9 +9217,13 @@ llvm::Value* Parser::parseMatchEmit() {
         arm.enumName = enumTk.lexeme;
         arm.variantName = varTk.lexeme;
         if (match(TokenType::LPAREN)) {
-            Token bind = consume(TokenType::IDENTIFIER, "expected binding name");
-            arm.bindName = bind.lexeme;
-            consume(TokenType::RPAREN, "expected ')'");
+            if (!check(TokenType::RPAREN)) {
+                do {
+                    arm.bindNames.push_back(
+                        consume(TokenType::IDENTIFIER, "expected binding name").lexeme);
+                } while (match(TokenType::COMMA));
+            }
+            consume(TokenType::RPAREN, "expected ')' after pattern bindings");
         }
         consume(TokenType::FAT_ARROW, "expected '=>'");
         // Save body region (skip over it)
@@ -9232,19 +9272,32 @@ llvm::Value* Parser::parseMatchEmit() {
         int armTag = -1;
         for (size_t v = 0; v < ed.variants.size(); v++)
             if (ed.variants[v].name == arm.variantName) { armTag = (int)v; break; }
-        if (!arm.bindName.empty() && armTag >= 0 && !ed.variants[armTag].payloadTypes.empty()) {
+        if (!arm.bindNames.empty() && armTag >= 0 && !ed.variants[armTag].payloadTypes.empty()) {
             auto& vt = ed.variants[armTag];
+            // The pattern must bind exactly the payloads the variant carries.
+            // A mismatch used to be silently ignored, so `Node(a)` on a
+            // two-payload variant compiled with `a` bound to nothing.
+            if (arm.bindNames.size() != vt.payloadTypes.size()) {
+                parseError("pattern " + arm.enumName + "." + arm.variantName + " binds " +
+                           std::to_string(arm.bindNames.size()) + " value(s) but the variant has " +
+                           std::to_string(vt.payloadTypes.size()));
+                cg->symTable.exitScope();
+                return nullptr;
+            }
             std::vector<llvm::Type*> fldTys = {cg->i8Ty};
-            for (auto& pt : ed.variants[armTag].payloadTypes)
+            for (auto& pt : vt.payloadTypes)
                 fldTys.push_back(cg->resolvedLlvmType(pt));
             auto* varTy = llvm::StructType::get(*cg->ctx, fldTys);
             auto* bcPtr = cg->builder->CreateBitCast(alloca, cg->i8PtrTy);
-            if (ed.variants[armTag].payloadTypes.size() == 1) {
-                auto* valPtr = cg->builder->CreateStructGEP(varTy, bcPtr, 1);
-                auto* val = cg->builder->CreateLoad(cg->resolvedLlvmType(ed.variants[armTag].payloadTypes[0]), valPtr, arm.bindName);
-                auto* bindAlloca = cg->createEntryAlloca(val->getType(), arm.bindName);
+            // One binding per payload field, in order.
+            for (size_t bi = 0; bi < arm.bindNames.size(); bi++) {
+                const std::string& name = arm.bindNames[bi];
+                auto* valPtr = cg->builder->CreateStructGEP(varTy, bcPtr, (unsigned)(bi + 1));
+                auto* fieldTy = cg->resolvedLlvmType(vt.payloadTypes[bi]);
+                auto* val = cg->builder->CreateLoad(fieldTy, valPtr, name);
+                auto* bindAlloca = cg->createEntryAlloca(val->getType(), name);
                 cg->builder->CreateStore(val, bindAlloca);
-                cg->symTable.declare(arm.bindName, {vt.payloadTypes[0], bindAlloca, nullptr, false, false, 0});
+                cg->symTable.declare(name, {vt.payloadTypes[bi], bindAlloca, nullptr, false, false, 0});
             }
         }
         // Re-parse and emit arm body from saved token range (value-capturing)
@@ -11141,12 +11194,16 @@ class QbeEmitter {
         for (size_t i = 0; i < mn->arms.size(); i++) {
             il << armLabels[i] << "\n";
             auto& arm = mn->arms[i];
-            // Bind payload variable if present
-            if (!arm.bindName.empty()) {
-                std::string bindSlot = getSlot(arm.bindName);
+            // Bind every payload field. Previously only the first was bound,
+            // at a hardcoded offset, so a multi-payload pattern bound one name
+            // and left the rest undefined. Offsets are 8 + i*8: the struct is
+            // a 1-byte tag followed by i64 payload fields.
+            for (size_t bi = 0; bi < arm.bindNames.size(); bi++) {
+                std::string bindSlot = getSlot(arm.bindNames[bi]);
                 std::string pPtr = newTmp('l'), pVal = newTmp('l'), sp = newTmp('l');
+                std::string off = std::to_string(8 + bi * 8);
                 il << "\t" << sp << " =l loadl " << scrutSlot << "\n";
-                il << "\t" << pPtr << " =l add " << sp << ", 8\n";
+                il << "\t" << pPtr << " =l add " << sp << ", " << off << "\n";
                 il << "\t" << pVal << " =l loadl " << pPtr << "\n";
                 storel(pVal, bindSlot);
             }
