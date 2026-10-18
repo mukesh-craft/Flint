@@ -27,6 +27,7 @@
 
 // Standard-library modules, one file each, all `no_std`.
 pub mod crypto;
+pub mod sqlite;
 
 #[cfg(not(test))]
 use core::panic::PanicInfo;
