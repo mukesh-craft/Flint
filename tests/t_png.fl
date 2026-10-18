@@ -1,0 +1,47 @@
+# The PNG codec and the DEFLATE codec behind it, called from Flint.
+# The fixture PNG was produced by Python's zlib, NOT by this codec, so decoding
+# it proves interoperability rather than self-consistency.
+# Binary data travels as a string literal with \xHH escapes: a Flint array is
+# one i64 per element, so it is not a byte buffer.
+
+fn main() {
+    png = "\x89PNG\x0d\x0a\x1a\x0a\x00\x00\x00\x0dIHDR\x00\x00\x00\x03\x00\x00\x00\x02\x08\x02\x00\x00\x00\x12\x16\xf1M\x00\x00\x00\x1dIDATx\x9cc`\xb0\xa9\xd8\xf2A'c\xc9\x03\x06\x91\x80\x9e\x13,\x0e5;\xbe\x00\x00O8\x08\x95\x07l\x16S\x00\x00\x00\x00IEND\xaeB`\x82"
+        "x00\x00\x02\x08\x02\x00\x00\x00\x12\x16\xf1M\x00\x00\x00\x1dIDAT"
+        "x\x9cc`\xb0\xa9\xd8\xf2A'c\xc9\x03\x06\x91\x80\x9e\x13,\x0e5;\xb"
+        "e\x00\x00O8\x08\x95\x07l\x16S\x00\x00\x00\x00IEND\xaeB`\x82"
+
+    # --- decode a foreign PNG ---------------------------------------------
+    print(flint_png_decode(png, 86) == 1)
+    print(flint_png_width())
+    print(flint_png_height())
+    print(flint_png_channels())
+    print(flint_png_pixel(0, 0, 0) == 0)
+    # Row 0 bytes are 0, 60, 120, 180, 240, 44, 104, 164, 224 and row 1 is
+    # each of those plus 20, so pixel (1,0) starts at byte 3 and pixel (2,1)
+    # ends at byte 8.
+    print(flint_png_pixel(1, 0, 0) == 180)
+    print(flint_png_pixel(2, 1, 2) == 244)
+    luma = flint_png_mean_luma()
+    print(luma > 0.0 && luma < 1.0)
+
+    # --- encode an image and read it back ---------------------------------
+    # 2x2 RGB: red, green, blue, white. Same rule as above: byte buffers are
+    # string literals, because a Flint array is one i64 per element.
+    pixels = "\xff\x00\x00\x00\xff\x00\x00\x00\xff\xff\xff\xff"
+    n = flint_png_encode(2, 2, 3, pixels, 12)
+    print(n > 60)
+
+    print(flint_png_decode(flint_png_encoded(), n) == 1)
+    print(flint_png_width() == 2)
+    print(flint_png_height() == 2)
+    print(flint_png_pixel(0, 0, 0) == 255)
+    print(flint_png_pixel(0, 0, 1) == 0)
+    print(flint_png_pixel(1, 1, 0) == 255)
+    print(flint_png_pixel(1, 1, 2) == 255)
+
+    # --- hostile and out-of-range input -----------------------------------
+    print(flint_png_decode(png, 4) == 0)
+    print(flint_str_length(flint_png_error()) > 0)
+    print(flint_png_pixel(99, 99, 0) == -1)
+    print(flint_png_encode(0, 2, 3, pixels, 12) == -1)
+}

@@ -34,8 +34,10 @@ pub mod arena;
 pub mod argon2;
 pub mod compress;
 pub mod encoding;
+pub mod png;
 pub mod system;
 pub mod crypto;
+pub mod deflate;
 pub mod sqlite;
 
 #[cfg(not(test))]
