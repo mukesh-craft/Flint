@@ -3857,3 +3857,78 @@ Three defects were caught only by running the tests, not by reading the code:
 **Rule to keep:** in this crate, prefer `u64`/`i64` arithmetic, avoid anything
 that pulls compiler_builtins members, and never assume the global allocator is a
 heap.
+
+---
+
+# Addendum 2 (2026-10-18, after M2) — three items found DURING M0–M2
+
+These are not in the milestone table. Two of them outrank M3.
+
+## P0-NEW-1 — COLLAPSE THE DUPLICATED EMIT PATHS. Above M3.
+
+Comparison emission, call emission and generic inference each exist TWICE:
+once in `Codegen` (the AST path) and once in the single-pass `Parser` path.
+A fix applied to one does not reach the other.
+
+This has produced three separate bug classes in one session:
+
+1. The `f64` comparison abort (`ICmp` on doubles) was fixed in `Codegen`;
+   `Parser` kept the broken version.
+2. The call-signature check (arity + argument types) was added to `Codegen`;
+   `Parser` had none, so a wrong-arity call still emitted invalid IR.
+3. Aggregate equality was lowered in `Codegen`; `Parser` had none, so enum
+   equality kept aborting.
+
+Each time the symptom looked like "the AST path is broken" or "enums are
+broken". It was neither. It was two implementations drifting.
+
+**Cost of leaving it:** every codegen fix must be applied twice and verified
+twice, and the differential gate does not catch it because the two paths are
+never both exercised on the same construct.
+
+**Why it is first:** it removes an entire category of bug. M3 adds a feature;
+this removes a source of defects that has produced four findings so far.
+
+## P0-NEW-2 — ENUM EQUALITY NEEDS PER-VARIANT PAYLOAD WIDTH
+
+Enum equality is currently REFUSED with a diagnostic. That is deliberate and
+correct for now: the alternative was silently wrong.
+
+An enum's LLVM type is `{ i8, [N x i8] }` — a tag plus a packed payload array
+sized to the WIDEST variant. Bytes past what a given variant writes hold
+whatever was on the stack, so byte-wise comparison reports two identical
+`Some2(3, 4)` values as UNEQUAL. A confidently wrong answer is worse than the
+abort it replaced.
+
+**The fix:** thread the per-variant payload width from `enumRegistry` (which
+has `variants` with `payloadTypes`) into the comparison, then compare tag plus
+exactly the bytes the variant writes. The width is NOT in the LLVM type, which
+is the entire problem. Contained and well-defined now that the crash and the
+silent-wrong-answer are both gone.
+
+## P0-NEW-3 — B1 REGRESSION CHECK: f64 ARRAYS MUST NOT BE SILENT
+
+B1 remains open: `[1.5, 2.5]` is claimed by `tryParseTensorEmit` as a float
+TENSOR, and indexing that tensor with `a[0]` reinterprets float bits through an
+i64 GEP, printing 48 with no diagnostic.
+
+Detecting it needs tensor provenance that does not exist: `inferType` never
+returns a tensor type and `TypeKind` has no `Tensor` member. Narrow fix: mark
+tensor-typed values so `emitIndexEmit` can refuse with "tensor values cannot be
+indexed with []; use flint_tensor_get(t, i)". Thorough fix: a real Tensor type,
+which needs the Rust array representation (M7).
+
+## Status of the milestone table after this addendum
+
+| Item | State |
+|---|---|
+| M0, M1 | done |
+| M2 | partially done: param matching + f64 FCmp shipped; `unifyParamType` for index/`Cast`/`StructLiteral` args NOT done |
+| **P0-NEW-1 path collapse** | **not started — outranks M3** |
+| P0-NEW-2 enum payload width | not started |
+| P0-NEW-3 tensor index check | not started |
+| M3 traits | not started |
+| M4 lambda as a value | not started |
+| M5 remove `parallel for` | not started |
+| M6 diagnostics | not started |
+| M7 `[T]` containers | deferred; needs an ABI decision first |
