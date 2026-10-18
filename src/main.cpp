@@ -4839,6 +4839,13 @@ public:
         add("flint_png_pixel", i64Ty, {i64Ty, i64Ty, i64Ty}, false);
         add("flint_png_mean_luma", f64Ty, {}, false);
         add("flint_png_error", i8PtrTy, {}, false);
+        // Brotli decode (runtime/rust/src/brotli.rs) -- decompression only, and
+        // bounded: a stream that expands past max_output fails instead of
+        // filling memory, which a .br asset must never be able to do.
+        add("flint_brotli_decompress", i64Ty, {i8PtrTy, i64Ty, i64Ty}, false);
+        add("flint_brotli_last", i8PtrTy, {}, false);
+        add("flint_brotli_len", i64Ty, {}, false);
+        add("flint_brotli_error", i8PtrTy, {}, false);
         add("flint_png_encoded", i8PtrTy, {}, false);
         // System information (runtime/rust/src/system.rs) — portable across
         // Linux, macOS and Windows; returns -1 with a reason where a platform
