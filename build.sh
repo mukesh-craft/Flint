@@ -112,6 +112,16 @@ else echo "  runtime.bc up to date (skipped)"; fi
 
 echo "=== Building Flint Python runtime ==="
 PYINC=$(python3-config --includes 2>/dev/null)
+# Dev tooling (tools/rust). Not needed to compile Flint, only to run the gates,
+# so a failure here must not stop the build.
+if command -v cargo >/dev/null 2>&1; then
+  cargo build --release --manifest-path tools/rust/Cargo.toml 2>/dev/null \
+    && echo "  flint-tool:  ./tools/rust/target/release/flint-tool" \
+    || echo "  flint-tool:  build failed (gates will fall back)"
+else
+  echo "  flint-tool:  skipped (no cargo)"
+fi
+
 if needs_rebuild pyruntime.o runtime/pyruntime.c; then
 if $CC -c $CFLAGS_RT $PYINC runtime/pyruntime.c -o pyruntime.o 2>/dev/null; then
     echo "  python runtime: ./pyruntime.o"
