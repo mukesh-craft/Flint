@@ -489,7 +489,7 @@ pub const BUILTINS: &[&str] = &[ // 477 names, generated
 
 /// Direct C-ABI entry points registered without the `flint_` prefix.
 /// Kept separate because completion should present them differently.
-pub const RAW_EXTERNALS: &[&str] = &[ // 107 names, generated
+pub const RAW_EXTERNALS: &[&str] = &[ // 109 names, generated
     "adam_add_param",
     "adam_create",
     "adam_destroy",
@@ -515,6 +515,8 @@ pub const RAW_EXTERNALS: &[&str] = &[ // 107 names, generated
     "ag_track_tensor",
     "ag_zero_grad",
     "fa_default_arena",
+    "farena_alloc",
+    "farena_destroy",
     "farena_init",
     "farena_reset",
     "farena_used",

@@ -71,15 +71,13 @@ run_case() {
 # defect that this gate deliberately does NOT yet fail on; removing an entry
 # means fixing it. Keeping them visible is better than weakening the pattern.
 #
-#   examples/ai_arch_bench.fl -- an `extern "C"` declaration for farena_init
-#     does not match the call, so LLVM's own verifier rejects the module. The
-#     real fix is the extern signature, not the parser, and it is unrelated to
-#     the hang work.
+#   (empty -- examples/ai_arch_bench.fl was listed here and is now fixed: a
+#   hand-written registration declared farena_init with zero parameters and a
+#   pointer return, disagreeing with `void farena_init(FArena*, size_t)`, and
+#   the example freed a data pointer with flint_array_free. Both are corrected;
+#   the entry stays only if it comes back.)
 known_ir_leak() {
-    case "$1" in
-        examples/ai_arch_bench.fl) return 0 ;;
-        *) return 1 ;;
-    esac
+    return 1
 }
 
 # --- 1. the corpus must compile and run -------------------------------------
