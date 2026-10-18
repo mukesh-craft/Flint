@@ -3785,3 +3785,75 @@ from section 4 plus an explicit ABI decision. Only after M0-M6 are green.
   audit, precisely because nothing complained.
 - GATE lesson: establish a green `tests/run.sh` + `tests/test_selfhost.sh`
   baseline BEFORE M0. Every milestone gate above assumes a green baseline.
+
+---
+
+# Addendum (2026-10-18, after M1) — two new findings
+
+## N1. A function that matches a PAYLOAD enum hangs the compiler. PRE-EXISTING.
+
+Found while testing M1. Confirmed on the committed baseline, so it predates
+every change in this session.
+
+```flint
+enum Tree { Leaf, Node(i64, i64) }
+
+fn sum(t: Tree) -> i64 {          // <-- a named function, not main
+    match t {
+        Tree.Leaf => 0,           // expression arms
+        Tree.Node(a, b) => a + b,
+    }
+    return -1
+}
+fn main() { print(sum(Tree.Node(3, 4))) }
+```
+
+`./flintc` never terminates; killed by `timeout -s KILL` (exit 137).
+
+**Bisected.** The trigger is the payload enum inside a function with a declared
+return type:
+
+| Case | Result |
+|---|---|
+| payload enum + match in `main` | works (`examples/enums.fl` prints `42 99`) |
+| no payload (`enum E { A, B }`) + match in a function | works |
+| payload enum + match in a function, expression arms | **HANGS** |
+| payload enum + match in a function, block arms | **HANGS** |
+
+So: **`match` on a payload enum only works inside `main`.** Any other function
+deadlocks the compiler. That is a severe limitation, not a cosmetic one — it
+means pattern matching cannot be used in real code, and it is the most likely
+reason `match` has felt unfinished.
+
+Not yet root-caused: the search did not reach the emission loop. Next step is
+to bisect the match/block-merging path in `emitStmt`'s `NodeKind::Match` arm
+(`src/main.cpp:5700` region) looking for an unbounded loop over pending merge
+blocks. Until it is fixed, no test corpus should include a payload-enum match in
+a non-`main` function, and `tests/test_generics.sh` now has an explicit
+"compiler does not hang" check with `timeout -s KILL` so a regression is
+reported instead of stalling CI.
+
+## N2. Rust placement that paid off, and one trap
+
+`runtime/rust/src/array.rs` replaced the array runtime from `runtime.c`. The
+value was not "fewer lines of C": it was that the length now travels with the
+pointer, so `flint_array_get`/`_set` can be checked at the point of memory
+access, and a negative index has no valid representation as a `usize` offset.
+
+Three defects were caught only by running the tests, not by reading the code:
+
+1. The crate's global allocator is `arena::BumpAllocator`, whose `dealloc` is a
+   **no-op**. Routing arrays through it meant every array permanently consumed
+   arena space and `flint_array_free` freed nothing. The array heap must be
+   libc's `calloc`/`free`.
+2. `match raw { null => ..., ptr => ... }` are **binding patterns**, so the
+   first arm matched every pointer and every allocation silently failed. Use
+   `if raw.is_null()`.
+3. Formatting an i64 with `i128` division pulled in a compiler_builtins member
+   carrying an undefined `rust_eh_personality`, which made **every JIT program
+   fail to load**. Any arithmetic in this crate must stay within the target's
+   native width.
+
+**Rule to keep:** in this crate, prefer `u64`/`i64` arithmetic, avoid anything
+that pulls compiler_builtins members, and never assume the global allocator is a
+heap.
