@@ -1,0 +1,39 @@
+# The embedded-CPython surface: `python { }` blocks, py_eval and py_eval_float.
+#
+# This fixture exists because the feature was marked complete in ROADMAP.md
+# while no test, example, benchmark or tutorial in the repository exercised it.
+# Writing it immediately exposed a real defect: py_eval is integer-only, so
+# Python's `/` -- which returns a float even for ints -- raised TypeError for
+# almost every arithmetic expression. py_eval_float covers that half.
+
+fn main() {
+    # --- py_eval: integer results -----------------------------------------
+    print(py_eval("2 + 3"))
+    print(py_eval("2 ** 10"))
+    print(py_eval("7 // 2"))
+    print(py_eval("sum(range(101))"))
+    # Python semantics, not Flint semantics: this is the point of the bridge.
+    print(py_eval("int('4') * 11"))
+    print(py_eval("-17 % 5"))
+
+    # --- py_eval_float: Python's `/` and float arithmetic ------------------
+    print(py_eval_float("7 / 2") == 3.5)
+    print(py_eval_float("1.5 * 4") == 6.0)
+    print(py_eval_float("2 + 3") == 5.0)
+    print(py_eval_float("1 / 0") == 0.0)
+
+    # --- python block -----------------------------------------------------
+    # The block body is Python source run for its side effects. It shares the
+    # __main__ namespace, so a value set here is visible to a later py_eval.
+    python {
+        "flint_bridge_value = 21"
+    }
+    print(py_eval("flint_bridge_value * 2"))
+
+    # --- error paths ------------------------------------------------------
+    # A CPython exception must be reported, not fatal: the bridge prints the
+    # traceback and returns 0. These lines emit stderr on purpose.
+    print(py_eval("this is not python at all") == 0)
+    print(py_eval("1 // 0") == 0)
+    print(py_eval_float("'not a number'") == 0.0)
+}
