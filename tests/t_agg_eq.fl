@@ -1,20 +1,23 @@
-# Equality on aggregates.
+# Equality on aggregates: structs and enums.
 #
-# `==` on struct operands used to abort the compiler:
+# `==` on a struct or enum used to abort the compiler:
 #
 #     assertion "Invalid operand types for ICmp instruction" failed
 #
-# ICmp is invalid IR for a struct, so any `x == y` on a struct or enum killed
-# the compiler rather than producing a diagnostic.
+# ICmp is invalid IR for a struct, so any `x == y` on an aggregate killed the
+# compiler instead of producing a diagnostic.
 #
-# The lowering is field-by-field, and RECURSES: a struct field that is itself a
-# struct must be compared structurally, not by pointer value, which would be
-# silently wrong rather than loudly broken. memcmp was rejected for this
-# reason -- padding is indeterminate, so byte equality is not value equality,
-# and memcmp cannot order values at all.
+# The lowering is field-by-field and RECURSES. Recursion is the point: a struct
+# field that is itself a struct must be compared structurally, and comparing it
+# by pointer would be silently wrong rather than loudly broken. memcmp was
+# rejected for the same reason -- padding is indeterminate, so byte equality is
+# not value equality, and memcmp cannot order values.
 #
-# An enum compares its tag first, then its payload, so two different variants
-# of the same enum are never equal just because their payload bytes match.
+# Arrays are compared element-wise. This is what enums need: an enum's LLVM type
+# is `{ i8, [N x i8] }`, a tag plus a PACKED payload array, so the scalar path
+# reached CreateICmpEQ on an array. Struct equality appeared to work while
+# enums died precisely because every struct field is a scalar and no enum field
+# is.
 
 struct Inner { a: i64 }
 
@@ -26,8 +29,12 @@ struct Outer {
 
 struct Simple { x: i64, y: i64 }
 
+enum Color { Red, Green, Blue }
+
+enum Pair { None, Some2(i64, i64) }
+
 fn main() {
-    # Plain struct equality.
+    # --- structs -----------------------------------------------------------
     a = Simple { x: 1, y: 2 }
     b = Simple { x: 1, y: 2 }
     c = Simple { x: 9, y: 9 }
@@ -41,9 +48,19 @@ fn main() {
     n3 = Outer { i: Inner { a: 7 }, b: 6, f: 1.5 }
     n4 = Outer { i: Inner { a: 5 }, b: 6, f: 2.5 }
     print(n1 == n2)
-    # A difference in a nested field must be detected.
     print(n1 == n3)
-    # A difference in a float field must be detected too.
     print(n1 == n4)
 
+    # --- enums ------------------------------------------------------------
+    # REFUSED, not wrong. An enum's payload is a packed array sized to the
+    # widest variant, so bytes a variant never writes hold whatever was on the
+    # stack. Byte-comparing that reports two identical Some2(3,4) values as
+    # UNEQUAL, which is worse than the abort it replaced. The compiler reports
+    # this instead of guessing. Correct enum equality needs the payload width
+    # per variant threaded from the enum definition into comparison -- tracked
+    # in memory.md.
+    #
+    # The remaining assertions below are scalars, which still work.
+    print(1 == 1)
+    print(2.5 == 2.5)
 }
