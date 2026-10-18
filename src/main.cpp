@@ -4430,6 +4430,31 @@ struct ArgSlot {
     bool any = false;
 };
 
+static std::string llvmTypeToString(llvm::Type* t) {
+    if (!t) return "<none>";
+    if (t->isDoubleTy()) return "f64";
+    if (t->isIntegerTy(1)) return "bool";
+    if (t->isIntegerTy(8)) return "i8";
+    if (t->isIntegerTy(64)) return "i64";
+    if (t->isPointerTy()) return "pointer";
+    if (t->isArrayTy()) return "array";
+    if (t->isStructTy()) {
+        auto* st = llvm::cast<llvm::StructType>(t);
+        if (st->hasName()) return st->getName().str();
+        if (st->getNumElements() == 2 && st->getElementType(0)->isPointerTy() &&
+            st->getElementType(1)->isIntegerTy(64)) {
+            return "slice";
+        }
+        return "struct";
+    }
+    if (t->isVoidTy()) return "void";
+    std::string s;
+    llvm::raw_string_ostream os(s);
+    t->print(os);
+    os.flush();
+    return s;
+}
+
 class Codegen {
 public:
     // --target <triple>: non-host modules are EMIT-only outputs (.ll text or
@@ -7013,6 +7038,17 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             llvm::Value* elemPtr = builder->CreateGEP(arrDataType, dataAlloca, {llvm::ConstantInt::get(i64Ty, 0), idxVal}, "arr_elem");
             llvm::Value* val = emitExpr(arr->elements[i].get());
             if (!val) return nullptr;
+            // Same guard as Parser::emitArrayLiteralEmit: element types are
+            // erased at the LLVM boundary, so a non-i64 element would be
+            // reinterpreted as bits and read back as a wrong number with no
+            // error. Both emit paths must agree, or the same program compiles
+            // under one and fails under the other.
+            if (val->getType() != i64Ty) {
+                return codegenError("array literals must hold i64 values, but element " +
+                                    std::to_string(i + 1) + " is " +
+                                    llvmTypeToString(val->getType()) +
+                                    " (arrays of other types are not supported yet)");
+            }
             builder->CreateStore(val, elemPtr);
         }
 
@@ -7388,20 +7424,43 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         }
     }
 
+    // Mangles a generic instantiation into a unique symbol name.
+    //
+    // This MUST be injective: two different type arguments that produce the
+    // same string would collide in `genericCache`, so one instantiation would
+    // silently be served another one's body. The previous version had no case
+    // for F64, Ptr, Void or TypeParam, so all four fell through to `default:
+    // s += "any"` -- four distinct types sharing one cache key.
+    //
+    // Every TypeKind gets an explicit, distinct case. If a new kind is ever
+    // added, the default below stays a *unique* marker rather than a shared
+    // one, so an unhandled kind degrades into a missed cache hit (a
+    // performance cost) instead of a wrong answer.
     std::string mangle(const std::string& fnName, const std::vector<Type>& typeArgs) {
         std::string s = fnName;
         for (auto& ta : typeArgs) {
             s += ".";
             switch (ta.kind) {
                 case TypeKind::I64: s += "i64"; break;
+                case TypeKind::F64: s += "f64"; break;
                 case TypeKind::Str: s += "str"; break;
                 case TypeKind::Bool: s += "bool"; break;
+                case TypeKind::Ptr: s += "ptr"; break;
+                case TypeKind::Void: s += "void"; break;
+                case TypeKind::TypeParam: s += "tp"; break;
                 case TypeKind::Ref: s += "ref"; break;
                 case TypeKind::Array: s += "arr"; break;
                 case TypeKind::Map: s += "map"; break;
-                case TypeKind::Struct: s += ta.structName; break;
-                case TypeKind::Enum: s += ta.structName; break;
-                default: s += "any"; break;
+                case TypeKind::Struct:
+                    // Struct and enum names are user-supplied, so they must be
+                    // distinguishable from the fixed tags above: a struct named
+                    // "i64" would otherwise collide with an i64 instantiation.
+                    s += "s:" + (ta.structName.empty() ? std::string("?") : ta.structName);
+                    break;
+                case TypeKind::Enum:
+                    s += "e:" + (ta.structName.empty() ? std::string("?") : ta.structName);
+                    break;
+                default: s += "unknown_kind"; break;
             }
         }
         return s;
@@ -7543,8 +7602,16 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                         // Try to infer from the argument expression
                         if (ai < call->args.size()) {
                             switch (call->args[ai]->kind) {
-                                case NodeKind::Number:
-                                    typeArgs.push_back(Type::i64()); found = true; break;
+                                case NodeKind::Number: {
+                                    // A float literal must infer f64, or the
+                                    // instantiation is built with i64
+                                    // parameters and the call fails deep
+                                    // inside LLVM with raw IR on stderr.
+                                    auto* num = static_cast<NumberExprAST*>(call->args[ai].get());
+                                    typeArgs.push_back(num->isFloat ? Type::f64() : Type::i64());
+                                    found = true;
+                                    break;
+                                }
                                 case NodeKind::String:
                                     typeArgs.push_back(Type::str()); found = true; break;
                                 case NodeKind::Variable: {
@@ -7595,6 +7662,27 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                             return codegenError("cannot move while borrowed");
                         }
                         srcSym->moved = true;
+                    }
+                }
+            }
+            // A mismatch here means inference picked the wrong instantiation.
+            // Without this guard LLVM rejects the module and the user sees raw
+            // IR (`call i64 @first.i64(double 2.5)`) on stderr, which tells them
+            // nothing about their program. Checking first turns the whole class
+            // of generic-misfit errors into a Flint diagnostic.
+            if (llvm::FunctionType* fty = f->getFunctionType()) {
+                if (fty->getNumParams() != args.size()) {
+                    return codegenError("'" + call->callee + "' expects " +
+                        std::to_string(fty->getNumParams()) + " argument(s), got " +
+                        std::to_string(args.size()));
+                }
+                for (size_t i = 0; i < args.size(); i++) {
+                    if (args[i]->getType() != fty->getParamType(i)) {
+                        return codegenError("argument " + std::to_string(i + 1) +
+                            " of '" + call->callee + "' has type " +
+                            llvmTypeToString(args[i]->getType()) +
+                            ", but this instantiation expects " +
+                            llvmTypeToString(fty->getParamType(i)));
                     }
                 }
             }
@@ -8825,6 +8913,23 @@ llvm::Value* Parser::emitFieldAccessEmit(llvm::Value* base, const std::string& f
 
 llvm::Value* Parser::emitArrayLiteralEmit(const std::vector<llvm::Value*>& elems) {
     size_t count = elems.size();
+    // Array element types are erased at the LLVM boundary: every array is a
+    // {ptr, i64} slice and every element access GEPs with i64Ty. So a non-i64
+    // element cannot be stored here -- it would be reinterpreted as bits and
+    // read back as a wrong number with no error. `[1.5, 2.5]` used to print 48.
+    //
+    // Rejecting loudly is strictly better than emitting a plausible wrong
+    // answer. Widening arrays to f64 is a separate, deliberately-gated
+    // change; until then the language refuses instead of lying.
+    for (size_t i = 0; i < count; i++) {
+        if (elems[i] && elems[i]->getType() != cg->i64Ty) {
+            parseError("array literals must hold i64 values, but element " +
+                       std::to_string(i + 1) + " is " +
+                       llvmTypeToString(elems[i]->getType()) +
+                       " (arrays of other types are not supported yet)");
+            return nullptr;
+        }
+    }
     auto* arrDataType = llvm::ArrayType::get(cg->i64Ty, count);
     auto* dataAlloca = cg->createEntryAlloca(arrDataType, "arr_data");
     for (size_t i = 0; i < count; i++) {
@@ -9007,6 +9112,12 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
                     ++eit;
                 }
                 if (argTy == cg->i64Ty) cg->typeSubstMap[genFn->typeParams[i]] = Type::i64();
+                // f64 was missing here, so a generic called with a double was
+                // instantiated as i64 and the call failed with an LLVM type
+                // mismatch instead of a Flint diagnostic.
+                if (argTy == llvm::Type::getDoubleTy(*cg->ctx)) {
+                    cg->typeSubstMap[genFn->typeParams[i]] = Type::f64();
+                }
                 if (argTy == cg->i8PtrTy) cg->typeSubstMap[genFn->typeParams[i]] = Type::str();
             }
         }

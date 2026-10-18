@@ -1,0 +1,47 @@
+# Generic instantiation and array element types.
+#
+# This file guards two defects that used to produce wrong behaviour with no
+# error, which is the worst kind of compiler bug:
+#
+#   1. mangle() had no TypeKind::F64 case, so F64, Ptr, Void and TypeParam all
+#      fell through to the same string. Two different instantiations shared one
+#      genericCache entry, so one silently received another's body.
+#   2. A float literal passed to a generic was inferred as i64, so the call was
+#      built against an i64 signature and LLVM rejected the module -- the user
+#      saw raw IR (`call i64 @first.i64(double 2.5)`) on stderr instead of a
+#      diagnostic about their program.
+#   3. Array literals are i64-only (array element types are erased at the LLVM
+#      boundary), so a non-i64 element used to be reinterpreted as bits and read
+#      back as a wrong number with no diagnostic. The compiler now refuses.
+
+fn first<T>(a: T) -> T {
+    return a
+}
+
+fn add2<T>(a: T) -> T {
+    return a + a
+}
+
+struct P { x: i64 }
+
+fn getx<T>(p: T) -> i64 {
+    return p.x
+}
+
+fn main() {
+    # f64 instantiation: used to emit raw LLVM IR.
+    print(first(2.5) == 2.5)
+    # i64 still works, including arithmetic on the instantiated type.
+    print(add2(21) == 42)
+    # str instantiation.
+    print(first("hello") == "hello")
+    # A struct in parameter position resolves the type parameter correctly.
+    q = P { x: 3 }
+    print(getx(q) == 3)
+    # i64 arrays are unaffected by the element-type guard.
+    b = [1, 2, 3]
+    print(b[0] == 1)
+    print(b[2] == 3)
+    # Two different instantiations must not share a mangled name.
+    print(first(1) != first("x"))
+}
