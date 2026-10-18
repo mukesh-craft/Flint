@@ -30,6 +30,8 @@ aes = { version = "0.8", default-features = false }
 ctr = { version = "0.9", default-features = false }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
 cipher = { version = "0.4", default-features = false }
+# zstd decode: pure Rust, no_std-clean with the arena allocator.
+ruzstd = { version = "0.7", default-features = false }
 # NOTE: sqlite3 is linked (the Rust module wraps it); curl is NOT a dependency
 # here because the C net module owns HTTPS -- two clients with the same names
 # would collide at link time.
