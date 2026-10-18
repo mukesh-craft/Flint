@@ -4799,6 +4799,47 @@ public:
         // ──────────────────────────────────────────────────────
         auto ptrTy3 = llvm::PointerType::get(*ctx, 0);
         // Vec
+        // Encoders and utilities (runtime/rust/src/encoding.rs).
+        add("flint_crc32c", i64Ty, {i8PtrTy, i64Ty}, false);
+        add("flint_crc32c_hex", i64Ty, {i8PtrTy, i64Ty}, false);
+        add("flint_base32_encode", i64Ty, {i8PtrTy, i64Ty}, false);
+        add("flint_base58_encode", i64Ty, {i8PtrTy, i64Ty}, false);
+        add("flint_url_encode", i64Ty, {i8PtrTy, i64Ty}, false);
+        add("flint_url_decode", i64Ty, {i8PtrTy, i64Ty}, false);
+        add("flint_uuid_v4", i64Ty, {}, false);
+        add("flint_uuid_v7", i64Ty, {}, false);
+        add("flint_enc_last", i8PtrTy, {}, false);
+        add("flint_enc_error", i8PtrTy, {}, false);
+        // Password hashing (runtime/rust/src/argon2.rs) — Argon2id with
+        // OWASP's 19 MiB / 2-iteration defaults. Returns a PHC string, which
+        // records the parameters so the cost can be raised later without
+        // invalidating stored hashes.
+        add("flint_argon2_hash", i64Ty, {i8PtrTy}, false);
+        add("flint_argon2_hash_params", i64Ty, {i8PtrTy, i64Ty, i64Ty, i64Ty}, false);
+        add("flint_argon2_verify", i64Ty, {i8PtrTy, i8PtrTy}, false);
+        add("flint_argon2_last", i8PtrTy, {}, false);
+        add("flint_argon2_error", i8PtrTy, {}, false);
+        add("flint_argon2_default_memory_kib", i64Ty, {}, false);
+        // zstd (runtime/rust/src/compress.rs). Takes (pointer, length) so
+        // binary payloads with embedded NULs survive.
+        add("flint_zstd_decompress", i64Ty, {i8PtrTy, i64Ty}, false);
+        add("flint_zstd_last", i8PtrTy, {}, false);
+        add("flint_zstd_len", i64Ty, {}, false);
+        add("flint_zstd_capacity", i64Ty, {}, false);
+        add("flint_zstd_error", i8PtrTy, {}, false);
+        // System information (runtime/rust/src/system.rs) — portable across
+        // Linux, macOS and Windows; returns -1 with a reason where a platform
+        // refuses (e.g. /proc is restricted on modern Android).
+        add("flint_system_platform", i64Ty, {}, false);
+        add("flint_system_supported", i64Ty, {}, false);
+        add("flint_system_cpu_count", i64Ty, {}, false);
+        add("flint_system_memory_total", i64Ty, {}, false);
+        add("flint_system_memory_free", i64Ty, {}, false);
+        add("flint_system_uptime", i64Ty, {}, false);
+        add("flint_system_os_version", i64Ty, {}, false);
+        add("flint_system_temp_dir", i64Ty, {}, false);
+        add("flint_system_last", i8PtrTy, {}, false);
+        add("flint_system_error", i8PtrTy, {}, false);
         // SQLite (runtime/rust/src/sqlite.rs — a Rust wrapper over the system
         // libsqlite3). Handles are >= 1; query results live in a module-owned
         // arena and stay valid until the next query on any connection.

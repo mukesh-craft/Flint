@@ -122,20 +122,12 @@ pub extern "C" fn flint_crc32c_hex(data: *const u8, data_len: i64) -> i64 {
     8
 }
 
-/// Lowercase hex encoding of a byte range. Returns the hex length, or -1.
-#[no_mangle]
-pub extern "C" fn flint_hex_encode(data: *const u8, data_len: i64) -> i64 {
-    if data.is_null() || data_len < 0 {
-        set_error("hex: invalid arguments");
-        return -1;
-    }
-    let slice = unsafe { core::slice::from_raw_parts(data, data_len as usize) };
-    let text = hex_lower(slice);
-    if !write_out(text.as_bytes()) {
-        return -1;
-    }
-    text.len() as i64
-}
+// NOTE: there is deliberately NO `flint_hex_encode` export here. The C serial
+// module (runtime/flint_serial.c) already defines that symbol, and every
+// function in this module lives in ONE codegen unit -- so exporting it again
+// puts a second definition in flint_std.o and the JIT refuses to load the
+// object ("duplicate definition of symbol flint_hex_encode"). Flint programs
+// use the C one, which has the same behaviour.
 
 /// RFC 4648 base32 with padding. Returns the encoded length, or -1.
 #[no_mangle]
@@ -313,6 +305,13 @@ fn seed_rng() {
     }
 }
 
+/// splitmix64, exposed so other modules can derive non-secret material (a salt
+/// fallback) without duplicating a second PRNG.
+#[no_mangle]
+pub extern "C" fn next_random_public() -> u64 {
+    next_random()
+}
+
 /// splitmix64: fast, well-distributed, and tiny enough to ship.
 fn next_random() -> u64 {
     seed_rng();
@@ -440,8 +439,10 @@ mod tests {
 
     #[test]
     fn hex_encoding_round_trips_lowercase() {
-        assert_eq!(encode_with(flint_hex_encode, &[0x00, 0x0f, 0xff, 0xa5]), "000fffa5");
-        assert_eq!(encode_with(flint_hex_encode, b"abc"), "616263");
+        // hex_lower is the shared helper the exported encoders use; the
+        // user-facing flint_hex_encode lives in the C serial module.
+        assert_eq!(hex_lower(&[0x00, 0x0f, 0xff, 0xa5]), "000fffa5");
+        assert_eq!(hex_lower(b"abc"), "616263");
     }
 
     #[test]
