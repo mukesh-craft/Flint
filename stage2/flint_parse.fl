@@ -1104,7 +1104,17 @@ fn p_binary(minp: i64, lhs: str) -> str {
             go = 0
         } else {
             opk = p_kind()
-            op = p_op_text(opk)
+            mut op: str = p_op_text(opk)
+            # and/or have two spellings (`or` lexes to &&/|| kinds, but the
+            # token contract keeps the source text). The pretty printer must
+            # preserve the spelling the source used or a round-trip re-lex
+            # sees a different token value and the fixpoint breaks.
+            if opk == 88 && flint_str_compare(p_text(), "or") == 0 {
+                op = "or"
+            }
+            if opk == 60 && flint_str_compare(p_text(), "and") == 0 {
+                op = "and"
+            }
             mut pipedir: i64 = 0
             if opk == 87 {
                 # `|` vs `|>`: kept distinct for the fixpoint printer.
@@ -1348,12 +1358,28 @@ fn p_match_str() -> str {
                         p_next()
                         mut bind: str = "-"
                         if p_accept(50) == 1 {
+                            # Payload bindings: `Enum.Var(n1, n2, ...)`.
+                            # Space-joined in the IR; pp re-renders the list.
                             if p_kind() == 1 {
                                 bind = p_text()
                                 p_next()
                             } else {
                                 p_note_err()
                                 return ""
+                            }
+                            mut blist: i64 = 1
+                            while blist == 1 {
+                                if p_accept(57) == 1 {
+                                    if p_kind() == 1 {
+                                        bind = bind + " " + p_text()
+                                        p_next()
+                                    } else {
+                                        p_note_err()
+                                        return ""
+                                    }
+                                } else {
+                                    blist = 0
+                                }
                             }
                             if p_accept(51) == 0 {
                                 p_note_err()
@@ -3776,7 +3802,25 @@ fn pp_match_pat(src: str) -> str {
             if bind == "-" {
                 en + "." + va
             } else {
-                en + "." + va + "(" + bind + ")"
+                # One or more payload bindings, space-separated in the IR:
+                # stop at the arm node's closing parens and render the list
+                # back to Enum.Var(n1, n2, ...).
+                sb = flint_sb_new()
+                flint_sb_append(sb, en + "." + va + "(" + bind)
+                mut go: i64 = 1
+                while go == 1 {
+                    pp_skip(src)
+                    if pp_peek(src) == 41 {
+                        go = 0
+                    } else {
+                        extra = pp_word(src)
+                        flint_sb_append(sb, ", " + extra)
+                    }
+                }
+                flint_sb_append(sb, ")")
+                r = flint_sb_build(sb)
+                flint_sb_free(sb)
+                r
             }
         }
     }

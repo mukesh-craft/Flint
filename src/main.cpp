@@ -1130,6 +1130,16 @@ struct StructDef {
     std::vector<StructFieldDef> fields;
 };
 
+struct TraitMethodDef {
+    std::string name;
+    size_t arity = 0; // total parameter count; the receiver, if any, is param 0
+};
+
+struct TraitDef {
+    std::string name;
+    std::vector<TraitMethodDef> methods;
+};
+
 struct EnumVariantDef {
     std::string name;
     std::vector<Type> payloadTypes;
@@ -2061,6 +2071,7 @@ struct ProgramAST {
     std::vector<std::unique_ptr<FunctionAST>> functions;
     std::vector<StructDef> structs;
     std::vector<EnumDef> enums;
+    std::vector<TraitDef> traits;
     std::vector<std::string> imports;
     std::vector<std::unique_ptr<VarDeclAST>> globals;
     std::vector<std::unique_ptr<ExprAST>> topStmts;
@@ -2269,11 +2280,78 @@ public:
         }
     }
 
+    // Trait declaration (M3/B5): `trait Name { fn m(p: T) -> Ret ... }`.
+    // A trait carries SIGNATURES ONLY. There is deliberately no impl syntax:
+    // implementations are ordinary functions of the same name whose arity
+    // matches, resolved at the method-call site. No body is stored, so this
+    // parses in skipBodies/interface mode too.
+    void parseTraitDef(ProgramAST& prog) {
+        advance(); // 'trait' (identifier, contextual)
+        Token nameTok = consume(TokenType::IDENTIFIER, "expected trait name after 'trait'");
+        TraitDef td;
+        td.name = nameTok.lexeme;
+        if (traitRegistry.count(td.name)) {
+            parseError("trait '" + td.name + "' is already declared");
+            return;
+        }
+        consume(TokenType::LBRACE, "expected '{' after trait name");
+        match(TokenType::NEWLINE);
+        while (!isAtEnd() && !check(TokenType::RBRACE)) {
+            bool isFn = check(TokenType::KW_FN) || check(TokenType::KW_DEF);
+            if (!isFn) {
+                parseError("expected 'fn' or 'def' in trait '" + td.name + "' body");
+                return;
+            }
+            advance();
+            Token mTok = consume(TokenType::IDENTIFIER, "expected method name");
+            TraitMethodDef md;
+            md.name = mTok.lexeme;
+            if (match(TokenType::LT)) {
+                parseError("generic trait methods are not supported: declare the "
+                           "method without type parameters");
+                return;
+            }
+            consume(TokenType::LPAREN, "expected '(' after method name");
+            if (check(TokenType::RPAREN)) {
+                advance();
+            } else {
+                do {
+                    consume(TokenType::IDENTIFIER, "expected parameter name in trait method");
+                    if (match(TokenType::COLON)) parseType(); // signatures only
+                    md.arity++;
+                } while (match(TokenType::COMMA));
+                consume(TokenType::RPAREN, "expected ')' after trait method parameters");
+            }
+            if (match(TokenType::ARROW)) parseType();
+            for (auto& m : td.methods)
+                if (m.name == md.name) {
+                    parseError("trait method '" + md.name + "' is declared twice in '" + td.name + "'");
+                    return;
+                }
+            td.methods.push_back(md);
+            match(TokenType::NEWLINE);
+            match(TokenType::SEMICOLON);
+        }
+        consume(TokenType::RBRACE, "expected '}' to close trait body");
+        match(TokenType::NEWLINE);
+        traitRegistry[td.name] = td;
+        prog.traits.push_back(td);
+    }
+
     std::unique_ptr<ProgramAST> parseProgram() {
         auto prog = std::make_unique<ProgramAST>();
         while (!isAtEnd()) {
             if (check(TokenType::KW_EXTERN)) {
                 parseExternBlock(*prog);
+            } else if (check(TokenType::IDENTIFIER) && peek().lexeme == "trait"
+                       && peek(1).type == TokenType::IDENTIFIER
+                       && peek(2).type == TokenType::LBRACE) {
+                // `trait`, like `as`, is DETECTED CONTEXTUALLY, never by a
+                // lexer keyword. The trigger requires the full declaration
+                // shape (trait Name {), so a variable named `trait` at top
+                // level still parses as a variable, and keywordless
+                // `trait(x) {}` functions stay legal.
+                parseTraitDef(*prog);
             } else if (check(TokenType::KW_FN) || check(TokenType::KW_DEF)) {
                 auto fn = parseFunction();
                 if (fn) {
@@ -2552,6 +2630,7 @@ private:
     std::unordered_set<std::string> globalVarNames;
     std::unordered_map<std::string, Type> varTypeMap;
     std::unordered_map<std::string, StructDef> structRegistry;
+    std::unordered_map<std::string, TraitDef> traitRegistry;
     std::unordered_map<std::string, EnumDef> enumRegistry;
     std::vector<std::string> parserTypeParams;
     // A2b: worker functions desugared from `parallel for` (parseParallelForStmt).
@@ -4620,7 +4699,9 @@ public:
         // Populate functionDefs for default param lookup
         for (auto& fn : prog.functions) {
             functionDefs[fn->name] = fn.get();
+            functionOverloads[fn->name].push_back(fn.get());
         }
+        for (auto& td : prog.traits) traitRegistry[td.name] = td;
         return true;
     }
 
@@ -4700,6 +4781,117 @@ public:
         llvm::IRBuilder<> tmp(&currentFunc->getEntryBlock(), currentFunc->getEntryBlock().begin());
         return tmp.CreateAlloca(ty, nullptr, name);
     }
+    std::string ufcsTypeName(const Type& t) {
+        if (t.kind == TypeKind::Struct || t.kind == TypeKind::Enum)
+            return t.structName;
+        switch (t.kind) {
+            case TypeKind::I64: return "i64";
+            case TypeKind::F64: return "f64";
+            case TypeKind::Str: return "str";
+            case TypeKind::Bool: return "bool";
+            case TypeKind::Map: return "map";
+            case TypeKind::Array: return "array";
+            case TypeKind::Ptr: return "ptr";
+            default: return "?";
+        }
+    }
+
+    // Receiver type for method resolution in the AST path: variables (locals
+    // + globals), non-generic call results, and struct field accesses.
+    // Everything else is resolved by arity alone.
+    bool ufcsReceiverType(ExprAST* e, Type& out) {
+        if (!e) return false;
+        if (e->kind == NodeKind::Variable) {
+            auto* v = static_cast<VariableExprAST*>(e);
+            if (auto* sym = symTable.lookup(v->name)) { out = sym->type; return true; }
+            auto git = globalSymTable.find(v->name);
+            if (git != globalSymTable.end()) { out = git->second.type; return true; }
+            return false;
+        }
+        if (e->kind == NodeKind::Call) {
+            auto* c = static_cast<CallExprAST*>(e);
+            auto fit = functionDefs.find(c->callee);
+            if (fit != functionDefs.end()) {
+                out = resolveType(fit->second->returnType);
+                return out.kind != TypeKind::Void;
+            }
+        }
+        if (e->kind == NodeKind::Number) {
+            // Literals are scalar-typed on both paths, so method resolution
+            // on them cannot diverge between the AST and emit paths.
+            auto* n = static_cast<NumberExprAST*>(e);
+            out = n->isFloat && !n->isInt ? Type::f64() : Type::i64();
+            return true;
+        }
+        if (e->kind == NodeKind::FieldAccess) {
+            // `a.b` — walk the container: the var/call result type must be a
+            // struct/enum with a field of that name. Without this, every
+            // `bx.inner.f()` receiver had an unknown type and name+arity
+            // alone could pick the wrong overload.
+            auto* fa = static_cast<FieldAccessAST*>(e);
+            if (!fa || !fa->base) return false;
+            Type base;
+            if (!ufcsReceiverType(fa->base.get(), base)) return false;
+            if (base.kind != TypeKind::Struct && base.kind != TypeKind::Enum) return false;
+            auto sit = structRegistry.find(base.structName);
+            if (sit == structRegistry.end()) return false;
+            for (auto& fld : sit->second.fields)
+                if (fld.name == fa->fieldName) { out = resolveType(fld.type); return true; }
+            return false;
+        }
+        return false;
+    }
+
+    static bool anyTraitDeclares(const std::unordered_map<std::string, TraitDef>& reg,
+                                 const std::string& mName) {
+        for (auto& td : reg) {
+            const TraitDef& t = td.second;
+            for (auto& md : t.methods)
+                if (md.name == mName) return true;
+        }
+        return false;
+    }
+
+    // M3/B5 dispatch: name+arity resolution for `x.f(args...)` (the receiver
+    // is args[0]). Impls are ordinary functions. Exactly one match calls;
+    // zero says which trait was unsatisfied; several matches name the types.
+    // Caller gets the FunctionAST* or null + a diag string on null.
+    FunctionAST* resolveUfcsImpl(const std::string& mName, size_t arity,
+                                 const Type& recv, bool recvKnown,
+                                 std::string& diag) {
+        auto oit = functionOverloads.find(mName);
+        bool traitDeclared = anyTraitDeclares(traitRegistry, mName);
+        if (oit == functionOverloads.end()) {
+            if (traitDeclared)
+                diag = "no type in scope implements '" + mName + "'";
+            else
+                diag = "unknown method '" + mName + "' (receiver type unknown or method missing)";
+            return nullptr;
+        }
+        std::vector<FunctionAST*> matches;
+        for (auto* f : oit->second) {
+            if (f->params.size() != arity) continue;
+            if (recvKnown && arity > 0) {
+                Type pt = resolveType(f->params[0].second);
+                if (!(pt == recv)) continue;
+            }
+            matches.push_back(f);
+        }
+        if (matches.size() == 1) { diag.clear(); return matches[0]; }
+        if (matches.size() > 1) {
+            diag = "ambiguous: '" + mName + "' matches multiple implementations (candidates: ";
+            for (size_t i = 0; i < matches.size(); i++)
+                diag += (i ? ", " : "") + ufcsTypeName(resolveType(matches[i]->params[0].second));
+            diag += ")";
+            return nullptr;
+        }
+        if (traitDeclared)
+            diag = "no type in scope implements '" + mName + "'";
+        else
+            diag = "unknown method '" + mName + "' (receiver type unknown or method missing)";
+        return nullptr;
+    }
+
     Type resolveType(Type t) {
         if (t.kind == TypeKind::TypeParam) {
             auto it = typeSubstMap.find(t.structName);
@@ -4735,6 +4927,10 @@ public:
 
     std::unordered_map<std::string, llvm::Function*> functionMap;
     std::unordered_set<std::string> externFunctions;
+    // Trait declarations (M3/B5) and every same-name function definition
+    // (needed for name+arity method resolution).
+    std::unordered_map<std::string, TraitDef> traitRegistry;
+    std::unordered_map<std::string, std::vector<FunctionAST*>> functionOverloads;
     std::unordered_map<std::string, StructDef> structRegistry;
     std::unordered_map<std::string, EnumDef> enumRegistry;
     std::unordered_map<std::string, FunctionAST*> genericFunctions;
@@ -8201,11 +8397,20 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         auto it = functionMap.find(call->callee);
         if (it == functionMap.end()) {
             // Leftover fa_ method call: the receiver type was unknown at
-            // parse time (or the method doesn't exist). Say so clearly.
-            if (call->callee.rfind("fa_", 0) == 0)
-                return codegenError(std::string("unknown method '") +
-                    call->callee.substr(3) + "' (receiver type unknown or method missing)");
-            return codegenError(std::string("undefined function '") + call->callee + "'");
+            // parse time (or the method doesn't exist). Before saying so,
+            // try M3 name+arity dispatch: a method call may resolve to an
+            // ordinary function taking the receiver as its first argument.
+            if (call->callee.rfind("fa_", 0) == 0) {
+                Type recv; bool recvKnown = ufcsReceiverType(call->args[0].get(), recv);
+                std::string diag;
+                FunctionAST* impl = resolveUfcsImpl(call->callee.substr(3),
+                    call->args.size(), recv, recvKnown, diag);
+                if (!impl) return codegenError(diag);
+                it = functionMap.find(impl->name);
+                if (it == functionMap.end())
+                    return codegenError("no type in scope implements '" + impl->name + "'");
+            } else
+                return codegenError(std::string("undefined function '") + call->callee + "'");
         }
         bool isExtern = externFunctions.count(call->callee) > 0;
         std::vector<llvm::Value*> args;
@@ -9423,6 +9628,31 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
             if (!spec) return nullptr;
             return cg->builder->CreateCall(spec, args, callee);
         }
+    }
+    // M3 dispatch: method syntax reaches here as fa_<name>; try to resolve
+    // it as a plain function taking the receiver as its first argument, the
+    // way the enum-qualification rewrite works. Only the arity and, when the
+    // receiver's LLVM type is a named struct/enum or a known scalar, the
+    // first parameter type are taken into account.
+    if (callee.rfind("fa_", 0) == 0 && !args.empty()) {
+        std::string mName = callee.substr(3);
+        Type recv; bool recvKnown = false;
+        llvm::Type* lt = args[0]->getType();
+        if (auto* st = llvm::dyn_cast<llvm::StructType>(lt)) {
+            std::string n = st->getStructName().str();
+            if (cg->structRegistry.count(n)) { recv = Type::struct_(n); recvKnown = true; }
+            else if (cg->enumRegistry.count(n)) { recv = Type::enum_(n); recvKnown = true; }
+        } else if (lt == cg->i64Ty) { recv = Type::i64(); recvKnown = true; }
+        else if (lt->isDoubleTy()) { recv = Type::f64(); recvKnown = true; }
+        std::string diag;
+        FunctionAST* impl = cg->resolveUfcsImpl(mName, args.size(), recv, recvKnown, diag);
+        if (!impl) { parseError(diag); return nullptr; }
+        auto fit = cg->functionMap.find(impl->name);
+        if (fit == cg->functionMap.end()) {
+            parseError("no type in scope implements '" + impl->name + "'");
+            return nullptr;
+        }
+        return cg->builder->CreateCall(fit->second, args, impl->name);
     }
     parseError("call to unknown function '" + callee + "'");
     return nullptr;
