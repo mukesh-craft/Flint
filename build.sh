@@ -197,7 +197,11 @@ if command -v cargo >/dev/null 2>&1; then
     # compiler_builtins member (hundreds of float/atomic intrinsics the JIT
     # cannot resolve), which is the difference between a 12 KB object and a
     # 2 MB one that fails to load.
+    # EVERY exported Rust symbol must appear here: `-u` is what makes `ld`
+    # pull the archive member that defines it, so a missing name means the
+    # builtin exists in the source and is missing from the binary.
     FLINT_RUST_Syms="-u flint_csv_parse -u flint_csv_rows -u flint_csv_cols -u flint_csv_get -u flint_csv_free -u flint_csv_error -u flint_csv_arena_bytes"
+    FLINT_RUST_Syms="$FLINT_RUST_Syms -u flint_sha256_hex -u flint_hmac_sha256_hex -u flint_aes256_ctr_crypt_hex -u flint_aes256_gcm_encrypt_hex -u flint_aes256_gcm_decrypt_hex -u flint_crypto_error -u flint_crypto_out_bytes -u flint_crypto_last"
     if cargo build --release --manifest-path runtime/rust/Cargo.toml >/dev/null 2>&1 \
        && ld -r $FLINT_RUST_Syms runtime/rust/target/release/libflint_std.a -o flint_std.o; then
         echo "  flint_std:    ./flint_std.o (Rust stdlib, both paths)"

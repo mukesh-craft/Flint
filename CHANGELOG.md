@@ -15,6 +15,30 @@ All notable changes to Flint are documented here. Format follows
   server, and the README gap list no longer calls the server untested.
 
 ### Added
+- **`runtime/rust/src/crypto.rs`: SHA-256, HMAC-SHA256, AES-256-CTR and
+  AES-256-GCM, in pure Rust.** Built on the RustCrypto primitives (`sha2`,
+  `hmac`, `aes`, `aes-gcm`, `ctr`) with `default-features = false`, so the
+  module stays `no_std` and keeps the properties the CSV module established: no
+  `std` symbols in the shipped object, loadable by the JIT, and able to coexist
+  with a user's own Rust library in one binary. Nothing hand-rolled: HMAC, the
+  AES modes and the GHASH tag come from audited implementations, because
+  re-implementing them is exactly the cleverness that produces silent,
+  catastrophic bugs.
+  Flint surface: `flint_sha256_hex`, `flint_hmac_sha256_hex`,
+  `flint_aes256_ctr_crypt_hex`, `flint_aes256_gcm_encrypt_hex`,
+  `flint_aes256_gcm_decrypt_hex`, `flint_crypto_last`, `flint_crypto_error`,
+  `flint_crypto_out_bytes`.
+  Correctness is pinned to independent references, not to itself: the SHA-256
+  vectors are FIPS 180-4, the HMAC vector is RFC 4231 case 2, and the AES-CTR
+  expectation was generated with **OpenSSL 3.6.3** on this device rather than
+  from this code. GCM authentication failure (wrong key, nonce, AAD or tag)
+  returns -1 with a message instead of garbage output.
+  Two API constraints are documented because they bite: results live in one
+  shared buffer that ANY next crypto call overwrites (copy before the second
+  use — the gate's own fixture hit this), and key/nonce sizes are validated, so
+  a 2-byte key fails loudly instead of silently using the wrong bytes.
+  11 crate tests, 26 crate tests in total, and the stdlib gate now exercises
+  crypto on BOTH the JIT and AOT paths.
 - **`runtime/rust/`: the first Rust standard-library module (CSV), working
   through both execution paths.** Flint's stdlib now has a Rust module and the
   pipeline it needs: `cargo build` -> staticlib -> `ld -r` into `flint_std.o` ->

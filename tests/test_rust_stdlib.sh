@@ -63,9 +63,19 @@ expect_all() { # $1=label $2=output — every marker must be present
 
 # --- JIT path ---------------------------------------------------------------
 if out="$(timeout -s KILL 300 "$FLINTC" tests/t_csv.fl 2>&1)"; then
-    expect_all "JIT: parse, rows, cols, quoted field, error path" "$out" \
+    expect_all "JIT: csv parse, rows, cols, quoted field, error path" "$out" \
         "3" "widget, large" "42" "-1" \
         "csv: unterminated quoted field at end of input" "0" "csv-ok"
+
+# Crypto: published vectors through the Flint surface, not just in cargo tests.
+if out="$(timeout -s KILL 300 "$FLINTC" tests/t_crypto.fl 2>&1)"; then
+    expect_all "JIT: sha256/hmac vectors, GCM round trip, tamper rejection" "$out" \
+        "64" "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" \
+        "60" "28" "-1" \
+        "crypto: GCM authentication failed (wrong key, nonce, aad or tag)" "crypto-ok"
+else
+    bad "JIT: tests/t_crypto.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+fi
 else
     bad "JIT: tests/t_csv.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
 fi
@@ -73,13 +83,24 @@ fi
 # --- AOT path ---------------------------------------------------------------
 if timeout -s KILL 600 "$FLINTC" tests/t_csv.fl -o "$WORK/t_csv.bin" > "$WORK/aot.log" 2>&1; then
     if out="$("$WORK/t_csv.bin" 2>&1)"; then
-        expect_all "AOT: same behavior as JIT" "$out" \
-            "3" "widget, large" "42" "-1" "csv-ok"
+        expect_all "AOT: csv behaves as in JIT" "$out" "3" "widget, large" "42" "-1" "csv-ok"
     else
-        bad "AOT: binary runs" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+        bad "AOT: csv binary runs" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
     fi
 else
-    bad "AOT: links" "$(tail -n 3 "$WORK/aot.log" | tr '\n' ' ')"
+    bad "AOT: csv links" "$(tail -n 3 "$WORK/aot.log" | tr '\n' ' ')"
+fi
+
+if timeout -s KILL 600 "$FLINTC" tests/t_crypto.fl -o "$WORK/t_crypto.bin" > "$WORK/aot2.log" 2>&1; then
+    if out="$("$WORK/t_crypto.bin" 2>&1)"; then
+        expect_all "AOT: crypto behaves as in JIT" "$out" \
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" \
+            "60" "28" "crypto-ok"
+    else
+        bad "AOT: crypto binary runs" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+    fi
+else
+    bad "AOT: crypto links" "$(tail -n 3 "$WORK/aot2.log" | tr '\n' ' ')"
 fi
 
 # --- JIT and AOT must agree exactly ---------------------------------------
@@ -91,6 +112,15 @@ if [ -x "$WORK/t_csv.bin" ]; then
 fi
 
 # --- the module must not be reachable by accident --------------------------
+# Rust std symbols would break JIT loading and collide with a user's own Rust
+# library, so the no_std property is asserted on the shipped object, not just
+# hoped for in the crate.
+if llvm-nm flint_std.o 2>/dev/null | grep -qE "rust_eh_personality|std::"; then
+    bad "module is no_std (no std symbols in the object)"
+else
+    ok "module is no_std (no std symbols in the object)"
+fi
+
 # A typo in a Flint extern must still fail loudly: the JIT defines only the
 # explicitly listed module symbols, not the whole process image.
 printf 'extern "C" {\n    fn flint_csv_typo_symbol(a: i64) -> i64\n}\nfn main() {\n    print(flint_csv_typo_symbol(1))\n}\n' > "$WORK/typo.fl"

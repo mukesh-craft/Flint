@@ -7,7 +7,7 @@
 //! reports it. `tests/test_lsp.sh` regenerates this file and fails on drift.
 
 /// Flint runtime builtins callable from user code (`flint_*`).
-pub const BUILTINS: &[&str] = &[ // 414 names, generated
+pub const BUILTINS: &[&str] = &[ // 422 names, generated
     "flint_abs_f64",
     "flint_abs_i64",
     "flint_accum_count",
@@ -33,6 +33,9 @@ pub const BUILTINS: &[&str] = &[ // 414 names, generated
     "flint_aegis_write_i64",
     "flint_aegis_write_i64_unchecked",
     "flint_aegis_write_u8",
+    "flint_aes256_ctr_crypt_hex",
+    "flint_aes256_gcm_decrypt_hex",
+    "flint_aes256_gcm_encrypt_hex",
     "flint_append_file",
     "flint_arg_count",
     "flint_array_alloc",
@@ -104,6 +107,9 @@ pub const BUILTINS: &[&str] = &[ // 414 names, generated
     "flint_cosh",
     "flint_crc32",
     "flint_crc32_str",
+    "flint_crypto_error",
+    "flint_crypto_last",
+    "flint_crypto_out_bytes",
     "flint_csv_cols",
     "flint_csv_error",
     "flint_csv_free",
@@ -188,6 +194,7 @@ pub const BUILTINS: &[&str] = &[ // 414 names, generated
     "flint_heap_sorted",
     "flint_hex_decode",
     "flint_hex_encode",
+    "flint_hmac_sha256_hex",
     "flint_http_get",
     "flint_http_post",
     "flint_hypot2",
@@ -290,6 +297,7 @@ pub const BUILTINS: &[&str] = &[ // 414 names, generated
     "flint_set_remove",
     "flint_set_values",
     "flint_sha256",
+    "flint_sha256_hex",
     "flint_sha256_str",
     "flint_sign_i64",
     "flint_signum",

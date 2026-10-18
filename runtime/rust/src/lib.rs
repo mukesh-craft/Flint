@@ -25,6 +25,9 @@
 
 #![no_std]
 
+// Standard-library modules, one file each, all `no_std`.
+pub mod crypto;
+
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr;
