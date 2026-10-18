@@ -15,6 +15,22 @@ All notable changes to Flint are documented here. Format follows
   server, and the README gap list no longer calls the server untested.
 
 ### Added
+- **HTTPS works.** `flint_http_get` / `flint_http_post` previously *refused*
+  `https://` outright (`parse_http_url` returned false), which made every modern
+  API unreachable from Flint — the single largest stdlib gap in the audit.
+  Plain HTTP still uses the raw socket path; TLS is handed to the platform's
+  libcurl, which already links the system TLS stack.
+  Deliberate choices, stated because they are the ones people argue about:
+  certificate verification is **on and cannot be disabled** (a runtime that
+  offers an "insecure" switch teaches every user to turn it off), response
+  bodies are capped at 8 MiB and an oversized response is *refused* rather than
+  silently truncated, timeouts are mandatory, redirects are capped at 5, and
+  libcurl is reached through **weak symbols** — the same pattern `flint_blas.c`
+  uses for OpenBLAS — so a device without libcurl still builds and reports a
+  clear error instead of failing the build. New: `flint_http_status()` returns
+  the status of the last request, so a caller can tell 404 from 200.
+  Gated by `tests/test_https.sh` (4 checks), whose offline-safe checks use
+  RFC 2606's `.invalid` TLD so the gate never depends on a network.
 - **`runtime/rust/src/sqlite.rs`: SQLite, as a Rust wrapper over the system
   libsqlite3.** SQLite is a C engine and there is no production-grade pure-Rust
   one, so the choice was "bind it" or "ship nothing"; this binds it and puts

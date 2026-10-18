@@ -7,7 +7,7 @@
 //! reports it. `tests/test_lsp.sh` regenerates this file and fails on drift.
 
 /// Flint runtime builtins callable from user code (`flint_*`).
-pub const BUILTINS: &[&str] = &[ // 431 names, generated
+pub const BUILTINS: &[&str] = &[ // 432 names, generated
     "flint_abs_f64",
     "flint_abs_i64",
     "flint_accum_count",
@@ -197,6 +197,7 @@ pub const BUILTINS: &[&str] = &[ // 431 names, generated
     "flint_hmac_sha256_hex",
     "flint_http_get",
     "flint_http_post",
+    "flint_http_status",
     "flint_hypot2",
     "flint_hypot3",
     "flint_i64_in_range",

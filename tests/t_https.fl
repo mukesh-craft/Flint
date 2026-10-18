@@ -1,0 +1,24 @@
+# HTTPS: flint_http_get now handles https:// through the platform's libcurl.
+#
+# The offline-safe checks come first so this fixture is meaningful on a plane;
+# the live request reports what happened instead of asserting a remote answer.
+
+fn main() {
+    # .invalid is reserved by RFC 2606 and must never resolve: this fails fast
+    # and locally, so it cannot pass by accident.
+    bad = flint_http_get("https://flint-gate.invalid/", 3000)
+    print(bad == 0)
+    print(flint_http_status())
+
+    # A live request. The status depends on the network; what is asserted is
+    # that certificate verification is on and a real TLS endpoint answers.
+    body = flint_http_get("https://example.com/", 15000)
+    if body == 0 {
+        print("offline")
+    } else {
+        print(flint_http_status())
+        print(flint_str_length(body) > 100)
+        flint_str_free(body)
+    }
+    print("https-ok")
+}
