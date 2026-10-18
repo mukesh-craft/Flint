@@ -29,10 +29,17 @@ command -v cargo >/dev/null 2>&1 || { echo "SKIP rust-stdlib (cargo not installe
 
 if [ ! -f flint_std.o ] || [ runtime/rust/src/lib.rs -nt flint_std.o ]; then
     echo "building the Rust stdlib modules..."
-    (cd runtime/rust && cargo build --release) > "$WORK/build.log" 2>&1 \
-        || { echo "FAIL cargo build"; tail -n 12 "$WORK/build.log"; exit 1; }
-    ld -r --whole-archive runtime/rust/target/release/libflint_std.a -o flint_std.o \
-        || { echo "FAIL ld -r flatten"; exit 1; }
+    # Rebuild through build.sh rather than flattening the archive here.
+    # This gate used to run `ld -r --whole-archive`, which is the one linking
+    # method build.sh explicitly forbids (it drags in compiler_builtins members
+    # that drag in unresolvable symbols). The two flattenings are not the same
+    # object: --whole-archive pulls in members carrying
+    # `rust_eh_personality`, so the no_std check below could fail on a build
+    # that is perfectly fine -- and did, on any edit to lib.rs, because that
+    # is exactly when this branch runs. The gate must test the artifact that
+    # actually ships.
+    bash build.sh > "$WORK/build.log" 2>&1 \
+        || { echo "FAIL build.sh"; tail -n 12 "$WORK/build.log"; exit 1; }
 fi
 [ -f flint_std.o ] && ok "flint_std.o exists (shared JIT+AOT artifact)" || bad "flint_std.o exists"
 
