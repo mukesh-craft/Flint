@@ -1,0 +1,47 @@
+# Generic inference: type parameters in the opposite order to their parameters.
+#
+# The previous version walked type parameters and read `call->args[ai]`,
+# indexing arguments by TYPE-PARAM position. For `fn pair<T,U>(a: T, b: U)`
+# that happens to work, but for `fn swap<T,U>(a: U, b: T)` it infers T from
+# the first argument -- which is U's argument -- and instantiates the wrong
+# signature. Matching parameter to argument by index is the only correct rule.
+
+struct P { x: i64 }
+
+fn swap<T, U>(a: U, b: T) -> T {
+    return b
+}
+
+fn first<T>(a: T) -> T {
+    return a
+}
+
+fn add2<T>(a: T) -> T {
+    return a + a
+}
+
+enum E { One, Two(i64) }
+
+fn main() {
+    # T is inferred from the SECOND argument, U from the first.
+    # Compared through an i64 result: mixing f64 and i64 in one comparison is
+    # a separate, still-open defect (it asserts inside LLVM), so this case is
+    # kept integer-only on purpose rather than pretending it works.
+    print(swap("x", 7) == 7)
+    print(swap(1, 2) == 2)
+    # Ordinary instantiations still work.
+    print(first(2.5) == 2.5)
+    print(first("hi") == "hi")
+    print(add2(21) == 42)
+    # Struct literals and enum construction as arguments.
+    #
+    # Compared through .x rather than by comparing the whole struct: `==` on
+    # struct or enum operands emits an ICmp on a non-integer type and LLVM
+    # asserts. That is a separate, still-open defect; this test exercises the
+    # inference, not the comparison.
+    print(first(P { x: 4 }).x == 4)
+    # A call result as an argument.
+    print(first(add2(1)) == 2)
+    # A binary expression as an argument.
+    print(first(3 + 4) == 7)
+}

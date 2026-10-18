@@ -66,6 +66,18 @@ fi
 # now says so instead of reinterpreting the pointer as an integer.
 expect_clean_error "str array literal" 'fn main() { a = ["x", "y"] print(a[0]) }'
 
+# --- inference: type parameters matched to the right argument ---------------
+if out="$(timeout -s KILL 120 "$FLINTC" tests/t_infer.fl 2>&1)"; then
+    if [ "$(printf '%s' "$out" | grep -c '^0$')" = "0" ] &&
+       [ "$(printf '%s' "$out" | grep -c '^1$')" = "8" ]; then
+        ok "generic inference matches type params to the right argument"
+    else
+        bad "inference assertions" "got [$(printf '%s' "$out" | tr '\n' ' ')]"
+    fi
+else
+    bad "tests/t_infer.fl runs" "$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
+fi
+
 # --- monomorphization: nesting, cache reuse, no collisions ------------------
 if out="$(timeout -s KILL 120 "$FLINTC" tests/t_specialize.fl 2>&1)"; then
     if [ "$(printf '%s' "$out" | grep -c '^0$')" = "0" ] &&

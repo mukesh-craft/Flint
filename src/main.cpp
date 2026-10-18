@@ -1752,6 +1752,22 @@ struct EnumConstructAST : ExprAST {
     EnumConstructAST() : ExprAST(NodeKind::EnumConstruct) {}
 };
 
+// Field types by struct name, at file scope.
+//
+// exprFlintType is a static member function but struct field types live in a
+// per-Parser registry, so it had no way to type `p.x`. A file-scope mirror is
+// the smallest fix that keeps generic inference able to see struct field types
+// without threading a parser through every type query.
+static std::unordered_map<std::string, std::vector<std::pair<std::string, Type>>> gStructFieldTypes;
+
+// Variable name -> declared type, at file scope.
+//
+// exprFlintType is static and gets no symbol table, so a variable read fell
+// through to i64. That made `p.x` type as i64 even when the field is f64, and
+// `first<T>(p.x)` silently instantiated T as i64. Populated from every
+// declaration the parser sees.
+static std::unordered_map<std::string, Type> gVarTypes;
+
 struct MatchArm {
     std::string enumName;
     std::string variantName;
@@ -2275,6 +2291,11 @@ public:
                 auto sd = parseStructDef();
                 if (sd.name.empty()) { advance(); continue; }
                 structRegistry[sd.name] = sd;
+                {
+                    std::vector<std::pair<std::string, Type>> ftys;
+                    for (auto& f : sd.fields) ftys.emplace_back(f.name, f.type);
+                    gStructFieldTypes[sd.name] = std::move(ftys);
+                }
                 prog->structs.push_back(std::move(sd));
             } else if (check(TokenType::KW_ENUM)) {
                 auto ed = parseEnumDef();
@@ -2416,6 +2437,7 @@ public:
         for (auto& p : fn->params) {
             declaredVars.insert(p.first);
             varTypeMap[p.first] = p.second;
+            gVarTypes[p.first] = p.second;
         }
         fn->bodyStart = pos;
         fn->body = parseBlock();
@@ -2721,6 +2743,7 @@ private:
         for (auto& p : params) {
             declaredVars.insert(p.first);
             varTypeMap[p.first] = p.second;
+            gVarTypes[p.first] = p.second;
         }
         
         bool isDecl = !check(TokenType::LBRACE);
@@ -4173,6 +4196,7 @@ private:
             for (auto& p : lambda->params) {
                 declaredVars.insert(p.first);
                 varTypeMap[p.first] = p.second;
+            gVarTypes[p.first] = p.second;
             }
             lambda->body = parseExpression();
             // NOTE: restore by COPY, not move — capture detection below
@@ -5609,6 +5633,10 @@ public:
                     auto it = vars->find(v->name);
                     if (it != vars->end()) return it->second;
                 }
+                // No `vars` map (the codegen path): fall back to the
+                // file-scope table so the declared type survives.
+                auto git = gVarTypes.find(v->name);
+                if (git != gVarTypes.end()) return git->second;
                 return Type::i64();
             }
             case NodeKind::VarDecl: {
@@ -5638,6 +5666,27 @@ public:
                 if (c->callee == "print") return Type::void_();
                 return Parser::inferCallType(c->callee);
             }
+            // The three cases below were missing, so generic inference fell
+            // through to the `default` i64 for any of them. That is the
+            // silent-wrong-answer class: `wrap<T>(arr[0])` or `first<T>(p.x)`
+            // instantiated T as i64 and compiled against the wrong signature.
+            case NodeKind::FieldAccess: {
+                auto* f = static_cast<FieldAccessAST*>(e);
+                Type base = exprFlintType(f->base.get(), vars);
+                if (base.kind == TypeKind::Struct) {
+                    auto sit = gStructFieldTypes.find(base.structName);
+                    if (sit != gStructFieldTypes.end()) {
+                        for (auto& fd : sit->second) {
+                            if (fd.first == f->fieldName) return fd.second;
+                        }
+                    }
+                }
+                return Type::i64();
+            }
+            case NodeKind::EnumConstruct:
+                return Type::enum_(static_cast<EnumConstructAST*>(e)->enumName);
+            case NodeKind::StructLiteral:
+                return Type::struct_(static_cast<StructLiteralAST*>(e)->structName);
             default: return Type::i64();
         }
     }
@@ -6447,6 +6496,27 @@ public:
                     r = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(l->getType()));
                 else if (l->getType()->isIntegerTy() && r->getType()->isPointerTy())
                     l = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(r->getType()));
+                // Floating-point operands need FCmp, not ICmp. ICmp on doubles
+                // is invalid IR and LLVM asserts:
+                //   assertion "Invalid operand types for ICmp instruction" failed
+                // which aborted the compiler on any `a == b` where a is f64.
+                if (l->getType()->isFloatingPointTy() || r->getType()->isFloatingPointTy()) {
+                    llvm::Type* cmpTy = l->getType()->isFloatingPointTy() ? l->getType() : r->getType();
+                    llvm::Value* lf = l->getType() == cmpTy ? l : builder->CreateSIToFP(l, cmpTy, "cmpf_l");
+                    llvm::Value* rf = r->getType() == cmpTy ? r : builder->CreateSIToFP(r, cmpTy, "cmpf_r");
+                    llvm::CmpInst::Predicate fpred = pred;
+                    switch (pred) {
+                        case llvm::CmpInst::ICMP_EQ:  fpred = llvm::CmpInst::FCMP_OEQ; break;
+                        case llvm::CmpInst::ICMP_NE:  fpred = llvm::CmpInst::FCMP_ONE; break;
+                        case llvm::CmpInst::ICMP_SLT: fpred = llvm::CmpInst::FCMP_OLT; break;
+                        case llvm::CmpInst::ICMP_SLE: fpred = llvm::CmpInst::FCMP_OLE; break;
+                        case llvm::CmpInst::ICMP_SGT: fpred = llvm::CmpInst::FCMP_OGT; break;
+                        case llvm::CmpInst::ICMP_SGE: fpred = llvm::CmpInst::FCMP_OGE; break;
+                        default: fpred = llvm::CmpInst::FCMP_OEQ; break;
+                    }
+                    auto* fcmp = builder->CreateFCmp(fpred, lf, rf, "fcmp");
+                    return builder->CreateZExt(fcmp, i64Ty, "fcmp_ext");
+                }
                 auto* cmp = builder->CreateICmp(pred, l, r, "cmp");
                 return builder->CreateZExt(cmp, i64Ty, "cmp_ext");
             }
@@ -7649,50 +7719,74 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         auto git = genericFunctions.find(call->callee);
         if (git != genericFunctions.end()) {
             auto* generic = git->second;
-            // Infer type args from argument expressions
+
+            // Infer each type parameter from the ARGUMENT that fills the
+            // parameter which mentions it.
+            //
+            // The previous version walked type parameters and read
+            // `call->args[ai]` -- indexing arguments by TYPE-PARAM position.
+            // For `fn pair<T,U>(a: T, b: U)` that happens to work, but for
+            // `fn swap<T,U>(a: U, b: T)` it infers T from the first argument,
+            // which is U's argument, and silently instantiates the wrong
+            // signature. Matching parameter to argument by index is the only
+            // correct rule.
+            //
+            // Argument types come from exprFlintType, which knows about
+            // numbers (including floats), strings, variables, calls, enums,
+            // structs, struct field access and binary expressions. The old
+            // inline switch handled four of those and defaulted the rest to
+            // i64 -- so `first<T>(p.x)` and `first<T>(Other(i64))` were
+            // silently wrong.
             std::vector<Type> typeArgs;
+            bool inferenceFailed = false;
+            std::string failedParam;
             for (size_t ai = 0; ai < generic->typeParams.size(); ai++) {
-                // Find the first parameter that uses this type param
-                bool found = false;
-                for (auto& p : generic->params) {
-                    if (p.second.kind == TypeKind::TypeParam && p.second.structName == generic->typeParams[ai]) {
-                        // Try to infer from the argument expression
-                        if (ai < call->args.size()) {
-                            switch (call->args[ai]->kind) {
-                                case NodeKind::Number: {
-                                    // A float literal must infer f64, or the
-                                    // instantiation is built with i64
-                                    // parameters and the call fails deep
-                                    // inside LLVM with raw IR on stderr.
-                                    auto* num = static_cast<NumberExprAST*>(call->args[ai].get());
-                                    typeArgs.push_back(num->isFloat ? Type::f64() : Type::i64());
-                                    found = true;
-                                    break;
-                                }
-                                case NodeKind::String:
-                                    typeArgs.push_back(Type::str()); found = true; break;
-                                case NodeKind::Variable: {
-                                    auto* var = static_cast<VariableExprAST*>(call->args[ai].get());
-                                    auto* sym = symTable.lookup(var->name);
-                                    if (sym) { typeArgs.push_back(sym->type); found = true; }
-                                    break;
-                                }
-                                case NodeKind::EnumConstruct: {
-                                    auto* ec = static_cast<EnumConstructAST*>(call->args[ai].get());
-                                    auto eit = enumRegistry.find(ec->enumName);
-                                    if (eit != enumRegistry.end()) { typeArgs.push_back(Type::enum_(ec->enumName)); found = true; }
-                                    break;
-                                }
-                                default: break;
-                            }
-                        }
+                // Locate the parameter that actually uses this type parameter.
+                size_t argIndex = SIZE_MAX;
+                for (size_t pi = 0; pi < generic->params.size(); pi++) {
+                    if (generic->params[pi].second.kind == TypeKind::TypeParam &&
+                        generic->params[pi].second.structName == generic->typeParams[ai]) {
+                        argIndex = pi;
                         break;
                     }
                 }
-                if (!found) {
-                    // Default to i64
-                    typeArgs.push_back(Type::i64());
+                Type inferred;
+                if (argIndex != SIZE_MAX && argIndex < call->args.size()) {
+                    ExprAST* arg = call->args[argIndex].get();
+                    // A variable argument carries its declared type in the
+                    // symbol table, which exprFlintType cannot see (it only
+                    // knows the optional `vars` map used during type
+                    // inference). Consult the table first, so struct and enum
+                    // locals still infer correctly, then fall back to
+                    // structural inference for everything else.
+                    if (arg->kind == NodeKind::Variable) {
+                        auto* var = static_cast<VariableExprAST*>(arg);
+                        auto* sym = symTable.lookup(var->name);
+                        if (sym) {
+                            inferred = sym->type;
+                        } else {
+                            inferred = exprFlintType(arg, nullptr);
+                        }
+                    } else {
+                        inferred = exprFlintType(arg, nullptr);
+                    }
                 }
+                if (inferred.kind == TypeKind::Void || inferred.kind == TypeKind::TypeParam) {
+                    // Un-inferrable. Defaulting to i64 here is how the old
+                    // version produced a confidently wrong instantiation, so
+                    // report it rather than guess.
+                    if (!inferenceFailed) {
+                        inferenceFailed = true;
+                        failedParam = generic->typeParams[ai];
+                    }
+                    inferred = Type::i64();
+                }
+                typeArgs.push_back(inferred);
+            }
+            if (inferenceFailed) {
+                return codegenError("cannot infer type parameter '" + failedParam +
+                    "' for '" + call->callee +
+                    "'; the argument's type could not be determined");
             }
 
             std::string mangled = mangle(call->callee, typeArgs);
