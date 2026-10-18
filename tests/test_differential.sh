@@ -15,9 +15,13 @@ pass=0; fail=0; known=0
 
 run_cpp() { # $1=src $2=outbase ; echoes "emit_ok run_exit"
   base="$2"
+  # Link flint_std.o as well: the array primitives live in
+  # runtime/rust/src/array.rs now, so an emit that calls flint_array_* cannot
+  # link against runtime.c alone. This is the same object build.sh links, so
+  # the gate tests the artifact that actually ships rather than a subset.
   if timeout -s KILL 300 "$FLINTC" "$1" --emit-llvm -o "$TMPD/$base.cpp.ll" > /dev/null 2>&1 \
      && llvm-as "$TMPD/$base.cpp.ll" -o "$TMPD/$base.cpp.bc" > /dev/null 2>&1 \
-     && clang "$TMPD/$base.cpp.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/$base.cpp" > /dev/null 2>&1; then
+     && clang "$TMPD/$base.cpp.ll" runtime/runtime.c runtime/flint_aegis.c flint_std.o -lsqlite3 -lcurl -lm -o "$TMPD/$base.cpp" > /dev/null 2>&1; then
     "$TMPD/$base.cpp" > "$TMPD/$base.cpp.out" 2>&1
     echo "1 $?"
   else

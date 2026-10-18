@@ -31,6 +31,7 @@ extern crate alloc;
 
 // Standard-library modules, one file each, all `no_std`.
 pub mod arena;
+pub mod array;
 pub mod brotli;
 pub mod argon2;
 pub mod compress;

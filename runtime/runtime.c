@@ -354,66 +354,18 @@ void* flint_int_to_ptr(int64_t i) {
     return (void*)(intptr_t)i;
 }
 
-int64_t flint_array_read_i64(void* ptr, int64_t index) {
-    // UNCHECKED raw-pointer API (no length available — cannot validate).
-    // Prefer flint_array_get (bounds-checked, panics). Only use when the
-    // caller has hoisted the check, same contract as aegis _unchecked fns.
-    return ((int64_t*)ptr)[index];
-}
 
-void flint_array_write_i64(void* ptr, int64_t index, int64_t value) {
-    // UNCHECKED: see flint_array_read_i64. Prefer flint_array_set.
-    ((int64_t*)ptr)[index] = value;
-}
 
+// The array primitives (alloc/len/data_ptr/free/get/set and the unchecked
+// read_i64/write_i64 pair) are implemented in Rust: runtime/rust/src/array.rs.
+// They are re-implemented there rather than merely wrapped so that the length
+// travels with the pointer, which is what makes a bounds check possible at all;
+// the C versions indexed a bare void* and could not validate anything.
 typedef struct { void* data; int64_t len; } FlintArray;
 
-FlintArray flint_array_alloc(int64_t n) {
-    FlintArray a;
-    // Overflow guard: n * 8 must not wrap; also cap at 128M elems (~1GiB).
-    if (n < 0 || n > ((int64_t)1 << 27) || (uint64_t)n > SIZE_MAX / sizeof(int64_t)) {
-        a.data = NULL; a.len = 0; flint_set_err(1); return a;
-    }
-    // Zeroed (calloc): fresh arrays read as 0. malloc without memset works
-    // only by OS-page luck and breaks under ASan (0xbe fill) or heap reuse
-    // — the primes sieve returned wrong counts deterministically there.
-    a.data = (n > 0) ? calloc((size_t)n, sizeof(int64_t)) : NULL;
-    a.len = n;
-    return a;
-}
 
-int64_t flint_array_len(FlintArray a) { return a.len; }
-int64_t flint_array_len_ptr(FlintArray *a) { return a ? a->len : 0; }
-void* flint_array_data_ptr(FlintArray *a) { return a ? a->data : NULL; }
 
-void flint_array_free(FlintArray a) {
-    free(a.data);
-}
 
-int64_t flint_array_get(FlintArray a, int64_t index) {
-    // P0-5: OOB reads returned heap garbage silently. Panic like `a[i]`
-    // syntax (flint_bounds_check) instead — one memory-safety rule.
-    if (!a.data || index < 0 || index >= a.len) {
-        char msg[128];
-        snprintf(msg, sizeof(msg),
-                 "flint_array_get index %lld out of bounds for length %lld",
-                 (long long)index, (long long)a.len);
-        flint_panic(msg);
-    }
-    return ((int64_t*)a.data)[index];
-}
-
-void flint_array_set(FlintArray a, int64_t index, int64_t value) {
-    // P0-5: OOB writes were silently dropped. Panic instead.
-    if (!a.data || index < 0 || index >= a.len) {
-        char msg[128];
-        snprintf(msg, sizeof(msg),
-                 "flint_array_set index %lld out of bounds for length %lld",
-                 (long long)index, (long long)a.len);
-        flint_panic(msg);
-    }
-    ((int64_t*)a.data)[index] = value;
-}
 
 void flint_null_check(void* ptr, const char* msg) {
     if (!ptr) {
