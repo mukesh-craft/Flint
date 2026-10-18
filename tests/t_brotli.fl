@@ -3,7 +3,7 @@
 # (quality 9), not by this runtime, so decoding them proves interoperability.
 
 fn main() {
-    compressed = "\xc1\xf8Y\x00 \xda6Ju!\xd9\x92\xa1(\x9e\x8a<\x93\x93?G\x81\xea\xc0\xbc\xb2\x95\xcd\x82f\x0b\xaf<\x1d\x91\x17e\xb51\xc1-\xfa\xc08\xcd\x02\x00\xd5\xfd\x87\xc0d\x00\x00"
+    compressed = flint_read_file("tests/fixtures/brotli_ref.bin")
 
     # 54 bytes in, 2880 bytes out: the stream exercises backreferences
     # rather than literals.
@@ -19,7 +19,7 @@ fn main() {
     print(flint_str_length(flint_brotli_error()) > 0)
 
     # Garbage, truncation and an empty buffer are all rejected.
-    junk = "\x00\x01\x02\x03\x04\x05\x06\x07"
+    junk = flint_read_file("tests/fixtures/brotli_junk.bin")
     print(flint_brotli_decompress(junk, 8, 0) == 0)
     print(flint_brotli_decompress(compressed, 10, 0) == 0)
     print(flint_brotli_decompress(compressed, 0, 0) == 0)

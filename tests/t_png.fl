@@ -5,10 +5,7 @@
 # one i64 per element, so it is not a byte buffer.
 
 fn main() {
-    png = "\x89PNG\x0d\x0a\x1a\x0a\x00\x00\x00\x0dIHDR\x00\x00\x00\x03\x00\x00\x00\x02\x08\x02\x00\x00\x00\x12\x16\xf1M\x00\x00\x00\x1dIDATx\x9cc`\xb0\xa9\xd8\xf2A'c\xc9\x03\x06\x91\x80\x9e\x13,\x0e5;\xbe\x00\x00O8\x08\x95\x07l\x16S\x00\x00\x00\x00IEND\xaeB`\x82"
-        "x00\x00\x02\x08\x02\x00\x00\x00\x12\x16\xf1M\x00\x00\x00\x1dIDAT"
-        "x\x9cc`\xb0\xa9\xd8\xf2A'c\xc9\x03\x06\x91\x80\x9e\x13,\x0e5;\xb"
-        "e\x00\x00O8\x08\x95\x07l\x16S\x00\x00\x00\x00IEND\xaeB`\x82"
+    png = flint_read_file("tests/fixtures/png_ref.bin")
 
     # --- decode a foreign PNG ---------------------------------------------
     print(flint_png_decode(png, 86) == 1)
@@ -27,7 +24,7 @@ fn main() {
     # --- encode an image and read it back ---------------------------------
     # 2x2 RGB: red, green, blue, white. Same rule as above: byte buffers are
     # string literals, because a Flint array is one i64 per element.
-    pixels = "\xff\x00\x00\x00\xff\x00\x00\x00\xff\xff\xff\xff"
+    pixels = flint_read_file("tests/fixtures/png_pixels.bin")
     n = flint_png_encode(2, 2, 3, pixels, 12)
     print(n > 60)
 
