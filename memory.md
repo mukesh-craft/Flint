@@ -1,6 +1,6 @@
 # Flint Compiler — Complete Project Memory
 
-**Last updated:** 2026-07-08
+**Last updated:** 2026-10-18
 **Repository:** https://github.com/shell-bay/Flint
 **Branch:** main
 
@@ -3376,3 +3376,391 @@ facts shaped the design, and both were counter-intuitive:
   self-host binaries under $TMPDIR/slipstream/self were invalidated. Rebuild
   with `bash tests/test_selfhost.sh` before judging it a regression.
 
+
+---
+
+# Capability Audit and Improvement Plan (2026-10-18)
+
+**Method note (read this before trusting any doc).** `memory.md`, `ROADMAP.md`
+and `README.md` have all been caught containing false claims about this
+compiler. Concrete instance: docs asserted "match with `{...}` block arms
+aborts the compiler (P0)". Running `examples/enums.fl` prints `42 99` and
+exits 0. Every finding below was produced by COMPILING AND RUNNING small `.fl`
+programs, or by reading the cited `path:line`. Claims carried over from the
+docs are marked REFUTED. Trust the code, never the prose.
+
+**Resource note.** The audit device had ~1 GB free RAM of 3.6 GB. Runs were
+sequential; no parallel builds. If you re-verify, free
+`runtime/rust/target` and `lsp/target` first (317 MB + 76 MB on disk).
+
+---
+
+## 1. VERIFIED BASELINE — what genuinely works
+
+Do not "fix" these. Several look like bugs in the docs and are not.
+
+| Feature | Evidence |
+|---|---|
+| Enum payload match, block arms | `examples/enums.fl` prints `42 99`, exit 0 |
+| Struct methods, struct args/returns | `getx<T>` over `P{x}` prints `3` |
+| Ordinary `f64` functions | `fn id_f64(x: f64) -> f64` prints `2.5` |
+| Pipe lambdas WITH capture | `f = \|x: i64\| x + 1` prints `42`; captured `base=10` prints `15` |
+| Bounds checking | `a[5]` on len 3 -> `PANIC: index 5 out of bounds for length 3` |
+| Division by zero | `PANIC: division by zero` |
+| Use-after-free | `examples/aegis_uaf.fl` -> `aegis error in 'main': lease used after free` at COMPILE time |
+| Self-hosting | `tests/test_selfhost.sh` byte-identical fixed point |
+| Rust stdlib in both JIT and AOT | `tests/test_rust_stdlib.sh` 20/20 |
+
+The safety story is real and strong. Bounds checks, division guards and
+compile-time use-after-free detection all work. That is the core asset.
+
+---
+
+## 2. ARCHITECTURE — why the bugs exist
+
+Understand these five facts and every bug below becomes predictable.
+
+**2.1 `Type` has no size field.** `src/main.cpp:1082-1085` defines `Type` with a
+`TypeKind` and a `structName`, and nothing else. `Type::array` (`:1106`)
+carries only the element `Type`. `llvmType` (`:1153-1156`) therefore maps
+EVERY array to `{ptr, i64}` — a fat pointer with no element descriptor. The
+element type is erased at the LLVM boundary. Consequence: `emitIndexEmit`
+(`:8791`) and `emitIndexStoreEmit` (`:8803`) hardcode `CreateGEP(i64Ty, ...)`,
+`inferType` hardcodes `Type::array(Type::i64())` at `:2620` and `:5571`, and
+the AST array-literal emitter hardcodes `i64Ty` at `:6980`, `:6989`, `:6993`,
+`:7008`, `:7023`. **Every array operation in the language is i64-only, and
+this is structural, not a missing feature.**
+
+**2.2 There are TWO generic instantiation engines.**
+`Codegen::emitCall` (`:7532-7601`) and `Parser::emitDirectCall` (`:8986-9031`)
+each independently infer type arguments and build the call. They were written
+separately and drifted. Every generic bug exists in both. Fixing one and not
+the other re-creates the divergence.
+
+**2.3 `CodeGen::mangle` is not injective.** `:7391-7408` builds the mangled
+name used for monomorphization and for the `genericCache` key. There is **no
+`TypeKind::F64` case**: `F64`, `Ptr`, `Void` and `TypeParam` all fall through
+to `default: s += "any"` at `:7404`. Two different instantiations can
+therefore produce the same cache key. This is a latent cache-poisoning bug
+that must be fixed BEFORE anything else touches generics.
+
+**2.4 The symbol table is wiped before parallel bodies.**
+`Parser::parseParallelForStmtEmit` does `cg->symTable = SymbolTable();` at
+`:9633` before emitting the worker body, which is why `total` is undefined
+inside `parallel for`. Note `:9624` carries the comment
+`auto savedSym = cg->symTable; // copy assuming copyable` — which is exactly
+the assumption that was never checked.
+
+**2.5 The stable token table is a contract, not an implementation detail.**
+`stableTokenKind` (`:1182`+) is consumed by `stage1/flint_lex.fl` and enforced
+by `test_lexdiff.sh`, `test_parse_gate.sh` and `test_fixpoint.sh`. Adding a new
+keyword breaks the self-hosting ladder. The compiler already has the correct
+technique for this: contextual identifiers, used for `map` (`:8422`), `python`
+(`:9664`) and `as` (`:1802-1804`). **Use contextual detection. Never add a
+token.**
+
+---
+
+## 3. BUGS — verified, with mechanism
+
+Ordered by severity. Each was reproduced.
+
+### B1. `f64` array literals silently produce garbage — NO DIAGNOSTIC
+**Severity: highest. This is the worst class of compiler bug: a wrong answer
+with no error.**
+
+```
+fn main() { a = [1.5, 2.5]  print(a[0]) }   ->  48     (should be 1.5)
+fn main() { b = [1, 2, 3]   print(b[0]) }   ->  1      (correct)
+```
+
+Mechanism: 2.1. The literal is stored as i64 bits and read back through an
+i64 GEP, so the caller sees a bit pattern reinterpreted as an integer. No
+check ever compares the element's LLVM type to `i64Ty`.
+
+**Fix (do NOT widen arrays here).** At `Parser::emitArrayLiteralEmit` (`:8826`)
+and the AST emitter (`:6975-7027`), after building the element list, if any
+element's LLVM type is not `i64Ty`, emit:
+`codegenError("array literals must hold i64 values (got f64)")`.
+Rejecting loudly is worth more than a half-correct f64 array. Widening is a
+separate, deliberately-gated milestone. A language that lies is worse than a
+language that refuses.
+
+### B2. `f64` generic leaks raw LLVM IR
+```
+fn first<T>(a: T) -> T { return a }   print(first(2.5))
+-> Call parameter type does not match function signature!
+   i64 %0 = call i64 @first.i64(double 2.500000e+00)
+   function verification failed: main
+```
+Three causes, in dependency order:
+1. `mangle` has no F64 case (2.3) — fix FIRST, or the fix below creates a new
+   cache collision.
+2. `Codegen::emitCall` `:7546-7548` maps `NodeKind::Number` to `Type::i64()`
+   without checking `NumberExprAST::isFloat`. Contrast `:7550-7554`, the
+   `Variable` branch, which correctly reads the symbol's real type. That is
+   why `let v = 2.5; first(v)` works but `first(2.5)` does not.
+3. `Parser::emitDirectCall` `:9009-9010` repeats the mistake.
+
+**Fix:** after (1), check `isFloat` at `:7547` and `:9009`. Then add a
+signature guard before `CreateCall` at `:7601` and `:9029`: if argument LLVM
+types do not match the callee, raise a Flint diagnostic naming the function,
+the expected type and the actual type. That guard is what permanently
+converts this ICE class into ordinary errors.
+
+### B3. Generic inference is a 4-case `NodeKind` switch
+`:7545-7563` and `:8990-9011` handle only `Number`, `String`, `Variable` and
+`EnumConstruct`. Missing: `FieldAccess`, index access, `StructLiteral`,
+`Call`, `Cast`, `Binary`, array literal. Each silently instantiates `i64` at
+`:7570` / `:9024`. So `max<T>(a.x, b.y)` is quietly wrong.
+
+Verified sub-case: struct generics DO work in parameter position
+(`getx<T>(p: T) -> i64 { return p.x }` prints `3`). The failure appears when the
+generic's result is used as a struct, because return-only `T` falls to i64.
+
+**Fix:** extract one `inferTypeArgs(FunctionAST*, args)` and route both call
+sites through it; then replace the switch with a real `unifyParamType(formal,
+argExpr, out)` walking compound types via `elemType`. Delete every silent
+`Type::i64()` default at `:7570`, `:9024`, `:9683` — an un-inferrable
+parameter must be an error naming the parameter.
+
+### B4. A lambda is a compile-time symbol, never a value
+Verified: `f = |x: i64| x + 1` works and captures work. But passing one to a
+function fails:
+```
+fn apply(f: i64, x: i64) -> i64 { return f(x) }
+fn main() { dbl = |x: i64| x * 2  print(apply(dbl, 5)) }
+-> codegen: undefined function 'f'
+```
+Mechanism: `:7498` rejects calling a lambda from a different function, because
+the binding is a symbol resolved at compile time. There is no representation of
+a function as a runtime value, and `map`/`filter`/`reduce` do not exist.
+
+Secondary defect: the natural-looking form `|x: i64| -> i64 { return x + 1 }`
+produces THREE cascading errors (`empty lambda body`, `undefined var 'x'`,
+`undefined function 'f'`) because `:4162` is `parseExpression()` with no
+return type and no block body. People write the language off after one
+confusing error.
+
+**Fix:** closure conversion is already complete — `emitLambdaDef`
+(`:6422-6485`) outlines a real function and freezes captures into hidden
+slots. Only two things are missing: a `fn(i64, i64) -> i64` type in
+`Parser::parseType` (`:2580`), and materializing the env pointer when a lambda
+symbol appears in value position (`emitExpr` `:6070`/`:6142`). A `call(f, x)`
+builtin then desugars to an LLVM indirect call with the env prepended.
+**Zero runtime code, zero ABI change, identical in JIT and AOT.** Honest
+constraint to document: closures remain stack-scoped and cannot outlive their
+defining function — that is correct for v1, state it rather than hiding it.
+
+### B5. `trait` is not a keyword; it silently mis-parses
+`grep -n trait src/main.cpp` returns nothing. `:2333` treats a top-level
+`IDENTIFIER IDENTIFIER` as a keywordless function definition, so
+`trait Shape { fn area(self) -> i64 }` is parsed as a function named `trait`
+taking a parameter named `Shape`, and the nested `fn area` is never registered.
+The `undefined function 'area'` a user sees is a downstream symptom of a silent
+mis-parse.
+
+**Fix (minimal):** add `struct TraitDef { name, methods }` and a
+`traitRegistry` beside `structRegistry` at `:4680-4682`. Detect `trait`
+contextually in `parseProgram` (`:2264-2355`) via `IDENTIFIER "trait"
+IDENTIFIER`. Impls are ordinary functions — `fn area(s: P) -> i64` — so there is
+no new declaration syntax. At the single dispatch point, resolve by
+name+arity: exactly one match -> direct call; zero -> `no type in scope
+implements 'area'`; more than one -> `ambiguous: candidates P, Q`. Support
+`P.area(s)` qualification by rewriting to `area(p)`, mirroring the enum
+qualification that already works. **Do not add a lexer keyword (2.5).**
+
+### B6. `parallel for` — two independent blockers
+Verified: `parallel for i in 0..n { total = total + i }` ->
+`codegen: undefined var 'total'`.
+Blocker A: the symbol table is wiped at `:9633` (2.4).
+Blocker B: `runtime/runtime.c:490-513` `flint_parallel_for` returns a
+hardcoded `0` at `:512`, and `:9660` discards the return value entirely. There
+is no reduction channel, so even a perfectly capturing `parallel for` could not
+compute a sum.
+
+**Recommendation: REMOVE the keyword, do not fix it.** Capture-by-value across
+`pthread` workers is a cross-thread use-after-free: a captured `str`/map/array
+pointer can be snapshotted while the parent frame frees it. That would open a
+memory-safety hole in the one property this language leads with — and the rest
+of the safety story (compile-time use-after-free, bounds checks) would be
+for nothing. The self-hosted compiler contains `"parallel for "` only as a
+pretty-printer string literal (`stage2/flint_parse.fl:3140`), so removal breaks
+nothing in the self-hosting gate. Replace the parse with a migration error and
+leave the runtime symbol for ABI stability. If concurrency returns, ship
+order-deterministic capture-free builtins in `runtime/rust/` instead — no
+syntax sugar, no capture, no new language feature.
+
+### B7. `specialize` latent bugs that bite the moment generics is real
+`CodeGen::specialize` (`:7410-7488`):
+- **No recursion guard.** `genericCache[mangled]` is written at `:7486`, AFTER
+  the body is emitted. A self-recursive generic re-enters forever and hangs or
+  overflows the compiler.
+- **Lossy insert-point restore.** `:7484` uses `SetInsertPoint(savedBlock)`,
+  which re-inserts at the END of the block. Nested monomorphization misplaces
+  instructions. Must be `saveIP()`/`restoreIP()`.
+- **Compound params never substituted.** `:7421-7426` does
+  `subst.find(rt.structName)`, but for `[T]` the structName is `""`.
+  `resolveType` (`:4645-4656`) already recurses through `elemType` correctly —
+  point `specialize` at `resolveType` and the compound case falls out.
+
+### B8. `Option<T>` in ROADMAP is not generic
+`ROADMAP.md:466` claims a builtin generic `Option<T>`. FALSE.
+`initStdEnums` (`:4697-4703`) defines `Option.Some(i64)` — a fixed i64
+payload. There is no type-level generic enum, which is why a generic `Result`
+or `Option` cannot be written today.
+
+### B9. Array API pairing is inconsistent
+`flint_array_alloc` returns a `{ptr, i64}` slice while `flint_aegis_free`
+expects a plain `i8*`, so mixing them fails to link with a raw LLVM type
+mismatch. Not a correctness bug (the compiler refuses) but it surfaces internal
+IR at the user. Any signature guard added in B2 should be applied here too.
+
+---
+
+## 4. WHERE RUST SHOULD BE USED
+
+Context respected: `runtime/rust/` is already a `#![no_std]` staticlib linked
+into BOTH JIT and AOT, so Rust is a proven vehicle here, not a rewrite.
+Constraint that matters: the crate has a **custom `panic_impl` lang item**, so
+any dependency that links `std` breaks the build. This is not theoretical —
+`fdeflate` linked `std`, the release staticlib silently failed, and `build.sh`
+fell back to "no Rust stdlib" entirely, taking down every Rust builtin at
+runtime while still reporting success.
+
+| Candidate | Call | Reason |
+|---|---|---|
+| Bounds-checked array element access (`flint_array_get/set`) carrying an explicit element size | **R** | Lets `[T]` work without touching `llvmType(TypeKind::Array)`. Unsafe indexing is precisely the class where a Rust bound check is worth a predictable branch. Move into `runtime/rust/` next to the arena. |
+| Checked arithmetic helpers (overflow, div-by-zero, index math) | **R** | Centralizes overflow policy currently scattered through C++ hot paths; `panic` + the arena give a consistent failure mode. |
+| Generic array/slice storage (length, element size, data pointer) | **R** | The representation is a value type with no compiler invariants attached; it is a library concern, not an IR concern. |
+| Lexer/parser for stage1/2/3 | **C** | The self-hosting ladder REQUIRES these stages to be written in Flint. Moving them to Rust destroys the property that makes this compiler unusual. |
+| The two emit paths / `specialize` / `mangle` | **C++** | These construct and inspect LLVM IR and depend on compiler-internal invariants. Handing them to a second language couples the fix to an FFI boundary for no gain. |
+| Module cache hashing | **C++** | It reads the compiler's own AST for the key; already inside that code. |
+| LLVM `StringMap`/ADT internals | **C++** | Honestly: no. Already optimal, and replacing them adds a boundary for zero benefit. |
+
+Practical note on B1: the cheapest correct fix is the C++ rejection above. The
+Rust array work is what unlocks `[T]` later; it is not needed to stop the lie.
+
+---
+
+## 5. MILESTONES
+
+Critical path M0 -> M1 -> M2 -> M3 -> M4. M5 and M6 touch disjoint code
+(`:9592`/`:2820` and `:8374`/`:2333`) and can run any time.
+
+**M0 — Stop the bleeding.** Make `mangle` injective (`:7391`). Fix `isFloat`
+inference (`:7547`, `:9009`). Add `CreateCall` signature guards (`:7601`,
+`:9029`). Reject non-i64 array literal elements loudly (`:8826`, `:6975`).
+*Gate:* `first(2.5)` prints `2.5`; `[1.5,2.5]` is a clean error; a negative
+test asserting zero LLVM verifier text on stderr.
+*Rollback:* pure additions plus one error message; revert is trivial.
+
+**M1 — One instantiation engine.** Extract `inferTypeArgs`; delete the
+`NodeKind` switches; fix `specialize` (B7): cache before body, `saveIP`,
+route compound substitution through `resolveType`.
+*Gate:* both backends emit byte-identical IR for a generics file;
+`test_differential.sh` green.
+*Rollback:* this is the riskiest milestone — it touches both emit paths. If
+the self-host fixed point breaks, revert wholesale rather than partially.
+
+**M2 — Real inference.** `unifyParamType` for `FieldAccess`/index/`Call`/
+`Cast`/`Binary`/`StructLiteral`; add `f::<T>(...)` explicit type arguments;
+delete every silent i64 default.
+*Gate:* return-only params, field-access args and nested generic calls all
+work; every un-inferrable case errors by name.
+
+**M3 — Traits (static).** `traitRegistry`, contextual parse, name+arity
+resolution, ambiguity error, `P.area(s)` qualification.
+*Gate:* `test_lexdiff.sh`, `test_parse_gate.sh`, `test_fixpoint.sh` all still
+green and unmodified — that is the proof the token contract was not touched.
+
+**M4 — Lambda as a value.** `fn` type in `parseType`; env-pointer
+materialization in `emitExpr`; `call` as a pure LLVM indirect call.
+*Gate:* `apply(|x| x + 1, 5)` works; a closure escaping its frame still errors.
+
+**M5 — Remove `parallel for`.** Parser change plus migration error; keep the
+runtime symbol.
+*Gate:* `tests/t_flow.fl` migrated; `test_errors.sh` asserts the message;
+self-host gate unaffected.
+
+**M6 — Diagnostics.** Stop the cascade for the `|p| -> T {}` form at `:8374`;
+tighten top-level `IDENTIFIER IDENTIFIER` at `:2333`.
+*Gate:* each malformed input yields exactly one error.
+
+**M7 — `[T]` containers.** Deferred. Requires the Rust array representation
+from section 4 plus an explicit ABI decision. Only after M0-M6 are green.
+
+---
+
+## 6. REJECTED APPROACHES
+
+1. **Do NOT add an element-type field to `llvmType(TypeKind::Array)` (`:1153`).**
+   The single most dangerous available change. It alters the layout of every
+   array value in every object file and every `.flint.bc` interface, silently
+   mismatching `--use-interface` copies (`:11845-11856`), AOT/JIT parity, the
+   Rust staticlib ABI and C FFI. Use the Rust array representation with an
+   explicit element-size parameter instead.
+2. **Do NOT add a lexer keyword.** `stableTokenKind` is a Stage-1 contract
+   consumed by `stage1/flint_lex.fl`. Use contextual detection like `map`,
+   `python` and `as` already do. `KW_PARALLEL` already exists at `:1175`;
+   removing its USE is safe, adding a NEW token is not.
+3. **Do NOT use dictionary passing or vtables for generics.** It requires the
+   runtime value to carry a type descriptor, which arrays do not
+   (2.1) — an ABI change rippling through the runtime, the Rust staticlib, C
+   FFI and the interface format. Monomorphization is a local, deterministic
+   transformation that the self-hosted emitter can reproduce byte-identically.
+4. **Do NOT fix the two emit paths in different milestones.** That is how B2
+   and B3 exist twice. One change, both paths.
+5. **Do NOT reword existing error strings.** `tests/run.sh` matches on text.
+   Add new messages; never edit existing ones inside a feature milestone.
+6. **Do NOT ship `dyn Trait` before static traits exist.** A second erased
+   value representation compounds the array-erasure problem for zero users.
+7. **Do NOT "fix" float arrays by widening them in M0.** Reject first, widen
+   deliberately later behind its own gate.
+
+---
+
+## 7. RISK REGISTER
+
+| Risk | Detect with | Mitigation |
+|---|---|---|
+| Array layout change breaks `--use-interface` | `test_selfhost.sh` phase C | Never edit `llvmType` array case; see Rejected 1 |
+| Generic change breaks the fixed point | `test_selfhost.sh` byte-identical comparison | Fix both emit paths in ONE change; revert wholesale if red |
+| New lexer token breaks stage1 | `test_lexdiff.sh`, `test_parse_gate.sh` | Contextual detection only |
+| Rust dependency links `std` | Build output must show `flint_std.o (Rust stdlib, both paths)`; grep the object for `std` symbols | Every new dep must be `no_std`; the gate already checks "module is no_std" |
+| Rust dep breaks JIT on Android | Run `test_rust_stdlib.sh` on-device | `no_std` + no TLS; the existing stdlib is the proof |
+| Silently-wrong answers like B1 | Add negative tests asserting diagnostics | Treat any silent wrong answer as P0 |
+| Monomorphization compile-time blowup | `bench/compile_time/BASELINE.md` | Only one file uses generics today; revisit past ~200 instances |
+
+---
+
+## 8. OPEN DECISIONS FOR THE MAINTAINER
+
+1. Is removing `parallel for` acceptable as a product decision? The analysis
+   says yes (B6); it is a user-visible language-surface removal, so it is
+   yours to call.
+2. Should generics stay monomorphization-only, or is a `dyn`-style escape
+   hatch wanted later? M0-M2 do not foreclose either.
+3. Does `[T]` matter enough to justify the Rust array representation now, or
+   should M7 wait until real programs need it?
+
+---
+
+## 9. TRAP LESSONS FROM THIS AUDIT
+
+- Trap: trusting `memory.md`/`ROADMAP.md` as evidence. They asserted a P0
+  compiler crash that does not exist. Always compile a 5-line program before
+  believing a doc claim about behaviour.
+- Trap: assuming a generic call's parameter position tells you about its
+  return position. Struct generics WORK in parameter position; return-only `T`
+  is what breaks. Test both.
+- Trap: testing a language feature with syntax you guessed. `fn(x){}` lambda
+  syntax does not exist; `|x: i64| x + 1` does, and captures work. A failed
+  test proves nothing until the syntax is confirmed against real examples.
+- Trap: an ICE that leaks LLVM IR is a missing signature guard, not just a
+  type-inference bug. The guard is what stops the whole class recurring.
+- Trap: a compiler that accepts wrong code silently is worse than one that
+  refuses. B1 (`[1.5, 2.5]` -> 48) is the most serious defect found in this
+  audit, precisely because nothing complained.
+- GATE lesson: establish a green `tests/run.sh` + `tests/test_selfhost.sh`
+  baseline BEFORE M0. Every milestone gate above assumes a green baseline.
