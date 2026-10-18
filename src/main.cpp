@@ -1,3 +1,4 @@
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Function.h"
@@ -256,6 +257,39 @@ static int runProcess(const std::vector<std::string>& args) {
     return -1;
 }
 
+// Does this object file reference the embedded-CPython bridge?
+//
+// The question is asked of the artifact being linked, not only of a flag
+// recorded during codegen: the module cache can serve a cached module and skip
+// codegen entirely, so a side-effect flag is unset on exactly the run that
+// needs it. Reading the ELF symbol table through LLVM costs no subprocess and,
+// unlike popen("nm ... " + path), cannot be shell-injected by the path.
+static bool objectNeedsPython(const std::string& objPath) {
+    auto parsed = llvm::object::ObjectFile::createObjectFile(objPath);
+    if (!parsed) return false;
+    llvm::object::ObjectFile* obj = parsed->getBinary();
+    for (const auto& sym : obj->symbols()) {
+        // getName() returns Expected; an unreadable name cannot match.
+        llvm::StringRef name = *sym.getName();
+        if (name.starts_with("flint_py_")) return true;
+    }
+    return false;
+}
+
+// Whether the program being compiled uses the embedded-CPython bridge.
+//
+// Linking pyruntime.o (and, via python3-config, libpython) unconditionally
+// gave every AOT binary a libpython.so NEEDED entry, so a program that never
+// calls Python still failed to run on a machine without Python. Codegen sets
+// this while emitting a `python { }` block or a py_eval/py_eval_float call.
+//
+// It is a file-scope flag rather than a Codegen member because the linker runs
+// from several call sites, in two different compilation paths, and all of them
+// need the same answer. Compilation here is single-threaded.
+static bool gProgramUsesPython = false;
+
+static void markUsesPython() { gProgramUsesPython = true; }
+
 static bool spawnLinker(const std::string& objPath, const std::string& outputPath,
                         const std::string& extraFlags = "") {
     if (!isSafePath(objPath) || !isSafePath(outputPath)) {
@@ -265,6 +299,12 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
 
     // Build the argv array directly — no shell, no string interpolation.
     std::vector<std::string> args = {"clang", objPath, "runtime.o"};
+    // libm is unconditional: the runtime's math builtins (flint_pow, and the
+    // tensor/BLAS objects' pow) need it. It used to arrive by accident inside
+    // `python3-config --ldflags`, so a machine without Python could not link
+    // a program that only did arithmetic. Depending on the Python toolchain
+    // for libm is not a dependency anyone wants.
+    args.push_back("-lm");
     // C libraries the Rust stdlib modules wrap. Absolute paths beat -l flags
     // here: Termux keeps them under $PREFIX/lib, which is not on the default
     // linker path for every invocation.
@@ -304,8 +344,12 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
         if (stat(blasLib.c_str(), &st) == 0) args.push_back("-lopenblas");
     }
 
-    // Include pyruntime.o if it exists (Python support) — try current dir.
-    if (stat("pyruntime.o", &st) == 0) {
+    // Include pyruntime.o only when this program actually uses Python, and
+    // only when it was built (a machine without python3-dev has no .o).
+    // Either signal counts: the flag covers a direct compile, the symbol scan
+    // covers a cache-served module that skipped codegen.
+    bool needsPython = gProgramUsesPython || objectNeedsPython(objPath);
+    if (needsPython && stat("pyruntime.o", &st) == 0) {
         args.push_back("pyruntime.o");
         // Detect python3-config linker flags. The command here is a fixed
         // literal (no user input), so popen is safe; the *output* is tokenized
@@ -4679,6 +4723,11 @@ public:
         add("flint_py_run", voidTy, {i8PtrTy}, false);
         add("flint_py_fini", voidTy, {}, false);
         add("flint_py_eval_int", i64Ty, {i8PtrTy}, false);
+        // py_eval is integer-only (it calls PyLong_AsLongLong), so Python's
+        // `/` -- which returns a float even for ints -- raised TypeError for
+        // almost every arithmetic expression. py_eval_float takes a double and
+        // accepts an int result too.
+        add("flint_py_eval_float", llvm::Type::getDoubleTy(*ctx), {i8PtrTy}, false);
         add("flint_bounds_check", voidTy, {i64Ty, i64Ty}, false);
         // B1: cold-mark the panic/bounds declarations so the optimizer lays
         // panic blocks out of hot blocks. Checked-by-default unchanged.
@@ -7331,7 +7380,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
     }
 
     void emitPythonBlock(PyBlockStmtAST* py) {
-        hasPython = true;
+        hasPython = true; markUsesPython();
         for (auto& code : py->codeStrings) {
             auto* str = builder->CreateGlobalString(code, "pycode");
             auto it = functionMap.find("flint_py_run");
@@ -7649,12 +7698,15 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             return builder->CreateCall(createFn, {wrapperPtr, voidArg}, "thread_id");
         }
 
-        if (call->callee == "py_eval") {
-            hasPython = true;
-            if (call->args.size() != 1) { return codegenError("py_eval() needs one string arg"); }
+        if (call->callee == "py_eval" || call->callee == "py_eval_float") {
+            hasPython = true; markUsesPython();
+            const bool wantFloat = (call->callee == "py_eval_float");
+            if (call->args.size() != 1) {
+                return codegenError(call->callee + "() needs one string arg");
+            }
             auto* arg = emitExpr(call->args[0].get());
             if (!arg) return nullptr;
-            auto it = functionMap.find("flint_py_eval_int");
+            auto it = functionMap.find(wantFloat ? "flint_py_eval_float" : "flint_py_eval_int");
             if (it != functionMap.end()) return builder->CreateCall(it->second, {arg});
             return nullptr;
         }
@@ -8867,7 +8919,7 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
         return nullptr;
     }
     if (callee == "py_eval") {
-        cg->hasPython = true;
+        cg->hasPython = true; markUsesPython();
         if (args.size() != 1) { parseError("py_eval() needs one string arg"); return nullptr; }
         auto it = cg->functionMap.find("flint_py_eval_int");
         if (it != cg->functionMap.end()) return cg->builder->CreateCall(it->second, {args[0]});
@@ -9609,7 +9661,7 @@ void Parser::parseParallelForStmtEmit() {
 }
 
 void Parser::parsePythonBlockEmit() {
-    cg->hasPython = true;
+    cg->hasPython = true; markUsesPython();
     consume(TokenType::LBRACE, "expected '{' after 'python'");
     while (check(TokenType::STRING_LITERAL)) {
         auto* strVal = cg->builder->CreateGlobalString(peek().lexeme, "pycode");
