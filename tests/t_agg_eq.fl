@@ -1,0 +1,49 @@
+# Equality on aggregates.
+#
+# `==` on struct operands used to abort the compiler:
+#
+#     assertion "Invalid operand types for ICmp instruction" failed
+#
+# ICmp is invalid IR for a struct, so any `x == y` on a struct or enum killed
+# the compiler rather than producing a diagnostic.
+#
+# The lowering is field-by-field, and RECURSES: a struct field that is itself a
+# struct must be compared structurally, not by pointer value, which would be
+# silently wrong rather than loudly broken. memcmp was rejected for this
+# reason -- padding is indeterminate, so byte equality is not value equality,
+# and memcmp cannot order values at all.
+#
+# An enum compares its tag first, then its payload, so two different variants
+# of the same enum are never equal just because their payload bytes match.
+
+struct Inner { a: i64 }
+
+struct Outer {
+    i: Inner,
+    b: i64,
+    f: f64,
+}
+
+struct Simple { x: i64, y: i64 }
+
+fn main() {
+    # Plain struct equality.
+    a = Simple { x: 1, y: 2 }
+    b = Simple { x: 1, y: 2 }
+    c = Simple { x: 9, y: 9 }
+    print(a == b)
+    print(a == c)
+    print(a != c)
+
+    # Nested: compared structurally, not by pointer.
+    n1 = Outer { i: Inner { a: 5 }, b: 6, f: 1.5 }
+    n2 = Outer { i: Inner { a: 5 }, b: 6, f: 1.5 }
+    n3 = Outer { i: Inner { a: 7 }, b: 6, f: 1.5 }
+    n4 = Outer { i: Inner { a: 5 }, b: 6, f: 2.5 }
+    print(n1 == n2)
+    # A difference in a nested field must be detected.
+    print(n1 == n3)
+    # A difference in a float field must be detected too.
+    print(n1 == n4)
+
+}

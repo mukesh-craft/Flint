@@ -1760,13 +1760,6 @@ struct EnumConstructAST : ExprAST {
 // without threading a parser through every type query.
 static std::unordered_map<std::string, std::vector<std::pair<std::string, Type>>> gStructFieldTypes;
 
-// Variable name -> declared type, at file scope.
-//
-// exprFlintType is static and gets no symbol table, so a variable read fell
-// through to i64. That made `p.x` type as i64 even when the field is f64, and
-// `first<T>(p.x)` silently instantiated T as i64. Populated from every
-// declaration the parser sees.
-static std::unordered_map<std::string, Type> gVarTypes;
 
 struct MatchArm {
     std::string enumName;
@@ -2437,7 +2430,6 @@ public:
         for (auto& p : fn->params) {
             declaredVars.insert(p.first);
             varTypeMap[p.first] = p.second;
-            gVarTypes[p.first] = p.second;
         }
         fn->bodyStart = pos;
         fn->body = parseBlock();
@@ -2743,7 +2735,6 @@ private:
         for (auto& p : params) {
             declaredVars.insert(p.first);
             varTypeMap[p.first] = p.second;
-            gVarTypes[p.first] = p.second;
         }
         
         bool isDecl = !check(TokenType::LBRACE);
@@ -4196,7 +4187,6 @@ private:
             for (auto& p : lambda->params) {
                 declaredVars.insert(p.first);
                 varTypeMap[p.first] = p.second;
-            gVarTypes[p.first] = p.second;
             }
             lambda->body = parseExpression();
             // NOTE: restore by COPY, not move — capture detection below
@@ -5622,8 +5612,18 @@ public:
     // opaque handle or a str vs a number); it reuses the same reasoning as
     // Parser::inferType but is a free function so the inference pass can call
     // it before the Parser's per-function type environment is set up.
+    // `st` is the live symbol table when the caller has one. exprFlintType is
+    // static because the type-inference walkers are, so it cannot reach
+    // Codegen::symTable on its own -- which is why a variable used as a
+    // generic argument fell through to i64 and made `first<T>(p.x)` infer T as
+    // i64 even when the field was f64.
+    //
+    // A file-scope variable-type table was tried first and removed: it cannot
+    // see inference-only locals, so it half-worked, and a half-working mirror
+    // of the symbol table is worse than none -- it goes stale silently.
     static Type exprFlintType(ExprAST* e,
-                              const std::unordered_map<std::string, Type>* vars = nullptr) {
+                              const std::unordered_map<std::string, Type>* vars = nullptr,
+                              SymbolTable* st = nullptr) {
         if (!e) return Type::i64();
         switch (e->kind) {
             case NodeKind::String: return Type::str();
@@ -5633,10 +5633,12 @@ public:
                     auto it = vars->find(v->name);
                     if (it != vars->end()) return it->second;
                 }
-                // No `vars` map (the codegen path): fall back to the
-                // file-scope table so the declared type survives.
-                auto git = gVarTypes.find(v->name);
-                if (git != gVarTypes.end()) return git->second;
+                // The live symbol table, when the caller has one: this is the
+                // authoritative type for a variable, and it covers locals that
+                // were never annotated.
+                if (st) {
+                    if (const Symbol* sym = st->lookup(v->name)) return sym->type;
+                }
                 return Type::i64();
             }
             case NodeKind::VarDecl: {
@@ -5672,7 +5674,7 @@ public:
             // instantiated T as i64 and compiled against the wrong signature.
             case NodeKind::FieldAccess: {
                 auto* f = static_cast<FieldAccessAST*>(e);
-                Type base = exprFlintType(f->base.get(), vars);
+                Type base = exprFlintType(f->base.get(), vars, st);
                 if (base.kind == TypeKind::Struct) {
                     auto sit = gStructFieldTypes.find(base.structName);
                     if (sit != gStructFieldTypes.end()) {
@@ -6471,6 +6473,29 @@ public:
                     else return nullptr;
                     auto* cmp = builder->CreateFCmp(pred, l, r, "fcmp");
                     return builder->CreateZExt(cmp, i64Ty, "fcmp_ext");
+                }
+                // Aggregate operands: `==` and `!=` lower to a field-by-field
+                // comparison.
+                //
+                // ICmp on a struct is invalid IR and LLVM asserted, aborting the
+                // compiler on `x == y` for any struct or enum. Comparing the
+                // raw bytes with memcmp would be wrong twice over: padding is
+                // indeterminate, and memcmp cannot order values.
+                //
+                // Field-by-field is the correct lowering and needs no runtime
+                // helper and no ABI change -- the same shape the bounds check
+                // already uses. It must RECURSE: a struct field that is itself
+                // a struct would otherwise be compared by pointer, which is
+                // silently wrong rather than loudly broken.
+                if (l->getType()->isStructTy() || r->getType()->isStructTy()) {
+                    if (c->op != "==" && c->op != "!=") {
+                        return codegenError(std::string("'") + c->op +
+                            "' is not defined for structs or enums; use == or !=");
+                    }
+                    llvm::Value* eq = emitAggregateEqual(l, r, 0);
+                    if (!eq) return nullptr;
+                    if (c->op == "==") return builder->CreateZExt(eq, i64Ty, "agg_eq");
+                    return builder->CreateZExt(builder->CreateNot(eq), i64Ty, "agg_ne");
                 }
                 llvm::CmpInst::Predicate pred;
                 if (c->op == "==") pred = llvm::CmpInst::ICMP_EQ;
@@ -7382,6 +7407,37 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         return builder->CreateLoad(enumTy, alloca, ec->enumName + "_val");
     }
 
+    // Structural equality for struct and enum operands.
+    //
+    // Returns an i1. For an enum the tag is compared first and, when it
+    // matches, the payload fields as well -- two different variants of the
+    // same enum must not compare equal just because their payload bytes
+    // happen to match. Recursion carries `depth` so a malformed self-referential
+    // type cannot loop forever; Flint has no recursive struct values today, so
+    // the cap is a guard rather than a real limit.
+    llvm::Value* emitAggregateEqual(llvm::Value* l, llvm::Value* r, int depth) {
+        if (!l || !r || depth > 16) return nullptr;
+        llvm::Type* t = l->getType();
+        if (!t->isStructTy()) {
+            // Scalars nested inside an aggregate.
+            llvm::Value* rv = (r->getType() == t) ? r
+                : builder->CreateSIToFP(r, t, "agg_cvt");
+            auto* cmp = t->isFloatingPointTy() ? builder->CreateFCmp(llvm::CmpInst::FCMP_OEQ, l, rv, "aggf")
+                                               : builder->CreateICmpEQ(l, rv, "aggi");
+            return cmp;
+        }
+        llvm::Value* result = nullptr;
+        unsigned n = cast<llvm::StructType>(t)->getNumElements();
+        for (unsigned i = 0; i < n; i++) {
+            llvm::Value* lf = builder->CreateExtractValue(l, {i}, "agg_l");
+            llvm::Value* rf = builder->CreateExtractValue(r, {i}, "agg_r");
+            llvm::Value* eq = emitAggregateEqual(lf, rf, depth + 1);
+            if (!eq) return nullptr;
+            result = result ? builder->CreateAnd(result, eq, "agg_and") : eq;
+        }
+        return result ? result : llvm::ConstantInt::getTrue(*ctx);
+    }
+
     llvm::Value* emitMatch(MatchExprAST* mn) {
         auto* scrutinee = emitExpr(mn->scrutinee.get());
         if (!scrutinee) return nullptr;
@@ -7765,7 +7821,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                         if (sym) {
                             inferred = sym->type;
                         } else {
-                            inferred = exprFlintType(arg, nullptr);
+                            inferred = exprFlintType(arg, nullptr, &symTable);
                         }
                     } else {
                         inferred = exprFlintType(arg, nullptr);
