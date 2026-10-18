@@ -97,6 +97,32 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
   direct `./flint-*` execution fails on Termux (shebang), always
   invoke via `python3`
 
+## Strings: escapes and interpolation
+
+Flint strings are `"..."` with C-style escapes **and** `{identifier}`
+interpolation. The two interact, which is worth stating plainly because it is
+the single most common surprise (it surprised this project twice while writing
+the SQLite and FTS5 fixtures):
+
+```flint
+name = "world"
+print("hello {name}")                  # -> hello world
+print("json: {{\"a\": 42}}")           # -> json: {"a": 42}
+print("tab:\there hex:\x41 uni:\u00e9")  # escapes: \n \t \r \\ \" \xHH \uHHHH
+```
+
+Rules:
+
+- `{{` and `}}` are the escapes for a **literal** brace. Anything else after a
+  single `{` is treated as an interpolation of an identifier, so `{{1}}` (not
+  `{1}`) is how you write the number 1 in braces — SQL, JSON and printf-style
+  text all need this.
+- Interpolation takes an **identifier**. `{name}` works; `{1}` and
+  `{a + b}` are not interpolated expressions and fail loudly.
+- A JSON document with quoted keys is written `{{\"key\": value}}`.
+
+`tests/t_strings.fl` pins all of this, and `tests/run.sh` gates it.
+
 ## Syntax
 
 The program below was executed verbatim (`rc=0`) to verify this section:
@@ -635,7 +661,7 @@ What exists and how to run it (file lists and line counts verified
 | Suite | Files | Lines | Run |
 |-------|-------|-------|-----|
 | `tests/` smoke tests | 5 `.fl` (`t_hello` 8, `t_arith` 26, `t_flow` 48, `t_funcs` 15, `t_types` 23) | 120 | `bash tests/run.sh ./flintc` |
-| `tests/` runners | `run.sh` 63, `run_tutorial.sh` 18, `test_registry.sh` 43 | 124 | `bash tests/test_registry.sh` |
+| `tests/` runners | `run.sh` 65, `run_tutorial.sh` 18, `test_registry.sh` 43 | 126 | `bash tests/test_registry.sh` |
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | loop above |
 | `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) + 2 Rust oracle mirrors | 386 | `clang -O2` / `g++` / `python3` / `rustc` |
 | `runtime/rust/` stdlib modules | `no_std` Rust: CSV parser, SHA-256/HMAC/AES-256-CTR/GCM (RustCrypto), SQLite wrapper over libsqlite3 | — | `bash tests/test_rust_stdlib.sh ./flintc` |
