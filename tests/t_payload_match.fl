@@ -1,0 +1,59 @@
+# Multi-payload enum patterns, in a function rather than main.
+#
+# This file is the regression test for a compiler HANG. `match` on a payload
+# enum worked only inside `main`; anywhere else the compiler never terminated.
+#
+# Root cause, in two parts:
+#
+#   1. The match-ARM parser accepted exactly one binding name:
+#          if (match(LPAREN)) { arm.bindName = consume(IDENTIFIER); consume(RPAREN); }
+#      so `Node(a, b)` was a parse error.
+#   2. `consume()` reported a parse error but did NOT advance the token cursor,
+#      so the enclosing `while (!check(RBRACE) && !isAtEnd())` arm loop could
+#      not make progress. It spun forever: no message, no exit code, no CPU
+#      spike -- just a hang.
+#
+# Both are fixed: patterns bind one name per payload field, and consume()
+# always advances when recovering from an error.
+
+enum Tree {
+    Leaf,
+    Node(i64, i64),
+    Pair(f64, i64),
+    Triple(i64, i64, i64),
+}
+
+fn sum(t: Tree) -> i64 {
+    match t {
+        Tree.Leaf => { return 0 },
+        Tree.Node(a, b) => { return a + b },
+        Tree.Pair(x, n) => { return n },
+        Tree.Triple(a, b, c) => { return a + b + c },
+    }
+    return -1
+}
+
+fn kind(t: Tree) -> i64 {
+    # Block arms with an explicit return. An expression-arm match followed by
+    # `return -1` discards the match value and always yields -1, which is the
+    # language's current semantics and is not what this test is about.
+    match t {
+        Tree.Leaf => { return 0 },
+        Tree.Node(a, b) => { return a * b },
+        Tree.Pair(x, n) => { return n },
+        Tree.Triple(a, b, c) => { return a * b * c },
+    }
+    return -1
+}
+
+fn main() {
+    print(sum(Tree.Node(3, 4)))
+    print(sum(Tree.Leaf))
+    print(sum(Tree.Triple(1, 2, 3)))
+    print(sum(Tree.Pair(1.5, 9)))
+    print(kind(Tree.Node(3, 4)))
+    print(kind(Tree.Triple(2, 3, 4)))
+    print(kind(Tree.Leaf))
+    # Bindings are ordinary locals: usable in arithmetic and nested in a call.
+    print(sum(Tree.Node(sum(Tree.Node(1, 2)), sum(Tree.Node(3, 4)))))
+}
