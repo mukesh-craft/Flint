@@ -5434,7 +5434,17 @@ public:
         add("fa_default_arena",  tPtr, {}, false);
         add("farena_used",       i64Ty, {tPtr}, false);
         add("farena_reset",      voidTy, {tPtr}, false);
-        add("farena_init",       tPtr, {}, false);
+        // `void farena_init(FArena* a, size_t initial_size)` takes TWO arguments
+        // and returns nothing. It was registered as `(tPtr, {})` -- zero
+        // parameters, and a pointer return -- so any call failed to build:
+        // examples/ai_arch_bench.fl reported "'farena_init' expects 0
+        // argument(s), got 2" and, before the call-signature check existed,
+        // leaked raw LLVM IR instead. A hand-written registration that
+        // disagrees with the C definition is a silent trap, so it now matches
+        // runtime/flint_ai.c:71.
+        add("farena_init",       voidTy, {tPtr, i64Ty}, false);
+        add("farena_destroy",    voidTy, {tPtr}, false);
+        add("farena_alloc",      tPtr, {tPtr, i64Ty}, false);
         add("fcheckpoint_init",  voidTy, {}, false);
 
         // ──────────────────────────────────────────────────────
@@ -8066,6 +8076,39 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             // correct code, and the reason Str/Map could never be non-Copy.
             // Ownership transfer is expressed explicitly at assignment, which
             // is the only place a binding is actually consumed.
+        }
+        // Check the call against the declared signature before building it.
+        //
+        // Without this, a builtin invoked with the wrong argument type produced
+        // IR that LLVM's own verifier rejected, and the user saw
+        //
+        //     { ptr, i64 }  call void @flint_array_free(ptr %s29)
+        //     Call parameter type does not match function signature!
+        //
+        // -- a message about the compiler's internals, emitted after a first
+        // error had already been reported, so it read as a cascade of compiler
+        // faults rather than one mistake in the user's program. Call it what it
+        // is: a type error, at the call, with the expected and actual types.
+        //
+        // Pointers are compared loosely: Flint passes aggregate handles by
+        // value and raw pointers interchangeably in places, and rejecting that
+        // would be a false positive on correct code.
+        if (llvm::FunctionType* fty = it->second->getFunctionType()) {
+            if (fty->getNumParams() != args.size()) {
+                return codegenError("'" + call->callee + "' expects " +
+                    std::to_string(fty->getNumParams()) + " argument(s), got " +
+                    std::to_string(args.size()));
+            }
+            for (size_t i = 0; i < args.size(); i++) {
+                if (!args[i]) continue;
+                llvm::Type* want = fty->getParamType(i);
+                llvm::Type* got = args[i]->getType();
+                bool bothPointers = want->isPointerTy() && got->isPointerTy();
+                if (want == got || bothPointers) continue;
+                return codegenError("argument " + std::to_string(i + 1) + " of '" +
+                    call->callee + "' has type " + llvmTypeToString(got) +
+                    ", but '" + call->callee + "' expects " + llvmTypeToString(want));
+            }
         }
         return builder->CreateCall(it->second, args);
     }
