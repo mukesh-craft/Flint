@@ -3465,7 +3465,7 @@ token.**
 
 Ordered by severity. Each was reproduced.
 
-### B1. `f64` array literals silently produce garbage — NO DIAGNOSTIC
+### B1. Float TENSOR indexing silently produces garbage — NO DIAGNOSTIC
 **Severity: highest. This is the worst class of compiler bug: a wrong answer
 with no error.**
 
@@ -3474,17 +3474,38 @@ fn main() { a = [1.5, 2.5]  print(a[0]) }   ->  48     (should be 1.5)
 fn main() { b = [1, 2, 3]   print(b[0]) }   ->  1      (correct)
 ```
 
-Mechanism: 2.1. The literal is stored as i64 bits and read back through an
-i64 GEP, so the caller sees a bit pattern reinterpreted as an integer. No
-check ever compares the element's LLVM type to `i64Ty`.
+**CORRECTED DIAGNOSIS (2026-10-18, after M0).** The earlier write-up blamed
+plain array element-type erasure. That is the underlying cause (2.1) but not
+the proximate one, and the distinction matters:
 
-**Fix (do NOT widen arrays here).** At `Parser::emitArrayLiteralEmit` (`:8826`)
-and the AST emitter (`:6975-7027`), after building the element list, if any
-element's LLVM type is not `i64Ty`, emit:
-`codegenError("array literals must hold i64 values (got f64)")`.
-Rejecting loudly is worth more than a half-correct f64 array. Widening is a
-separate, deliberately-gated milestone. A language that lies is worse than a
-language that refuses.
+- `[1.5, 2.5]` is claimed by `Parser::tryParseTensorEmit` (`:8331`) as a
+  **rank-1 f64 tensor**, not as an array. The tensor path runs BEFORE the array
+  path (`:8495`) and does not soft-fail for float elements.
+- The tensor is built by `flint_create_*` and returns a handle that is
+  `{ptr, i64}` at the LLVM level — indistinguishable from an array slice.
+- `Parser::emitIndexEmit` (`:8861`) unconditionally does
+  `CreateGEP(i64Ty, dataPtr, index)` and `CreateLoad(i64Ty, ...)`, so indexing
+  a float tensor reinterprets float bits as an integer.
+
+So `[1.5, 2.5]` itself is CORRECT and must not be rejected — rejecting it would
+break float tensors. The defect is that `[]` index access has no way to tell a
+tensor from an array, and silently produces a wrong number.
+
+**Fix requires tensor type tracking**, which does not exist today: `inferType`
+never returns a tensor type and `TypeKind` has no Tensor member. The narrow,
+low-risk path is to give `emitIndexEmit` provenance — mark tensor-typed values
+so it can refuse with `tensor values cannot be indexed with []; use
+flint_tensor_get(t, i)`. The thorough path is a real Tensor type in the type
+system, which is larger and needs the Rust array representation first.
+
+**Partially fixed in M0:** non-i64 elements that DO reach the array path (for
+example strings) are now rejected with a diagnostic instead of being stored
+into an i64 slot. See 07d2df1. The tensor-indexing hazard above remains OPEN.
+
+**Fix applied in M0 (07d2df1).** `Parser::emitArrayLiteralEmit` (`:8908`) and
+the AST emitter now reject any non-i64 element with a Flint diagnostic naming
+the element index and its type. Widening arrays to f64 remains a separate,
+deliberately-gated milestone.
 
 ### B2. `f64` generic leaks raw LLVM IR
 ```
