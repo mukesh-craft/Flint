@@ -4693,6 +4693,19 @@ public:
         // ──────────────────────────────────────────────────────
         auto ptrTy3 = llvm::PointerType::get(*ctx, 0);
         // Vec
+        // Cryptography (runtime/rust/src/crypto.rs, RustCrypto primitives).
+        // Each call returns the HEX LENGTH of its result; the hex text itself
+        // lives in a module-owned static buffer that stays valid until the next
+        // crypto call, and is NUL-terminated so it can be used as a Flint str
+        // directly. -1 means failure: read flint_crypto_error() for the reason.
+        add("flint_sha256_hex", i64Ty, {i8PtrTy}, false);
+        add("flint_hmac_sha256_hex", i64Ty, {i8PtrTy, i8PtrTy}, false);
+        add("flint_aes256_ctr_crypt_hex", i64Ty, {i8PtrTy, i8PtrTy, i8PtrTy}, false);
+        add("flint_aes256_gcm_encrypt_hex", i64Ty, {i8PtrTy, i8PtrTy, i8PtrTy, i8PtrTy}, false);
+        add("flint_aes256_gcm_decrypt_hex", i64Ty, {i8PtrTy, i8PtrTy, i8PtrTy, i8PtrTy}, false);
+        add("flint_crypto_error", i8PtrTy, {}, false);
+        add("flint_crypto_out_bytes", i64Ty, {}, false);
+        add("flint_crypto_last", i8PtrTy, {}, false);
         // CSV parsing (runtime/rust — Rust stdlib module, see flint_std.o).
         // flint_csv_get returns a string the caller releases with
         // flint_csv_free; allocation and release stay in Rust, so no allocator

@@ -1,0 +1,38 @@
+# Cryptography: HMAC-SHA256 and AES-256, in Rust (runtime/rust/src/crypto.rs).
+#
+# Every call returns the hex LENGTH; the hex text itself lives in a module-owned
+# buffer until the next crypto call, so results are read before the next call.
+
+fn main() {
+    # SHA-256 of "abc" (FIPS 180-4 vector).
+    n = flint_sha256_hex("abc")
+    print(n)
+    print(flint_crypto_last())
+
+    # HMAC-SHA256, RFC 4231 case 2: key "Jefe".
+    n2 = flint_hmac_sha256_hex("Jefe", "what do ya want for nothing?")
+    print(n2)
+
+    # AES-256-GCM round trip: encrypt then decrypt, and confirm a tampered tag
+    # is rejected instead of returning garbage.
+    key = "0000000000000000000000000000000000000000000000000000000000000000"
+    nonce = "000000000000000000000000"
+    sealed_len = flint_aes256_gcm_encrypt_hex(key, nonce, "header", "attack at dawn")
+    print(sealed_len)
+    # Copy out: the shared buffer is reused by the NEXT crypto call.
+    sealed = flint_str_concat(flint_crypto_last(), "")
+    print(sealed)
+
+    opened_len = flint_aes256_gcm_decrypt_hex(key, nonce, "header", sealed)
+    print(opened_len)
+
+    # Wrong AAD must fail authentication, not "decrypt" to nonsense.
+    bad = flint_aes256_gcm_decrypt_hex(key, nonce, "tampered", sealed)
+    print(bad)
+    print(flint_crypto_error())
+
+    # Wrong key length is rejected loudly.
+    print(flint_aes256_ctr_crypt_hex("00", nonce, "data"))
+
+    print("crypto-ok")
+}
