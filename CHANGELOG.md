@@ -15,6 +15,15 @@ All notable changes to Flint are documented here. Format follows
   server, and the README gap list no longer calls the server untested.
 
 ### Added
+- **SQLite FTS5 (full-text search), proven end to end.** Termux's libsqlite3
+  is built with FTS5, rtree, json1 and the deterministic math functions, so
+  this needed **no new code at all** — the existing Rust sqlite wrapper already
+  speaks them. `tests/t_fts5.fl` proves what a language can actually reach:
+  `CREATE VIRTUAL TABLE ... USING fts5`, `MATCH` with ranking, a two-term query,
+  a zero-result query (0 rows, not an error), `snippet()` with highlight
+  markers, and `sqrt`. The distinction matters: "the library supports it" and
+  "a Flint program can use it" are different claims, and only the second one is
+  a feature.
 - **HTTPS works.** `flint_http_get` / `flint_http_post` previously *refused*
   `https://` outright (`parse_http_url` returned false), which made every modern
   API unreachable from Flint — the single largest stdlib gap in the audit.
