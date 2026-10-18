@@ -1,0 +1,26 @@
+# Brotli decompression, called from Flint.
+# The compressed bytes below were produced by the reference `brotli` CLI
+# (quality 9), not by this runtime, so decoding them proves interoperability.
+
+fn main() {
+    compressed = "\xc1\xf8Y\x00 \xda6Ju!\xd9\x92\xa1(\x9e\x8a<\x93\x93?G\x81\xea\xc0\xbc\xb2\x95\xcd\x82f\x0b\xaf<\x1d\x91\x17e\xb51\xc1-\xfa\xc08\xcd\x02\x00\xd5\xfd\x87\xc0d\x00\x00"
+
+    # 54 bytes in, 2880 bytes out: the stream exercises backreferences
+    # rather than literals.
+    print(flint_brotli_decompress(compressed, 54, 0) == 1)
+    print(flint_brotli_len() == 2880)
+
+    decoded = flint_brotli_last()
+    print(flint_str_substring(decoded, 0, 44) == "The quick brown fox jumps over the lazy dog.")
+
+    # The output limit is enforced: the same stream against a 1 KiB cap fails
+    # rather than allocating past the limit.
+    print(flint_brotli_decompress(compressed, 54, 1024) == 0)
+    print(flint_str_length(flint_brotli_error()) > 0)
+
+    # Garbage, truncation and an empty buffer are all rejected.
+    junk = "\x00\x01\x02\x03\x04\x05\x06\x07"
+    print(flint_brotli_decompress(junk, 8, 0) == 0)
+    print(flint_brotli_decompress(compressed, 10, 0) == 0)
+    print(flint_brotli_decompress(compressed, 0, 0) == 0)
+}
