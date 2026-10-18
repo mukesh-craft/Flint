@@ -7418,6 +7418,28 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
     llvm::Value* emitAggregateEqual(llvm::Value* l, llvm::Value* r, int depth) {
         if (!l || !r || depth > 16) return nullptr;
         llvm::Type* t = l->getType();
+        // Array fields are compared element-wise.
+        //
+        // An enum's LLVM type is `{ i8, [N x i8] }`: a tag followed by a PACKED
+        // payload array, not a scalar. The scalar path below reached
+        // CreateICmpEQ on that array, which is invalid IR and aborted the
+        // compiler with
+        //     assertion "Invalid operand types for ICmp instruction" failed
+        // so `E.B(3) == E.B(3)` killed the compiler while struct equality --
+        // whose fields are all scalars -- worked.
+        if (t->isArrayTy() || r->getType()->isArrayTy()) {
+            // A packed payload array inside an enum. Comparing it byte-wise is
+            // NOT correct here: the array is sized to the widest variant, so
+            // bytes past the payload a given variant actually writes are
+            // whatever was on the stack. That made two identical
+            // `Some2(3, 4)` values compare UNEQUAL -- a confidently wrong
+            // answer, which is worse than the abort this replaced.
+            //
+            // Doing it properly needs the number of payload bytes each variant
+            // writes, which lives in the enum definition, not in the LLVM
+            // type. Until that is threaded through, refuse rather than lie.
+            return nullptr;
+        }
         if (!t->isStructTy()) {
             // Scalars nested inside an aggregate.
             llvm::Value* rv = (r->getType() == t) ? r
@@ -8937,6 +8959,27 @@ llvm::Value* Parser::emitArithOpEmit(char op, llvm::Value* l, llvm::Value* r) {
 }
 
 llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* r) {
+    // Aggregate operands are handled FIRST, before every other branch.
+    //
+    // Placing this at the end meant the earlier branches could still build an
+    // ICmp on a struct: `||` and `&&` do CreateICmpNE against a zero constant,
+    // and the float branch tests isDoubleTy on both sides. Any of those on a
+    // struct operand aborts the compiler with
+    //     assertion "Invalid operand types for ICmp instruction" failed
+    // before the aggregate lowering was ever reached -- which is why struct
+    // equality appeared to work on one path while enums died on both.
+    if (l && r && (l->getType()->isStructTy() || r->getType()->isStructTy())) {
+        const std::string& o = opTok.lexeme;
+        if (o != "==" && o != "!=") {
+            parseError("'" + o + "' is not defined for structs or enums; use == or !=");
+            return nullptr;
+        }
+        llvm::Value* eq = cg->emitAggregateEqual(l, r, 0);
+        if (!eq) return nullptr;
+        if (o == "==")
+            return cg->builder->CreateZExt(eq, cg->i64Ty, "agg_eq");
+        return cg->builder->CreateZExt(cg->builder->CreateNot(eq), cg->i64Ty, "agg_ne");
+    }
     TokenType tt = opTok.type;
     if (tt == TokenType::AT) {
         auto it = cg->functionMap.find("fao_matmul");
@@ -9068,25 +9111,6 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
         else if (op == ">=") pred = llvm::CmpInst::FCMP_OGE;
         auto* cmp = cg->builder->CreateFCmp(pred, l, r, "fcmp");
         return cg->builder->CreateZExt(cmp, cg->i64Ty, "fcmp_ext");
-    }
-    // Aggregate operands: `==`/`!=` compare field-by-field, recursively.
-    //
-    // The single-pass parser emits comparisons here while the AST path emits
-    // them in Codegen, and the two sites drifted -- the AST one got the
-    // aggregate lowering and this one did not, so `E.B(3) == E.B(3)` aborted
-    // with "Invalid operand types for ICmp instruction" while struct equality
-    // worked. Same lowering, same recursion, so a nested struct field is
-    // compared structurally rather than by pointer value.
-    if (l->getType()->isStructTy() || r->getType()->isStructTy()) {
-        if (opTok.lexeme != "==" && opTok.lexeme != "!=") {
-            parseError("'" + opTok.lexeme + "' is not defined for structs or enums; use == or !=");
-            return nullptr;
-        }
-        llvm::Value* eq = cg->emitAggregateEqual(l, r, 0);
-        if (!eq) return nullptr;
-        if (opTok.lexeme == "==")
-            return cg->builder->CreateZExt(eq, cg->i64Ty, "agg_eq");
-        return cg->builder->CreateZExt(cg->builder->CreateNot(eq), cg->i64Ty, "agg_ne");
     }
 
     llvm::CmpInst::Predicate pred;
