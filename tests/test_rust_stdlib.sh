@@ -94,6 +94,16 @@ else
     bad "JIT: tests/t_sqlite.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
 fi
 
+# Encoders, password hashing and system info, called from Flint (not just in
+# the crate's own tests).
+if out="$(timeout -s KILL 600 "$FLINTC" tests/t_stdlib_ext.fl 2>&1)"; then
+    expect_all "JIT: encoders, Argon2id, system info" "$out" \
+        "3808858755" "MZXW6YTBOI======" "hello%20world" \
+        "\$argon2id\$" "android" "stdlib-ok"
+else
+    bad "JIT: tests/t_stdlib_ext.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+fi
+
 # FTS5, snippet() and the math functions: the SQLite build on this device has
 # them compiled in, and this proves a Flint program can actually use them --
 # "the library supports it" and "a language can reach it" are different claims.

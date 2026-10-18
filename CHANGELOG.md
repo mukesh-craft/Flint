@@ -15,6 +15,47 @@ All notable changes to Flint are documented here. Format follows
   server, and the README gap list no longer calls the server untested.
 
 ### Added
+- **Argon2id password hashing** (`runtime/rust/src/argon2.rs`), the OWASP
+  recommendation — the crypto module had HMAC/SHA/AES but nothing suitable for
+  stored credentials, and hashing a password with a *fast* primitive is the
+  mistake this closes. `flint_argon2_hash` defaults to 19 MiB / 2 iterations
+  (OWASP 2024 minimum); `flint_argon2_hash_params` takes explicit costs for
+  tests and future tuning. Returns a **PHC string** carrying the algorithm,
+  version and parameters, so the cost can be raised later without invalidating
+  stored hashes — verified by a test that hashes with 64 KiB, then 128 KiB, and
+  checks both still verify. `flint_argon2_verify` returns 1 (match), 0 (wrong
+  password) or **-1 (stored hash unusable)**: a login path must be able to tell
+  those apart. Empty passwords are refused. 9 crate tests.
+- **An arena allocator for the stdlib modules** (`runtime/rust/src/arena.rs`).
+  Codecs need `alloc`, and these modules deliberately have no allocator — that
+  is what keeps them JIT-loadable on Android and free of `std` symbols. Bounded
+  bump allocator: `dealloc` is a no-op, memory is reclaimed by `reset()` at the
+  start of each entry point, exhaustion returns null so Rust aborts loudly
+  rather than handing back a short buffer, and a spin lock keeps two threads
+  from claiming the same region. Two bugs its own tests caught: alignment was
+  computed on the bump *offset* rather than the absolute address (the arena's
+  base is only 8-byte aligned), and the test for that was missing.
+- **Portable system information** (`runtime/rust/src/system.rs`) for Linux,
+  macOS and Windows: platform tag, CPU count, memory total/available, uptime, OS
+  version, temp dir. Machine facts only — camera, sensors, contacts and
+  notifications are platform APIs with permission models, not libraries, so
+  claiming them would be a promise this runtime cannot keep cross-platform.
+  Measured on the way: `/proc/uptime` and `/proc/meminfo` are permission-denied
+  on modern Android, and `sysconf` indices are libc-specific (bionic does not
+  implement `_SC_NPROCESSORS_ONLN`, verified), so the contract the tests enforce
+  is "a plausible value, or -1 with a reason" — never a plausible wrong number.
+- **zstd decompression** (`runtime/rust/src/compress.rs`) via `ruzstd`, no_std
+  with `default-features = false`. Output is refused, never truncated, above
+  16 MiB.
+- **Encoders and utilities** (`runtime/rust/src/encoding.rs`): CRC32C, base32,
+  base58, percent-encode/decode, UUID v4 and v7. Every one pinned to published
+  vectors (RFC 3720 CRC self-tests, the RFC 4648 base32 table, RFC 3986 rules),
+  because an encoder that is subtly wrong is worse than no encoder.
+- **String escapes and interpolation, documented and gated.** Flint strings
+  interpolate `{identifier}` and `{{`/`}}` are the escapes for a literal brace.
+  That interaction is the most common surprise in the language (it surprised
+  this project twice), so README now states both rules and
+  `tests/t_strings.fl` pins them (smoke gate 27 -> 29 checks).
 - **SQLite FTS5 (full-text search), proven end to end.** Termux's libsqlite3
   is built with FTS5, rtree, json1 and the deterministic math functions, so
   this needed **no new code at all** — the existing Rust sqlite wrapper already
