@@ -80,6 +80,20 @@ else
     bad "JIT: tests/t_csv.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
 fi
 
+# SQLite: a Rust wrapper over the system libsqlite3. This is the check that
+# proves the JIT can reach a NON-libc shared library at all -- the compiler
+# dlopens libsqlite3 and publishes the sqlite3_* symbols into the ORC session.
+if out="$(timeout -s KILL 300 "$FLINTC" tests/t_sqlite.fl 2>&1)"; then
+    expect_all "JIT: sqlite create/insert/select/NULL/bad-sql" "$out" \
+        "bolt" "42" "-1" "sqlite: cannot prepare statement" "sqlite-ok"
+    case "$out" in
+        3.*) ok "JIT: sqlite version reported" ;;
+        *) bad "JIT: sqlite version reported" ;;
+    esac
+else
+    bad "JIT: tests/t_sqlite.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+fi
+
 # --- AOT path ---------------------------------------------------------------
 if timeout -s KILL 600 "$FLINTC" tests/t_csv.fl -o "$WORK/t_csv.bin" > "$WORK/aot.log" 2>&1; then
     if out="$("$WORK/t_csv.bin" 2>&1)"; then
@@ -89,6 +103,16 @@ if timeout -s KILL 600 "$FLINTC" tests/t_csv.fl -o "$WORK/t_csv.bin" > "$WORK/ao
     fi
 else
     bad "AOT: csv links" "$(tail -n 3 "$WORK/aot.log" | tr '\n' ' ')"
+fi
+
+if timeout -s KILL 600 "$FLINTC" tests/t_sqlite.fl -o "$WORK/t_sqlite.bin" > "$WORK/aot3.log" 2>&1; then
+    if out="$("$WORK/t_sqlite.bin" 2>&1)"; then
+        expect_all "AOT: sqlite behaves as in JIT" "$out" "bolt" "42" "sqlite-ok"
+    else
+        bad "AOT: sqlite binary runs" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+    fi
+else
+    bad "AOT: sqlite links" "$(tail -n 3 "$WORK/aot3.log" | tr '\n' ' ')"
 fi
 
 if timeout -s KILL 600 "$FLINTC" tests/t_crypto.fl -o "$WORK/t_crypto.bin" > "$WORK/aot2.log" 2>&1; then

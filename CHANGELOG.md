@@ -15,6 +15,23 @@ All notable changes to Flint are documented here. Format follows
   server, and the README gap list no longer calls the server untested.
 
 ### Added
+- **`runtime/rust/src/sqlite.rs`: SQLite, as a Rust wrapper over the system
+  libsqlite3.** SQLite is a C engine and there is no production-grade pure-Rust
+  one, so the choice was "bind it" or "ship nothing"; this binds it and puts
+  every safety property available on the boundary — handles are validated,
+  sqlite's pointers are copied into a module-owned arena so no C pointer ever
+  escapes to Flint, text is NUL-checked, and NULL cells come back as empty
+  strings rather than garbage.
+  Surface: `flint_sqlite_open` / `close` / `exec` / `query` / `rows` / `cols` /
+  `get` / `error` / `version`, with up to 8 concurrent connections.
+- **The compiler can now publish a shared library's symbols to the JIT**
+  (`publishJITLibrary` in src/main.cpp). ORC resolves objects and libc, but not
+  an arbitrary dlopen'd library, so a module wrapping libsqlite3 or libcurl found
+  its entry points undefined and ORC reported the failure misleadingly by naming
+  the *entry symbol* ("Symbols not found: [ main ]"). Publishing is explicit and
+  narrow: only the listed symbol names become visible, so a typo in a Flint
+  extern still fails loudly instead of resolving to something unrelated.
+  The AOT link line gains the same libraries by absolute path.
 - **`runtime/rust/src/crypto.rs`: SHA-256, HMAC-SHA256, AES-256-CTR and
   AES-256-GCM, in pure Rust.** Built on the RustCrypto primitives (`sha2`,
   `hmac`, `aes`, `aes-gcm`, `ctr`) with `default-features = false`, so the

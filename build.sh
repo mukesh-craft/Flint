@@ -202,6 +202,7 @@ if command -v cargo >/dev/null 2>&1; then
     # builtin exists in the source and is missing from the binary.
     FLINT_RUST_Syms="-u flint_csv_parse -u flint_csv_rows -u flint_csv_cols -u flint_csv_get -u flint_csv_free -u flint_csv_error -u flint_csv_arena_bytes"
     FLINT_RUST_Syms="$FLINT_RUST_Syms -u flint_sha256_hex -u flint_hmac_sha256_hex -u flint_aes256_ctr_crypt_hex -u flint_aes256_gcm_encrypt_hex -u flint_aes256_gcm_decrypt_hex -u flint_crypto_error -u flint_crypto_out_bytes -u flint_crypto_last"
+    FLINT_RUST_Syms="$FLINT_RUST_Syms -u flint_sqlite_open -u flint_sqlite_close -u flint_sqlite_exec -u flint_sqlite_query -u flint_sqlite_rows -u flint_sqlite_cols -u flint_sqlite_get -u flint_sqlite_error -u flint_sqlite_version"
     if cargo build --release --manifest-path runtime/rust/Cargo.toml >/dev/null 2>&1 \
        && ld -r $FLINT_RUST_Syms runtime/rust/target/release/libflint_std.a -o flint_std.o; then
         echo "  flint_std:    ./flint_std.o (Rust stdlib, both paths)"

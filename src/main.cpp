@@ -265,6 +265,20 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
 
     // Build the argv array directly — no shell, no string interpolation.
     std::vector<std::string> args = {"clang", objPath, "runtime.o"};
+    // C libraries the Rust stdlib modules wrap. Absolute paths beat -l flags
+    // here: Termux keeps them under $PREFIX/lib, which is not on the default
+    // linker path for every invocation.
+    struct stat libSt;
+    auto addLib = [&](const char* rel, const char* flag) {
+        char full[512];
+        if (const char* pfx = getenv("PREFIX")) {
+            snprintf(full, sizeof full, "%s/lib/%s", pfx, rel);
+            if (stat(full, &libSt) == 0) { args.push_back(full); return; }
+        }
+        if (stat(rel, &libSt) == 0) { args.push_back(rel); return; }
+        (void)flag;
+    };
+    addLib("libsqlite3.so", "-lsqlite3");
 
     // Include standard library .o files if they exist
     struct stat st;
@@ -389,6 +403,58 @@ static void runLLVMOptimizations(llvm::Module* mod, llvm::OptimizationLevel leve
 // Shared JIT object loading: runtime + AI + stdlib + python + FFI helper
 // + --link extras. Moved verbatim out of runWithJIT so --test mode uses
 // the identical setup (its bare JIT resolved nothing). Returns false + msg.
+// Publishes a shared library's exported symbols into the JIT session.
+//
+// Why this exists: the ORC session resolves symbols from loaded objects and from
+// libc, but not from an arbitrary dlopen'd library. A `no_std` Rust module that
+// wraps libsqlite3 or libcurl therefore finds `sqlite3_open_v2` undefined, and
+// ORC reports the failure misleadingly by naming the ENTRY symbol ("Symbols not
+// found: [ main ]"). Defining the symbols explicitly keeps resolution narrow
+// and explicit: only the listed names become visible, so a typo in a Flint
+// extern still fails loudly.
+//
+// Narrow by design. Publishing every symbol of a library would let a Flint
+// program resolve names it never declared.
+static bool publishJITLibrary(llvm::orc::LLJIT& JIT,
+                              const std::vector<const char*>& candidates,
+                              const std::vector<std::string>& symbols) {
+    struct stat st;
+    void* handle = nullptr;
+    char resolved[512] = {0};
+    for (const char* candidate : candidates) {
+        if (!candidate) continue;
+        const char* slash = strrchr(candidate, '/');
+        if (slash && stat(candidate, &st) != 0) continue;
+        // dlopen treats a name with no slash as a library to search for in the
+        // system paths, so an in-tree build must keep its "./" prefix.
+        if (void* h = dlopen(candidate, RTLD_NOW | RTLD_GLOBAL)) {
+            handle = h;
+            snprintf(resolved, sizeof resolved, "%s", candidate);
+            break;
+        }
+    }
+    if (!handle) return false;
+
+    llvm::orc::SymbolMap syms;
+    auto pool = JIT.getExecutionSession().getSymbolStringPool();
+    auto& poolRef = *pool;
+    for (const auto& name : symbols) {
+        if (void* addr = dlsym(handle, name.c_str())) {
+            llvm::orc::ExecutorSymbolDef def(
+                llvm::orc::ExecutorAddr::fromPtr(addr),
+                llvm::JITSymbolFlags::Callable | llvm::JITSymbolFlags::Exported);
+            syms[poolRef.intern(name)] = def;
+        }
+    }
+    if (syms.empty()) return false;
+    if (auto err = JIT.getMainJITDylib().define(llvm::orc::absoluteSymbols(std::move(syms)))) {
+        std::cerr << "JIT error: cannot publish symbols from " << resolved << ": "
+                  << llvm::toString(std::move(err)) << "\n";
+        return false;
+    }
+    return true;
+}
+
 static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>& extraObjs) {
     using namespace llvm;
     using namespace llvm::orc;
@@ -449,6 +515,25 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
                              "flint_aegis.o", "flint_chan.o", "flint_std.o"};
     for (auto* objName : stdObjs)
         if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
+    // libsqlite3: a C engine the Rust stdlib module wraps. Optional by design --
+    // a Flint program that never touches sqlite runs fine without it.
+    {
+        char cand[512];
+        std::vector<const char*> candidates = {nullptr, nullptr, nullptr};
+        if (const char* pfx = getenv("PREFIX")) {
+            snprintf(cand, sizeof cand, "%s/lib/libsqlite3.so", pfx);
+            candidates[0] = cand;
+        }
+        candidates[1] = "./libsqlite3.so";
+        candidates[2] = "/usr/lib/libsqlite3.so";
+        static const char* kSqliteSymbols[] = {
+            "sqlite3_open_v2", "sqlite3_close_v2", "sqlite3_prepare_v2",
+            "sqlite3_step", "sqlite3_finalize", "sqlite3_column_count",
+            "sqlite3_column_text", "sqlite3_errmsg", "sqlite3_changes",
+            "sqlite3_libversion"};
+        std::vector<std::string> names(std::begin(kSqliteSymbols), std::end(kSqliteSymbols));
+        publishJITLibrary(JIT, candidates, names);
+    }
     if (stat("pyruntime.o", &st) == 0 && !loadOne("pyruntime.o", true)) return false;
     // Auto-load ffi_helper.o if present (unless already listed in extraObjs)
     bool hasFfiHelper = false;
@@ -4693,6 +4778,18 @@ public:
         // ──────────────────────────────────────────────────────
         auto ptrTy3 = llvm::PointerType::get(*ctx, 0);
         // Vec
+        // SQLite (runtime/rust/src/sqlite.rs — a Rust wrapper over the system
+        // libsqlite3). Handles are >= 1; query results live in a module-owned
+        // arena and stay valid until the next query on any connection.
+        add("flint_sqlite_open", i64Ty, {i8PtrTy}, false);
+        add("flint_sqlite_close", i64Ty, {i64Ty}, false);
+        add("flint_sqlite_exec", i64Ty, {i64Ty, i8PtrTy}, false);
+        add("flint_sqlite_query", i64Ty, {i64Ty, i8PtrTy}, false);
+        add("flint_sqlite_rows", i64Ty, {}, false);
+        add("flint_sqlite_cols", i64Ty, {}, false);
+        add("flint_sqlite_get", i8PtrTy, {i64Ty, i64Ty}, false);
+        add("flint_sqlite_error", i8PtrTy, {}, false);
+        add("flint_sqlite_version", i8PtrTy, {}, false);
         // Cryptography (runtime/rust/src/crypto.rs, RustCrypto primitives).
         // Each call returns the HEX LENGTH of its result; the hex text itself
         // lives in a module-owned static buffer that stays valid until the next
