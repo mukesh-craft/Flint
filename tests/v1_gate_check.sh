@@ -20,7 +20,11 @@ gate merge bash tests/test_merge.sh "$FLINTC"
 gate registry bash tests/test_registry.sh "$FLINTC"
 gate differential bash tests/test_differential.sh "$FLINTC"
 gate driver bash tests/test_driver.sh "$FLINTC"
-gate decl-order python3 tests/test_decl_order.py stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl driver/flintc.fl tools/merge_sexp.fl
+if [ -x tools/rust/target/release/flint-tool ]; then
+  gate decl-order tools/rust/target/release/flint-tool decl-order stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl driver/flintc.fl tools/merge_sexp.fl
+else
+  gate decl-order python3 tests/test_decl_order.py stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl driver/flintc.fl tools/merge_sexp.fl
+fi
 gate fmt bash tests/test_fmt.sh "$FLINTC"
 gate errors bash tests/test_errors.sh
 gate aegis bash tests/test_aegis.sh "$FLINTC"
