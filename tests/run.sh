@@ -14,6 +14,8 @@ check() { # $1=file $2=expected-line
     else echo "FAIL $file (missing '$want')"; echo "$out" | head -n 5; fail=$((fail+1)); fi
 }
 check tests/t_hello.fl "hello"
+check tests/t_strings.fl "json: {\"a\": 42}"
+check tests/t_strings.fl "7 items for world"
 check tests/t_hello.fl "1"
 check tests/t_arith.fl "48"
 check tests/t_arith.fl "-1"

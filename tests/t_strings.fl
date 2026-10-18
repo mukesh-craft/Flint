@@ -1,0 +1,30 @@
+# String literals: escapes, interpolation, and literal braces.
+#
+# These are the rules that surprise people (this project included, twice), so
+# they are pinned by a test rather than by a paragraph of prose:
+#
+#   "a\"b"      escaped quote
+#   "tab:\there" escapes: \n \t \r \\ \" \xHH \uHHHH
+#   "hi {name}" INTERPOLATION — the expression is evaluated
+#   "{{" "}}"    the escape for a LITERAL brace (JSON, SQL, format strings)
+
+fn main() {
+    name = "world"
+    count = 7
+
+    print("hello {name}")
+    print("{count} items for {name}")
+
+    # A literal brace needs doubling. This is what makes JSON, SQL and
+    # printf-style text writable at all.
+    print("json: {{\"a\": 42}}")
+    # Interpolation takes an IDENTIFIER, so a literal number in braces
+    # must be doubled like any other literal brace.
+    print("sql: SELECT * FROM t WHERE x = {{1}}")
+
+    # Escapes.
+    print("quote:\" newline:\\n tab:\\t hex:\\x41 unicode:\\u00e9")
+
+    # An empty interpolation is not an error; neither is a brace with no closer.
+    print("done")
+}
