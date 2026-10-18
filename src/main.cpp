@@ -7475,17 +7475,27 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         for (size_t i = 0; i < generic->typeParams.size(); i++)
             subst[generic->typeParams[i]] = typeArgs[i];
 
-        // Build LLVM function type with concrete types
+        // Activate the substitution map BEFORE resolving any parameter type.
+        //
+        // resolveType reads `typeSubstMap`, so computing signatures first
+        // resolved every parameter to an unresolved TypeParam, which llvmType
+        // rendered as the int64 placeholder -- every generic silently became
+        // i64. The map must be live before the first resolveType call.
+        auto savedMap = typeSubstMap;
+        typeSubstMap = subst;
+
+        // Build LLVM function type with concrete types.
+        //
+        // resolveType, not the inline lookup this used to do: the inline
+        // version tested `rt.kind == TypeKind::TypeParam`, so a COMPOUND
+        // parameter like `[T]` never matched and kept the bare type parameter.
+        // resolveType recurses through elemType, so compound substitution works
+        // by pointing at it.
         std::vector<llvm::Type*> paramTys;
         for (auto& p : generic->params) {
-            Type rt = p.second;
-            auto it = subst.find(rt.structName);
-            if (rt.kind == TypeKind::TypeParam && it != subst.end()) rt = it->second;
-            paramTys.push_back(llvmType(rt, *ctx, mod.get()));
+            paramTys.push_back(llvmType(resolveType(p.second), *ctx, mod.get()));
         }
-        Type retRt = generic->returnType;
-        auto rit = subst.find(retRt.structName);
-        if (retRt.kind == TypeKind::TypeParam && rit != subst.end()) retRt = rit->second;
+        Type retRt = resolveType(generic->returnType);
         llvm::Type* retTy = llvmType(retRt, *ctx, mod.get());
 
         auto fTy = llvm::FunctionType::get(retTy, paramTys, false);
@@ -7496,13 +7506,20 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             i++;
         }
         functionMap[mangled] = f;
+        // Register before emitting the body. Previously this happened after,
+        // at the bottom of the function, so a generic that calls itself
+        // re-entered specialize forever and the compiler hung or blew the
+        // stack. The signature is already correct here, which is all a
+        // recursive call needs.
+        genericCache[mangled] = f;
 
         // Emit the function body with substitution active
-        auto savedMap = typeSubstMap;
-        typeSubstMap = subst;
-
         llvm::Function* savedFunc = currentFunc;
-        auto savedInsertBlock = builder->GetInsertBlock();
+        // saveIP/restoreIP, not GetInsertBlock/SetInsertPoint: SetInsertPoint
+        // positions at the END of the block, so after a nested monomorphization
+        // the outer function resumed emitting *after its terminator* and
+        // produced invalid IR. The save/restore pair keeps the exact position.
+        auto savedInsertPoint = builder->saveIP();
         currentFunc = f;
         auto entry = llvm::BasicBlock::Create(*ctx, "entry", f);
         builder->SetInsertPoint(entry);
@@ -7540,9 +7557,8 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         symTable.exitScope();
         currentFunc = savedFunc;
         typeSubstMap = savedMap;
-        if (savedInsertBlock) builder->SetInsertPoint(savedInsertBlock);
+        builder->restoreIP(savedInsertPoint);
 
-        genericCache[mangled] = f;
         return f;
     }
 

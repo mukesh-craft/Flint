@@ -66,6 +66,36 @@ fi
 # now says so instead of reinterpreting the pointer as an integer.
 expect_clean_error "str array literal" 'fn main() { a = ["x", "y"] print(a[0]) }'
 
+# --- monomorphization: nesting, cache reuse, no collisions ------------------
+if out="$(timeout -s KILL 120 "$FLINTC" tests/t_specialize.fl 2>&1)"; then
+    if [ "$(printf '%s' "$out" | grep -c '^0$')" = "0" ] &&
+       [ "$(printf '%s' "$out" | grep -c '^1$')" = "9" ]; then
+        ok "monomorphization handles nesting, depth and cache reuse"
+    else
+        bad "specialize assertions" "got [$(printf '%s' "$out" | tr '\n' ' ')]"
+    fi
+else
+    bad "tests/t_specialize.fl runs" "$(printf '%s' "$out" | tail -2 | tr '\n' ' ')"
+fi
+
+# --- the compiler must never hang -------------------------------------------
+# A hang is worse than a crash: there is no message, no exit code, and CI just
+# stalls until the timeout. Every case here is wrapped in an explicit KILL so a
+# regression is reported rather than hanging the gate.
+for case_file in tests/t_specialize.fl tests/t_generics.fl examples/enums.fl examples/arrays.fl; do
+    if timeout -s KILL 60 "$FLINTC" "$case_file" >/dev/null 2>&1; then
+        :
+    else
+        status=$?
+        if [ "$status" = "137" ]; then
+            bad "compiler does not hang on $case_file" "timed out and was killed"
+        else
+            ok "compiler rejects or runs $case_file without hanging"
+        fi
+    fi
+done
+ok "compiler does not hang on the corpus"
+
 # --- documented: [1.5, 2.5] is a TENSOR, not an array ----------------------
 # This case is here to pin down a distinction that is easy to get wrong when
 # auditing the compiler: a bracket literal of floats is claimed by the tensor
