@@ -114,6 +114,21 @@ else
     bad "JIT: tests/t_fts5.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
 fi
 
+# --- PNG --------------------------------------------------------------------
+# A PNG written by Python's zlib: decoding it proves interoperability, and
+# encode/decode round-trip proves our own writer matches our own reader.
+if out="$(timeout -s KILL 600 "$FLINTC" tests/t_png.fl 2>&1)"; then
+    expect_all "JIT: png decodes a foreign file and round-trips" "$out" \
+        "3" "2" "3" "1"
+    if [ "$(printf '%s' "$out" | grep -c '^0$')" = "0" ]; then
+        ok "JIT: every png assertion holds"
+    else
+        bad "JIT: png assertions" "$(printf '%s' "$out" | tr '\n' ' ')"
+    fi
+else
+    bad "JIT: tests/t_png.fl exits 0" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+fi
+
 # --- AOT path ---------------------------------------------------------------
 if timeout -s KILL 600 "$FLINTC" tests/t_csv.fl -o "$WORK/t_csv.bin" > "$WORK/aot.log" 2>&1; then
     if out="$("$WORK/t_csv.bin" 2>&1)"; then
@@ -123,6 +138,20 @@ if timeout -s KILL 600 "$FLINTC" tests/t_csv.fl -o "$WORK/t_csv.bin" > "$WORK/ao
     fi
 else
     bad "AOT: csv links" "$(tail -n 3 "$WORK/aot.log" | tr '\n' ' ')"
+fi
+
+if timeout -s KILL 600 "$FLINTC" tests/t_png.fl -o "$WORK/t_png.bin" > "$WORK/aot_png.log" 2>&1; then
+    if out="$("$WORK/t_png.bin" 2>&1)"; then
+        if [ "$(printf '%s' "$out" | grep -c '^0$')" = "0" ]; then
+            ok "AOT: png behaves as in JIT"
+        else
+            bad "AOT: png assertions" "$(printf '%s' "$out" | tr '\n' ' ')"
+        fi
+    else
+        bad "AOT: png binary runs" "$(printf '%s' "$out" | tail -n 3 | tr '\n' ' ')"
+    fi
+else
+    bad "AOT: png links" "$(tail -n 3 "$WORK/aot_png.log" | tr '\n' ' ')"
 fi
 
 if timeout -s KILL 600 "$FLINTC" tests/t_sqlite.fl -o "$WORK/t_sqlite.bin" > "$WORK/aot3.log" 2>&1; then

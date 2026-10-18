@@ -292,6 +292,16 @@ mod tests {
         std::ffi::CString::new(text).unwrap()
     }
 
+    /// The module's PHC-string and error buffers are static (no_std has no
+    /// heap), so the module is not reentrant and the tests must be serialized.
+    /// Rust runs tests in parallel; without this lock one test's hash turns up
+    /// inside another's assertion.
+    static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serialized() -> std::sync::MutexGuard<'static, ()> {
+        TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn last() -> String {
         unsafe { core::ffi::CStr::from_ptr(flint_argon2_last() as *const core::ffi::c_char) }
             .to_str()
@@ -311,6 +321,7 @@ mod tests {
     // the PRODUCTION defaults separately.
     #[test]
     fn hash_verify_round_trip() {
+        let _serialized = serialized();
         let pw = c("correct horse battery staple");
         let stored = flint_argon2_hash_params(pw.as_ptr(), 64, 1, 1);
         assert!(stored > 0, "hash failed: {}", error_text());
@@ -325,6 +336,7 @@ mod tests {
 
     #[test]
     fn wrong_password_does_not_verify() {
+        let _serialized = serialized();
         let pw = c("correct horse battery staple");
         let other = c("correct horse battery stapler");
         flint_argon2_hash_params(pw.as_ptr(), 64, 1, 1);
@@ -338,6 +350,7 @@ mod tests {
 
     #[test]
     fn phc_string_records_algorithm_and_parameters() {
+        let _serialized = serialized();
         let pw = c("hunter2");
         flint_argon2_hash_params(pw.as_ptr(), 64, 3, 2);
         let phc = last();
@@ -350,6 +363,7 @@ mod tests {
 
     #[test]
     fn parameters_can_change_without_invalidating_old_hashes() {
+        let _serialized = serialized();
         // The whole point of the PHC string: raise the cost, keep verifying.
         let pw = c("long-lived-credential");
         flint_argon2_hash_params(pw.as_ptr(), 64, 1, 1);
@@ -363,6 +377,7 @@ mod tests {
 
     #[test]
     fn salt_makes_hashes_differ() {
+        let _serialized = serialized();
         let pw = c("same password");
         flint_argon2_hash_params(pw.as_ptr(), 64, 1, 1);
         let first = last();
@@ -373,6 +388,7 @@ mod tests {
 
     #[test]
     fn malformed_stored_hash_is_reported_separately() {
+        let _serialized = serialized();
         let pw = c("anything");
         let bad = c("not-a-phc-string");
         // -1 (unusable) rather than 0 (wrong password): a login path must be
@@ -400,6 +416,7 @@ mod tests {
 
     #[test]
     fn out_of_range_parameters_are_clamped_not_fatal() {
+        let _serialized = serialized();
         // Absurd values must not panic inside the Argon2 crate.
         let pw = c("clamped");
         assert!(flint_argon2_hash_params(pw.as_ptr(), 1, 1, 1) > 0);

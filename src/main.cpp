@@ -4827,6 +4827,19 @@ public:
         add("flint_zstd_len", i64Ty, {}, false);
         add("flint_zstd_capacity", i64Ty, {}, false);
         add("flint_zstd_error", i8PtrTy, {}, false);
+        // PNG codec (runtime/rust/src/png.rs) — pure Rust, no libpng dependency.
+        // decode takes (pointer, length); encode takes width, height, channels
+        // and the interleaved 8-bit pixel buffer. The encoded file is fetched
+        // with flint_png_encoded() and its length is encode's return value.
+        add("flint_png_decode", i64Ty, {i8PtrTy, i64Ty}, false);
+        add("flint_png_encode", i64Ty, {i64Ty, i64Ty, i64Ty, i8PtrTy, i64Ty}, false);
+        add("flint_png_width", i64Ty, {}, false);
+        add("flint_png_height", i64Ty, {}, false);
+        add("flint_png_channels", i64Ty, {}, false);
+        add("flint_png_pixel", i64Ty, {i64Ty, i64Ty, i64Ty}, false);
+        add("flint_png_mean_luma", f64Ty, {}, false);
+        add("flint_png_error", i8PtrTy, {}, false);
+        add("flint_png_encoded", i8PtrTy, {}, false);
         // System information (runtime/rust/src/system.rs) — portable across
         // Linux, macOS and Windows; returns -1 with a reason where a platform
         // refuses (e.g. /proc is restricted on modern Android).
@@ -7820,8 +7833,36 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         }
         bool isExtern = externFunctions.count(call->callee) > 0;
         std::vector<llvm::Value*> args;
-        for (auto& a : call->args) {
-            auto* v = emitExpr(a.get());
+        for (size_t ai = 0; ai < call->args.size(); ai++) {
+            ExprAST* a = call->args[ai].get();
+            llvm::Value* v = nullptr;
+            // Array-to-pointer decay: passing an array where a pointer is
+            // expected yields the address of its first element, as in C.
+            //
+            // Without this, every pointer+length builtin (PNG decode, HTTPS,
+            // CSV, Argon2) is unreachable from an array literal: the array
+            // would load as a {ptr, i64} slice, and LLVM rejects the call as a
+            // parameter type mismatch.
+            llvm::Type* want = nullptr;
+            if (ai < it->second->getFunctionType()->getNumParams())
+                want = it->second->getFunctionType()->getParamType(ai);
+            if (want && want->isPointerTy() && a->kind == NodeKind::Variable) {
+                auto* var = static_cast<VariableExprAST*>(a);
+                auto* sym = symTable.lookup(var->name);
+                if (sym && sym->type.kind == TypeKind::Array) {
+                    // A Flint array is a {ptr, i64} slice; the C interop value
+                    // for it is field 0, the data pointer. Extracting it here
+                    // (rather than calling flint_array_data_ptr, which takes a
+                    // pointer TO the slice) keeps the decay a pure IR rewrite
+                    // with no runtime dependency.
+                    if (auto* slice = emitExpr(a)) {
+                        if (auto* st = llvm::dyn_cast<llvm::StructType>(slice->getType()))
+                            if (st->getNumElements() == 2)
+                                v = builder->CreateExtractValue(slice, 0, "arr_decay");
+                    }
+                }
+            }
+            if (!v) v = emitExpr(a);
             if (!v) return nullptr;
             args.push_back(v);
             // Passing a variable as an argument BORROWS it: the callee receives

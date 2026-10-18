@@ -30,6 +30,10 @@ aes = { version = "0.8", default-features = false }
 ctr = { version = "0.9", default-features = false }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
 cipher = { version = "0.4", default-features = false }
+# DEFLATE/zlib codec for PNG. miniz_oxide is no_std + alloc (unlike fdeflate,
+# which pulls in `std` and collides with this crate's panic_impl lang item) and
+# exposes slice-based inflate/deflate with no allocator plumbing.
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
 # zstd decode: pure Rust, no_std-clean with the arena allocator.
 ruzstd = { version = "0.7", default-features = false }
 # Password hashing: OWASP's current recommendation, no_std-clean.
