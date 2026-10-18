@@ -110,6 +110,7 @@ dependencies = [
  "cipher",
  "ctr",
  "hmac",
+ "ruzstd",
  "sha2",
 ]
 
@@ -174,6 +175,12 @@ dependencies = [
  "opaque-debug",
  "universal-hash",
 ]
+
+[[package]]
+name = "ruzstd"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fad02996bfc73da3e301efe90b1837be9ed8f4a462b6ed410aa35d00381de89f"
 
 [[package]]
 name = "sha2"

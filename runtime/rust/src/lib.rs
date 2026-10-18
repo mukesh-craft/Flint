@@ -25,7 +25,14 @@
 
 #![no_std]
 
+// Codecs (zstd, JPEG) need `alloc`; the arena below provides it without `std`.
+#[macro_use]
+extern crate alloc;
+
 // Standard-library modules, one file each, all `no_std`.
+pub mod arena;
+pub mod compress;
+pub mod encoding;
 pub mod crypto;
 pub mod sqlite;
 
