@@ -1,6 +1,6 @@
 # STATE — Finish milestones M3–M7
 GOAL: Ship M3 (traits), M4 (lambda-as-value), M5 (remove parallel-for), M6 (diagnostics), M7 ([T] containers); each gated + committed.
-STATUS: M3 starting
+STATUS: M3 committed; M4 starting
 POLICY: compact at ~65% context; offload raw logs to $TMPDIR/opencode/
 CONSTRAINTS (verbatim from user/session): RAM 3.6GB (one build at a time); Rust wherever possible; Linux/Windows/macOS; never break token contract (lexdiff/parse_gate/fixpoint gates unmodified = proof); two emit paths (Codegen + Parser) must both get every fix.
 
@@ -25,8 +25,14 @@ DEAD ENDS (do not retry):
 - Last session's M5 attempt: brace-matching replacement landed wrong → 4 build errors → reverted. This time: read exact function bounds first, replace whole function atomically.
 
 NEXT:
-1. M3: read structRegistry + method-call parse sites, implement traitRegistry + contextual parse
-2. M4: find lambda parse site :8374, fn-type parseType
+M3 DONE (all gates green). Replayed after I zeroed src/main.cpp with a bare
+python open('w') that was never written to — rule: NEVER call open('w')
+without .write(); use the write tool or the edit tool for source changes.
+
+NEXT:
+2. M4: Symbol already carries lambda fields (isLambda, lambdaFn, captures)
+   — find LambdaExprAST emit path; fn type in parseType; indirect call via
+   CreateCall(fnType, loadedPtr, args) with closure = {fnptr, captures...}.
 3. M5: atomic replace of parseParallelForStmtEmit both paths, migrate t_flow.fl
 4. M6: cascade fix
 5. M7: last, only if budget allows
