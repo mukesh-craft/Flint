@@ -2117,6 +2117,11 @@ struct Symbol {
     std::vector<std::string> lambdaCapNames;
     std::vector<Type> lambdaCapTypes;
     std::vector<llvm::AllocaInst*> lambdaCapSlots;
+    // P0-NEW-3: set when the binding came from a float tensor literal
+    // (TensorLiteralAST -> flt_create_*). Indexing that value reinterprets
+    // f64 bits through an i64 GEP; the flag lets the index emitters refuse
+    // instead of printing garbage.
+    bool isTensor = false;
     // M4 env box: { fnptr, cap0, cap1, ... } allocated in the defining frame.
     // The first-class function VALUE is this pointer; an indirect call loads
     // the callee from field 0 and passes the box itself as the first arg.
@@ -2677,6 +2682,11 @@ private:
     std::vector<std::unique_ptr<FunctionAST>> pendingFns;
     Codegen* cg = nullptr;
     bool emitMode = false;
+    // P0-NEW-3 (emit path): set when parseNudEmit just produced a tensor
+    // literal value; parseVarDeclEmit consumes it to mark the binding.
+    // Narrow provenance: composition results (f() + [1.5]) may keep a stale
+    // flag — such programs are already built on garbage values.
+    bool lastEmitValueTensor = false;
     bool skipBodies = false;
     bool inOptParens = false;
 
@@ -6497,6 +6507,9 @@ public:
                         srcSym->moved = true;
                     }
                 }
+                // P0-NEW-3: the binding now holds a tensor handle; index
+                // refusals track existence at the binding, not the source.
+                if (a->rhs->kind == NodeKind::Tensor) sym->isTensor = true;
                 auto* store = builder->CreateStore(val, sym->alloca);
                 if (sym->moved) sym->moved = false;
                 // B2: maintain time-derived set (invalidated on any non-time assign).
@@ -6988,6 +7001,10 @@ public:
         }
         Type rt = resolveType(decl->varType);
         llvm::Type* lty = llvmType(rt, *ctx, mod.get());
+        // P0-NEW-3: a tensor literal init carries no LLVM type of its own
+        // (the handle is an opaque i64), so provenance is recorded here —
+        // the only place binding and source meet.
+        bool initIsTensor = decl->init && decl->init->kind == NodeKind::Tensor;
         // Emit init first to get its LLVM type (may differ from declared type for builtins)
         auto* init = emitExpr(decl->init.get());
         // M4: binding through a lambda VALUE (`let g = f`). The source
@@ -7035,6 +7052,10 @@ public:
         }
         llvm::AllocaInst* alloca = createEntryAlloca(lty, decl->varName);
         symTable.declare(decl->varName, {rt, alloca, nullptr, decl->isMutable, false, 0});
+        if (initIsTensor) {
+            auto* tref = symTable.lookup(decl->varName);
+            if (tref) tref->isTensor = true;
+        }
         // Move: emit init first, then mark source as moved
         if (decl->init->kind == NodeKind::Variable) {
             auto* varInit = static_cast<VariableExprAST*>(decl->init.get());
@@ -7575,6 +7596,16 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 if (git != globalSymTable.end() && git->second.type.kind == TypeKind::Map)
                     baseIsMap = true;
             }
+            // P0-NEW-3 (B1 narrow stop-gap): a tensor handle is an opaque
+            // i64. a[0] used to GEP float bits and print garbage (48/16)
+            // with no diagnostic. The AST type system has no tensor kind,
+            // so refuse on the flag the binding carries instead.
+            if (sym && sym->isTensor) {
+                return codegenError("tensor values cannot be indexed with []; use flt_get(t, i)");
+            }
+            auto gsym2 = globalSymTable.find(bv->name);
+            if (gsym2 != globalSymTable.end() && gsym2->second.isTensor)
+                return codegenError("tensor values cannot be indexed with []; use flt_get(t, i)");
         }
         if (index->getType()->isIntegerTy(64) && baseIsMap)
             return codegenError("map index needs a str key (map keys are strings)");
@@ -8840,6 +8871,17 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
                 }
             }
             consume(TokenType::RBRACKET, "expected ']' after index");
+            // P0-NEW-3 (B1 narrow stop-gap, emit path): a tensor handle is
+            // an opaque i64; indexing it printed garbage with no diagnostic
+            // (a[0] over [1.5, 2.5] used to read 48). varTypeMap symbol
+            // provenance, like the static map check above.
+            if (exprStartTok.type == TokenType::IDENTIFIER) {
+                auto* thsym = cg->symTable.lookup(exprStartTok.lexeme);
+                if (thsym && thsym->isTensor) {
+                    parseError("tensor values cannot be indexed with []; use flt_get(t, i)");
+                    return nullptr;
+                }
+            }
             if (check(TokenType::ASSIGN)) {
                 // Index-assign, emit path (0c2 mirror of the AST desugar)
                 advance(); // '='
@@ -9139,6 +9181,7 @@ llvm::Value* Parser::emitTensorLiteralEmit(TensorLiteralAST& t) {
 }
 
 llvm::Value* Parser::parseNudEmit() {
+    lastEmitValueTensor = false;
     if (match(TokenType::NUMBER_LITERAL)) {
         std::string lit = previous().lexeme;
         bool isFloatLit = false;
@@ -9172,8 +9215,12 @@ llvm::Value* Parser::parseNudEmit() {
         size_t afterOpen = getPos();
         TensorLiteralAST tensor;
         int trc = tryParseTensorEmit(tensor);
-        if (trc > 0) return emitTensorLiteralEmit(tensor);
+        if (trc > 0) {
+            lastEmitValueTensor = true;
+            return emitTensorLiteralEmit(tensor);
+        }
         if (trc < 0) return nullptr;
+        lastEmitValueTensor = false;
         setPos(afterOpen);
         std::vector<llvm::Value*> elems;
         if (!check(TokenType::RBRACKET)) {
@@ -10137,6 +10184,11 @@ void Parser::parseVarDeclEmit(bool isMutable) {
     auto* lty = cg->resolvedLlvmType(varType);
     auto* alloca = cg->createEntryAlloca(lty, nameTok.lexeme);
     cg->symTable.declare(nameTok.lexeme, {varType, alloca, nullptr, isMutable, false, 0});
+    if (lastEmitValueTensor) {
+        auto* tref = cg->symTable.lookup(nameTok.lexeme);
+        if (tref) tref->isTensor = true;
+        lastEmitValueTensor = false;
+    }
     // Detect move source: if RHS was a single identifier token
     if (getPos() == exprStart + 1 && previous().type == TokenType::IDENTIFIER) {
         std::string srcName = previous().lexeme;

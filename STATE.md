@@ -112,3 +112,22 @@ d65ed3f). M7 deferred by maintainer decision — next chat starts with
 B tasks in priority order: P0-NEW-3 (tensor index refusal) → P0-NEW-1
 (path collapse) → P0-NEW-2 (enum payload width). All baselines green:
 smoke 30/30, selfhost fixed point, all suites rc=0 at the final commit.
+
+B-WAVE (2026-10-19, this session):
+P0-NEW-3 DONE. Rechecked the B1 spec (tensor provenance is unrepresentable
+without M7) then implemented the NARROW stop-gap:
+- Symbol.isTensor flag.
+- Marks: Codegen emitVarDecl (init->kind == Tensor), Codegen Assign with
+  Tensor RHS; Parser parseVarDeclEmit via lastEmitValueTensor (set at the
+  tensor claim point in parseNudEmit, reset at each other value production —
+  narrow: f() + [1.5] may keep a stale flag; that program is already broken).
+- Refusals: Codegen emitIndexAccess and the emit-mode index site (parseIdent
+  tail) both say "tensor values cannot be indexed with []; use flt_get(t, i)"
+  on tensor-marked bases, before any IR is built.
+- B1 fixture now refuses with rc=1 (was: silently printed 48/16); [1,2,3] a[1]
+  still prints 2; flt_get(a, 0) on [1.5, 2.5] prints 1.5.
+- Gates: smoke 30/30 (t_ai_tensor and t_nn_layers use flt_get and pass),
+  lexdiff 130, differential 11, errors 128, fixpoint 131.
+- Note: post-refusal output keeps the driver banner "function body emission
+  failed" — the same artifact as other codegen-time failures; parse-time
+  one-error contract (M6) is unaffected.
