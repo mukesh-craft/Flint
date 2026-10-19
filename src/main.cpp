@@ -6318,6 +6318,12 @@ public:
         if (fn->body) {
             emitStmt(fn->body.get());
         } else if (fn->bodyStart > 0 && fn->bodyEnd > 0 && parser) {
+            // The single-pass EMIT path (Parser::emitXxx) is entered only from
+            // here: a function whose body was not built as an AST. Set
+            // FLINT_TRACE_EMITPATH=1 to see when it runs — the answer decides
+            // whether a fix must be applied to this path as well.
+            if (getenv("FLINT_TRACE_EMITPATH"))
+                llvm::errs() << "[emit-path] function " << fn->name << "\n";
             size_t savedPos = parser->getPos();
             parser->setPos(fn->bodyStart);
             parser->setCodegen(this, true);
@@ -10113,7 +10119,23 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
             }
             if (argTy == cg->i64Ty) { cg->typeSubstMap[tp] = Type::i64(); return; }
             if (argTy == llvm::Type::getDoubleTy(*cg->ctx)) { cg->typeSubstMap[tp] = Type::f64(); return; }
-            if (argTy == cg->i8PtrTy) { cg->typeSubstMap[tp] = Type::str(); }
+            if (argTy == cg->i8PtrTy) { cg->typeSubstMap[tp] = Type::str(); return; }
+            // An array is a {ptr, i64} slice — a LITERAL struct, so the
+            // named-struct scan above cannot see it. The AST path knows
+            // this case (exprFlintType: NodeKind::Array), so without it the
+            // two paths disagree on the same program: the AST path
+            // instantiates T = array(i64) and the emit path fell back to
+            // i64, which the call guard then rejected.
+            if (argTy->isStructTy()) {
+                if (auto* st = llvm::dyn_cast<llvm::StructType>(argTy)) {
+                    if (st->isLiteral() && st->getNumElements() == 2 &&
+                        st->getElementType(0)->isPointerTy() &&
+                        st->getElementType(1)->isIntegerTy(64)) {
+                        cg->typeSubstMap[tp] = Type::array(Type::i64());
+                        return;
+                    }
+                }
+            }
         };
         for (size_t ti = 0; ti < genFn->typeParams.size(); ti++) {
             const std::string& tp = genFn->typeParams[ti];
