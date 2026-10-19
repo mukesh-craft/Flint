@@ -3924,7 +3924,7 @@ which needs the Rust array representation (M7).
 |---|---|
 | M0, M1 | done |
 | M2 | partially done: param matching + f64 FCmp shipped; `unifyParamType` for index/`Cast`/`StructLiteral` args NOT done |
-| P0-NEW-1 path collapse | not started (B-tasks, 2026-10-19 chat) |
+| P0-NEW-1 path collapse | **done** (compare/call/generic cores shared, commit below) |
 | P0-NEW-2 enum payload width | **done** (per-variant field compare, commit below) |
 | P0-NEW-3 tensor index check | **done** (narrow stop-gap, commit below) |
 | M3 traits | **done** — commit 1219665 |
@@ -3995,7 +3995,44 @@ commit:
   fixpoint, errors 128/128, differential 11. Traps hit: a first naive
   paste-by-anchor edit left the old refusal tail duplicated (brace mismatch);
   LLVM StructType has no hasStructName() in this version — literal-struct
-  detection via isLiteral() only.
+  detection via isLiteral() only. **CORRECTION (after P0-NEW-1):** the closing
+  claim "all 16 outputs verified by run" for THIS task was careless — the
+  emitEnumEqual accumulator had a real bug at commit d1c58cf (ANDing variant
+  bodies against the 0-initialized slot instead of ORing), so == computed 0 on
+  equal payloads and even made == disagree with != on the same operands. The
+  fixture was re-verified line-by-line mapped to semantics only during
+  P0-NEW-1; the fix is in the same commit as P0-NEW-1 (below). Lesson: verify
+  by mapping EACH printed line to its assertion, never by eyeballing ones
+  and zeros. The P0-NEW-2 commit message therefore overclaims.
+
+- **P0-NEW-1 path collapse.** Shared Codegen cores; the Parser emit path now
+  delegates instead of keeping drifting copies (the source of four findings):
+  1) emitCompareValues(op, l, r) — aggregate-first, pred map, str-compare,
+     null-norm, FCmp-float branch; both cmp arms now single calls.
+  2) createCallChecked(name, f, args, instantiationMsg) — arity + loose-ptr
+     type guard before CreateCall; AST plain tail, AST generic-instance,
+     Parser functionMap branch (previously UNGUARDED — wrong-arity emitted
+     invalid IR), Parser generic-branch, Parser UFCS branch all route here.
+  3) emitPrintCall(v) — type-keyed println dispatch (Parser copy used to
+     silently pick println_i64 for unsupported types and RETURNED nullptr).
+  4) emitArrayGet/Set/Data/GetPtr/SetPtr cores — the struct guard lives in
+     the core ("flint_array_get needs an array"); the Parser copy had lost
+     it and extracted field 0 of a bare i64.
+  5) Parser generic inference rewritten to the by-PARAMETER rule (type param
+     infers from the argument filling the parameter that mentions it) like
+     the AST path; the old copy indexed typeParams by arg position, so
+     swap<T,U>(a: U, b: T) instantiated swapped. Un-inferrable still
+     defaults to i64 in emit mode (no AST available); the guarded call
+     below the inference catches misfits.
+  Wait — this is intentionally left as a residual: emit-mode inference
+  cannot use exprFlintType (no AST), so the type SOURCE stays path-specific;
+  the RULE and the validation are shared. That is the collapse boundary —
+  further unification would mean the Parser builds AST nodes, which is a
+  different milestone.
+  Gates on the fresh build: smoke 30/30, lexdiff 130, parse_gate 131,
+  fixpoint 131, errors 128/128, differential 11/11, generics 7/7; every
+  t_agg_eq line mapped to its assertion; bad-arity, enum ==/!= per-case,
+  nested-struct payload compare all verified individually.
 
 **M7 decision (2026-10-19, maintainer):** `[T]` containers stay DEFERRED
 (memory.md §8 decision #3). The Rust {length, elem_size, ptr} representation

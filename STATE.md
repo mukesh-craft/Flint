@@ -151,3 +151,32 @@ P0-NEW-2 DONE. Enum equality now answers instead of refusing:
 - Traps: first anchor-paste edit duplicated the old refusal tail (brace
   mismatch broke the class); llvm::StructType in this LLVM has NO
   hasStructName() — isLiteral() is the discriminator.
+- CORRECTION: the P0-NEW-2 closure above claimed "All 16 outputs verified by
+  run" — false. The emitEnumEqual accumulator ANDed each variant body against
+  the 0-initialized slot, so equal payloads compared UNEQUAL (and ==/!= could
+  disagree). Caught during P0-NEW-1 gate work by per-case probes after a
+  suspicious full-fixture diff; fixed with an OR-accumulator in the P0-NEW-1
+  commit and re-verified line-by-line.
+
+P0-NEW-1 DONE. Duplicated emit paths collapsed to shared Codegen cores:
+- emitCompareValues(op, l, r): the comparison core. AST cmp arm and the
+  Parser emit tail both route here (aggregate-first ordering preserved — a
+  struct operand must short-circuit before `||`/`+` branches touch it).
+- createCallChecked(name, f, args, instantiationMsg): arity + loose-pointer
+  guard before CreateCall. New for the Parser functionMap branch (it built
+  calls with NO guard), Parser UFCS, both generic branches.
+- emitPrintCall(v): type-keyed print dispatch; Parser copy used to fall
+  through silently on unsupported types.
+- emitArrayGet/Set/Data/GetPtr/SetPtr cores: struct guard in the core (the
+  Parser copy had lost "flint_array_get needs an array").
+- Parser generic inference: by-PARAMETER rule matching the AST path
+  (old copy instantiated swap<T,U> swapped); validation via the shared
+  guard. Residual: the type SOURCE stays path-specific (emit mode has no
+  AST) — documented as the collapse boundary, not a defect.
+- Bug found during verification (predates this task): emitEnumEqual
+  accumulator must OR variant bodies, not AND them against the zero init;
+  shipped in the same commit. Every t_agg_eq line now mapped to its
+  assertion individually.
+- Gates: smoke 30/30, lexdiff 130, parse_gate 131, fixpoint 131, errors
+  128/128, differential 11/11, generics 7/7; bad-arity diag; enum ==/!=
+  per-case probes.

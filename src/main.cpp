@@ -6735,63 +6735,8 @@ public:
                 // already uses. It must RECURSE: a struct field that is itself
                 // a struct would otherwise be compared by pointer, which is
                 // silently wrong rather than loudly broken.
-                if (l->getType()->isStructTy() || r->getType()->isStructTy()) {
-                    if (c->op != "==" && c->op != "!=") {
-                        return codegenError(std::string("'") + c->op +
-                            "' is not defined for structs or enums; use == or !=");
-                    }
-                    llvm::Value* eq = emitAggregateEqual(l, r, 0);
-                    if (!eq) return nullptr;
-                    if (c->op == "==") return builder->CreateZExt(eq, i64Ty, "agg_eq");
-                    return builder->CreateZExt(builder->CreateNot(eq), i64Ty, "agg_ne");
-                }
-                llvm::CmpInst::Predicate pred;
-                if (c->op == "==") pred = llvm::CmpInst::ICMP_EQ;
-                else if (c->op == "!=") pred = llvm::CmpInst::ICMP_NE;
-                else if (c->op == "<")  pred = llvm::CmpInst::ICMP_SLT;
-                else if (c->op == ">")  pred = llvm::CmpInst::ICMP_SGT;
-                else if (c->op == "<=") pred = llvm::CmpInst::ICMP_SLE;
-                else if (c->op == ">=") pred = llvm::CmpInst::ICMP_SGE;
-                else return nullptr;
-                // String content comparison: ptr == ptr compares contents
-                // via flint_str_compare (same convention as `+` → concat).
-                if (l->getType()->isPointerTy() && r->getType()->isPointerTy()) {
-                    auto it = functionMap.find("flint_str_compare");
-                    if (it != functionMap.end()) {
-                        auto* sc = builder->CreateCall(it->second, {l, r}, "strcmp");
-                        auto* z = llvm::ConstantInt::get(i64Ty, 0);
-                        auto* cmp = builder->CreateICmp(pred, sc, z, "scmp");
-                        return builder->CreateZExt(cmp, i64Ty, "scmp_ext");
-                    }
-                }
-                // Normalize types: pointer vs integer zero → null pointer comparison
-                if (l->getType()->isPointerTy() && r->getType()->isIntegerTy())
-                    r = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(l->getType()));
-                else if (l->getType()->isIntegerTy() && r->getType()->isPointerTy())
-                    l = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(r->getType()));
-                // Floating-point operands need FCmp, not ICmp. ICmp on doubles
-                // is invalid IR and LLVM asserts:
-                //   assertion "Invalid operand types for ICmp instruction" failed
-                // which aborted the compiler on any `a == b` where a is f64.
-                if (l->getType()->isFloatingPointTy() || r->getType()->isFloatingPointTy()) {
-                    llvm::Type* cmpTy = l->getType()->isFloatingPointTy() ? l->getType() : r->getType();
-                    llvm::Value* lf = l->getType() == cmpTy ? l : builder->CreateSIToFP(l, cmpTy, "cmpf_l");
-                    llvm::Value* rf = r->getType() == cmpTy ? r : builder->CreateSIToFP(r, cmpTy, "cmpf_r");
-                    llvm::CmpInst::Predicate fpred = pred;
-                    switch (pred) {
-                        case llvm::CmpInst::ICMP_EQ:  fpred = llvm::CmpInst::FCMP_OEQ; break;
-                        case llvm::CmpInst::ICMP_NE:  fpred = llvm::CmpInst::FCMP_ONE; break;
-                        case llvm::CmpInst::ICMP_SLT: fpred = llvm::CmpInst::FCMP_OLT; break;
-                        case llvm::CmpInst::ICMP_SLE: fpred = llvm::CmpInst::FCMP_OLE; break;
-                        case llvm::CmpInst::ICMP_SGT: fpred = llvm::CmpInst::FCMP_OGT; break;
-                        case llvm::CmpInst::ICMP_SGE: fpred = llvm::CmpInst::FCMP_OGE; break;
-                        default: fpred = llvm::CmpInst::FCMP_OEQ; break;
-                    }
-                    auto* fcmp = builder->CreateFCmp(fpred, lf, rf, "fcmp");
-                    return builder->CreateZExt(fcmp, i64Ty, "fcmp_ext");
-                }
-                auto* cmp = builder->CreateICmp(pred, l, r, "cmp");
-                return builder->CreateZExt(cmp, i64Ty, "cmp_ext");
+                // P0-NEW-1: shared comparison core (both paths).
+                return emitCompareValues(c->op, l, r);
             }
             case NodeKind::Call:   return emitCall(static_cast<CallExprAST*>(node));
             case NodeKind::Array:  return emitArrayLiteral(static_cast<ArrayExprAST*>(node));
@@ -7857,8 +7802,13 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 varEq = varEq ? builder->CreateAnd(varEq, feq, "eq_and." + var.name) : feq;
             }
             auto* bodyBool = varEq ? varEq : llvm::ConstantInt::getTrue(*ctx);
+            // OR-accumulate: each variant body runs at most once (the tag
+            // dispatch chain), so the first body to match decides. ANDing
+            // against the 0-initialized slot instead forced EVERY equality
+            // to 0 — including None == None — while `!=` flanked by the
+            // same bug still reported truth, making == and != disagree.
             auto* prev = builder->CreateLoad(i64Ty, resultSlot, "eq_prev");
-            auto* both = builder->CreateAnd(prev,
+            auto* both = builder->CreateOr(prev,
                 builder->CreateZExt(bodyBool, i64Ty, "eq_ext." + var.name),
                 "eq_acc." + var.name);
             builder->CreateStore(both, resultSlot);
@@ -7868,6 +7818,169 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         builder->SetInsertPoint(bbEnd);
         auto* acc = builder->CreateLoad(i64Ty, resultSlot, "eq_acc_final");
         return builder->CreateICmpNE(acc, llvm::ConstantInt::get(i64Ty, 0), "eq_bool");
+    }
+
+    // P0-NEW-1: THE comparison core. The AST path and the single-pass Parser
+    // path each carried a copy of this lowering, and the copies drifted: the
+    // float-FCmp fix and the aggregate-equality lowering both went into one
+    // path only. Both now call this; a future fix applies once.
+    // Takes already-lowered LLVM values, returns the ZExted i64 result.
+    llvm::Value* emitCompareValues(const std::string& op, llvm::Value* l,
+                                   llvm::Value* r) {
+        if (!l || !r) return nullptr;
+        // Aggregate operands: `==` and `!=` lower to a field-by-field
+        // comparison. ICmp on a struct is invalid IR and LLVM asserted,
+        // aborting the compiler; comparing raw bytes would compare padding.
+        // Field-by-field recurses so nested structs compare structurally.
+        if (l->getType()->isStructTy() || r->getType()->isStructTy()) {
+            if (op != "==" && op != "!=") {
+                return codegenError("'" + op +
+                    "' is not defined for structs or enums; use == or !=");
+            }
+            llvm::Value* eq = emitAggregateEqual(l, r, 0);
+            if (!eq) return nullptr;
+            if (op == "==") return builder->CreateZExt(eq, i64Ty, "agg_eq");
+            return builder->CreateZExt(builder->CreateNot(eq), i64Ty, "agg_ne");
+        }
+        llvm::CmpInst::Predicate pred;
+        if (op == "==") pred = llvm::CmpInst::ICMP_EQ;
+        else if (op == "!=") pred = llvm::CmpInst::ICMP_NE;
+        else if (op == "<")  pred = llvm::CmpInst::ICMP_SLT;
+        else if (op == ">")  pred = llvm::CmpInst::ICMP_SGT;
+        else if (op == "<=") pred = llvm::CmpInst::ICMP_SLE;
+        else if (op == ">=") pred = llvm::CmpInst::ICMP_SGE;
+        else return codegenError("unknown operator '" + op + "'");
+        // String content comparison: ptr == ptr compares contents
+        // via flint_str_compare (same convention as `+` -> concat).
+        if (l->getType()->isPointerTy() && r->getType()->isPointerTy()) {
+            auto it = functionMap.find("flint_str_compare");
+            if (it != functionMap.end()) {
+                auto* sc = builder->CreateCall(it->second, {l, r}, "strcmp");
+                auto* z = llvm::ConstantInt::get(i64Ty, 0);
+                auto* cmp = builder->CreateICmp(pred, sc, z, "scmp");
+                return builder->CreateZExt(cmp, i64Ty, "scmp_ext");
+            }
+        }
+        // Normalize types: pointer vs integer zero -> null pointer comparison
+        if (l->getType()->isPointerTy() && r->getType()->isIntegerTy())
+            r = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(l->getType()));
+        else if (l->getType()->isIntegerTy() && r->getType()->isPointerTy())
+            l = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(r->getType()));
+        // Floating-point operands need FCmp, not ICmp. ICmp on doubles
+        // is invalid IR and LLVM asserts -- the original drift bug.
+        if (l->getType()->isFloatingPointTy() || r->getType()->isFloatingPointTy()) {
+            llvm::Type* cmpTy = l->getType()->isFloatingPointTy() ? l->getType() : r->getType();
+            llvm::Value* lf = l->getType() == cmpTy ? l : builder->CreateSIToFP(l, cmpTy, "cmpf_l");
+            llvm::Value* rf = r->getType() == cmpTy ? r : builder->CreateSIToFP(r, cmpTy, "cmpf_r");
+            llvm::CmpInst::Predicate fpred = pred;
+            switch (pred) {
+                case llvm::CmpInst::ICMP_EQ:  fpred = llvm::CmpInst::FCMP_OEQ; break;
+                case llvm::CmpInst::ICMP_NE:  fpred = llvm::CmpInst::FCMP_ONE; break;
+                case llvm::CmpInst::ICMP_SLT: fpred = llvm::CmpInst::FCMP_OLT; break;
+                case llvm::CmpInst::ICMP_SLE: fpred = llvm::CmpInst::FCMP_OLE; break;
+                case llvm::CmpInst::ICMP_SGT: fpred = llvm::CmpInst::FCMP_OGT; break;
+                case llvm::CmpInst::ICMP_SGE: fpred = llvm::CmpInst::FCMP_OGE; break;
+                default: fpred = llvm::CmpInst::FCMP_OEQ; break;
+            }
+            auto* fcmp = builder->CreateFCmp(fpred, lf, rf, "fcmp");
+            return builder->CreateZExt(fcmp, i64Ty, "fcmp_ext");
+        }
+        auto* cmp = builder->CreateICmp(pred, l, r, "cmp");
+        return builder->CreateZExt(cmp, i64Ty, "cmp_ext");
+    }
+
+    // P0-NEW-1: THE call guard. Arity + argument types are checked before the
+    // call is built, so a wrong call reads as a Flint diagnostic rather than
+    // LLVM's raw "Call parameter type does not match function signature!".
+    // Pointers compare loosely: Flint passes aggregate handles and raw
+    // pointers interchangeably in places, and rejecting that would flag
+    // correct code. The AST path and the Parser emit path both route through
+    // here; instantiationMsg picks the generic-specific trailing text.
+    llvm::Value* createCallChecked(const std::string& displayName, llvm::Function* f,
+                                   std::vector<llvm::Value*>& args,
+                                   bool instantiationMsg = false) {
+        if (!f) return nullptr;
+        if (llvm::FunctionType* fty = f->getFunctionType()) {
+            if (fty->getNumParams() != args.size()) {
+                return codegenError("'" + displayName + "' expects " +
+                    std::to_string(fty->getNumParams()) + " argument(s), got " +
+                    std::to_string(args.size()));
+            }
+            for (size_t i = 0; i < args.size(); i++) {
+                if (!args[i]) continue;
+                llvm::Type* want = fty->getParamType(i);
+                llvm::Type* got = args[i]->getType();
+                bool bothPointers = want->isPointerTy() && got->isPointerTy();
+                if (want == got || bothPointers) continue;
+                return codegenError("argument " + std::to_string(i + 1) + " of '" +
+                    displayName + "' has type " + llvmTypeToString(got) +
+                    (instantiationMsg ? ", but this instantiation expects "
+                                      : ", but '" + displayName + "' expects ") +
+                    llvmTypeToString(want));
+            }
+        }
+        return builder->CreateCall(f, args);
+    }
+
+    // P0-NEW-1: print dispatch, keyed on the VALUE type. The Parser path used
+    // to dispatch by token shape and fell through silently for unsupported
+    // types; both paths share this now.
+    llvm::Value* emitPrintCall(llvm::Value* arg) {
+        if (!arg) return nullptr;
+        if (arg->getType() == i64Ty) {
+            auto it = functionMap.find("flint_println_i64");
+            if (it != functionMap.end()) return builder->CreateCall(it->second, {arg});
+        }
+        if (arg->getType()->isDoubleTy()) {
+            auto it = functionMap.find("flint_println_f64");
+            if (it != functionMap.end()) return builder->CreateCall(it->second, {arg});
+        }
+        if (arg->getType()->isPointerTy()) {
+            auto it = functionMap.find("flint_println_str");
+            if (it != functionMap.end()) return builder->CreateCall(it->second, {arg});
+        }
+        return codegenError("print() of unsupported type");
+    }
+
+    // P0-NEW-1: array-builtin cores. Values in; the struct guard lives HERE
+    // (the Parser copy had lost it and extracted field 0 of a bare i64).
+    llvm::Value* emitArrayGetCore(llvm::Value* arr, llvm::Value* idx) {
+        if (!arr || !idx) return nullptr;
+        if (!arr->getType()->isStructTy()) {
+            return codegenError("flint_array_get needs an array");
+        }
+        auto* dataPtr = builder->CreateExtractValue(arr, {0}, "arr_data");
+        auto* len = builder->CreateExtractValue(arr, {1}, "arr_len");
+        emitLoopBoundsCheck(idx, len);
+        auto* elemPtr = builder->CreateGEP(i64Ty, dataPtr, idx, "arr_elem");
+        return builder->CreateLoad(i64Ty, elemPtr, "arr_elem_val");
+    }
+    llvm::Value* emitArraySetCore(llvm::Value* arr, llvm::Value* idx, llvm::Value* val) {
+        if (!arr || !idx || !val) return nullptr;
+        if (!arr->getType()->isStructTy()) {
+            return codegenError("flint_array_set needs an array");
+        }
+        auto* dataPtr = builder->CreateExtractValue(arr, {0}, "arr_data");
+        auto* len = builder->CreateExtractValue(arr, {1}, "arr_len");
+        emitLoopBoundsCheck(idx, len);
+        auto* elemPtr = builder->CreateGEP(i64Ty, dataPtr, idx, "arr_elem");
+        builder->CreateStore(val, elemPtr);
+        return llvm::ConstantInt::get(i64Ty, 0); // dummy return
+    }
+    llvm::Value* emitArrayDataCore(llvm::Value* arr) {
+        if (!arr) return nullptr;
+        return builder->CreateExtractValue(arr, {0}, "arr_data");
+    }
+    llvm::Value* emitArrayGetPtrCore(llvm::Value* ptr, llvm::Value* idx) {
+        if (!ptr || !idx) return nullptr;
+        auto* elemPtr = builder->CreateGEP(i64Ty, ptr, idx, "arr_elem");
+        return builder->CreateLoad(i64Ty, elemPtr, "arr_elem_val");
+    }
+    llvm::Value* emitArraySetPtrCore(llvm::Value* ptr, llvm::Value* idx, llvm::Value* val) {
+        if (!ptr || !idx || !val) return nullptr;
+        auto* elemPtr = builder->CreateGEP(i64Ty, ptr, idx, "arr_elem");
+        builder->CreateStore(val, elemPtr);
+        return llvm::ConstantInt::get(i64Ty, 0);
     }
 
     llvm::Value* emitAggregateEqual(llvm::Value* l, llvm::Value* r, int depth) {
@@ -8425,63 +8538,24 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 }
             }
             // A mismatch here means inference picked the wrong instantiation.
-            // Without this guard LLVM rejects the module and the user sees raw
-            // IR (`call i64 @first.i64(double 2.5)`) on stderr, which tells them
-            // nothing about their program. Checking first turns the whole class
-            // of generic-misfit errors into a Flint diagnostic.
-            if (llvm::FunctionType* fty = f->getFunctionType()) {
-                if (fty->getNumParams() != args.size()) {
-                    return codegenError("'" + call->callee + "' expects " +
-                        std::to_string(fty->getNumParams()) + " argument(s), got " +
-                        std::to_string(args.size()));
-                }
-                for (size_t i = 0; i < args.size(); i++) {
-                    if (args[i]->getType() != fty->getParamType(i)) {
-                        return codegenError("argument " + std::to_string(i + 1) +
-                            " of '" + call->callee + "' has type " +
-                            llvmTypeToString(args[i]->getType()) +
-                            ", but this instantiation expects " +
-                            llvmTypeToString(fty->getParamType(i)));
-                    }
-                }
-            }
-            return builder->CreateCall(f, args);
+            // Checking first turns the whole class of generic-misfit errors
+            // into a Flint diagnostic. P0-NEW-1: shared guard (both paths).
+            return createCallChecked(call->callee, f, args, /*instantiationMsg=*/true);
         }
 
         if (call->callee == "print") {
             if (call->args.empty()) { return codegenError("print() needs an arg"); }
             auto* arg = emitExpr(call->args[0].get());
-            if (!arg) return nullptr;
-            if (arg->getType() == i64Ty) {
-                auto it = functionMap.find("flint_println_i64");
-                if (it != functionMap.end()) return builder->CreateCall(it->second, {arg});
-            }
-            // f64 prints via flint_println_f64 (v0.21 fix; re-added after
-            // 2026-09-14 wipe — was silently dropped as nullptr fallthrough).
-            if (arg->getType()->isDoubleTy()) {
-                auto it = functionMap.find("flint_println_f64");
-                if (it != functionMap.end()) return builder->CreateCall(it->second, {arg});
-            }
-            if (arg->getType()->isPointerTy()) {
-                auto it = functionMap.find("flint_println_str");
-                if (it != functionMap.end()) return builder->CreateCall(it->second, {arg});
-            }
-            return codegenError("print() of unsupported type");
+            // P0-NEW-1: shared print dispatch (both paths).
+            return emitPrintCall(arg);
         }
 
         if (call->callee == "flint_array_get") {
             if (call->args.size() != 2) { return codegenError("flint_array_get needs 2 args"); }
             auto* arrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
-            if (!arrVal || !idxVal) return nullptr;
-            if (!arrVal->getType()->isStructTy()) {
-                return codegenError("flint_array_get needs an array");
-            }
-            auto* dataPtr = builder->CreateExtractValue(arrVal, {0}, "arr_data");
-            auto* len = builder->CreateExtractValue(arrVal, {1}, "arr_len");
-            emitLoopBoundsCheck(idxVal, len);
-            auto* elemPtr = builder->CreateGEP(i64Ty, dataPtr, idxVal, "arr_elem");
-            return builder->CreateLoad(i64Ty, elemPtr, "arr_elem_val");
+            // P0-NEW-1: shared core (both paths).
+            return emitArrayGetCore(arrVal, idxVal);
         }
 
         if (call->callee == "flint_array_set") {
@@ -8489,32 +8563,23 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             auto* arrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
             auto* valVal = emitExpr(call->args[2].get());
-            if (!arrVal || !idxVal || !valVal) return nullptr;
-            if (!arrVal->getType()->isStructTy()) {
-                return codegenError("flint_array_set needs an array");
-            }
-            auto* dataPtr = builder->CreateExtractValue(arrVal, {0}, "arr_data");
-            auto* len = builder->CreateExtractValue(arrVal, {1}, "arr_len");
-            emitLoopBoundsCheck(idxVal, len);
-            auto* elemPtr = builder->CreateGEP(i64Ty, dataPtr, idxVal, "arr_elem");
-            builder->CreateStore(valVal, elemPtr);
-            return llvm::ConstantInt::get(i64Ty, 0); // dummy return
+            // P0-NEW-1: shared core (both paths).
+            return emitArraySetCore(arrVal, idxVal, valVal);
         }
 
         if (call->callee == "flint_array_data") {
             if (call->args.size() != 1) { return codegenError("flint_array_data needs 1 arg"); }
             auto* arrVal = emitExpr(call->args[0].get());
-            if (!arrVal) return nullptr;
-            return builder->CreateExtractValue(arrVal, {0}, "arr_data");
+            // P0-NEW-1: shared core (both paths).
+            return emitArrayDataCore(arrVal);
         }
 
         if (call->callee == "flint_array_get_ptr") {
             if (call->args.size() != 2) { return codegenError("flint_array_get_ptr needs 2 args"); }
             auto* ptrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
-            if (!ptrVal || !idxVal) return nullptr;
-            auto* elemPtr = builder->CreateGEP(i64Ty, ptrVal, idxVal, "arr_elem");
-            return builder->CreateLoad(i64Ty, elemPtr, "arr_elem_val");
+            // P0-NEW-1: shared core (both paths).
+            return emitArrayGetPtrCore(ptrVal, idxVal);
         }
 
         if (call->callee == "flint_array_set_ptr") {
@@ -8522,10 +8587,8 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             auto* ptrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
             auto* valVal = emitExpr(call->args[2].get());
-            if (!ptrVal || !idxVal || !valVal) return nullptr;
-            auto* elemPtr = builder->CreateGEP(i64Ty, ptrVal, idxVal, "arr_elem");
-            builder->CreateStore(valVal, elemPtr);
-            return llvm::ConstantInt::get(i64Ty, 0);
+            // P0-NEW-1: shared core (both paths).
+            return emitArraySetPtrCore(ptrVal, idxVal, valVal);
         }
 
         if (call->callee == "flint_thread_spawn") {
@@ -8825,24 +8888,8 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         // Pointers are compared loosely: Flint passes aggregate handles by
         // value and raw pointers interchangeably in places, and rejecting that
         // would be a false positive on correct code.
-        if (llvm::FunctionType* fty = it->second->getFunctionType()) {
-            if (fty->getNumParams() != args.size()) {
-                return codegenError("'" + call->callee + "' expects " +
-                    std::to_string(fty->getNumParams()) + " argument(s), got " +
-                    std::to_string(args.size()));
-            }
-            for (size_t i = 0; i < args.size(); i++) {
-                if (!args[i]) continue;
-                llvm::Type* want = fty->getParamType(i);
-                llvm::Type* got = args[i]->getType();
-                bool bothPointers = want->isPointerTy() && got->isPointerTy();
-                if (want == got || bothPointers) continue;
-                return codegenError("argument " + std::to_string(i + 1) + " of '" +
-                    call->callee + "' has type " + llvmTypeToString(got) +
-                    ", but '" + call->callee + "' expects " + llvmTypeToString(want));
-            }
-        }
-        return builder->CreateCall(it->second, args);
+        // P0-NEW-1: shared call guard (both paths).
+        return createCallChecked(call->callee, it->second, args);
     }
 };
 
@@ -9535,26 +9582,17 @@ llvm::Value* Parser::emitArithOpEmit(char op, llvm::Value* l, llvm::Value* r) {
 }
 
 llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* r) {
-    // Aggregate operands are handled FIRST, before every other branch.
-    //
-    // Placing this at the end meant the earlier branches could still build an
-    // ICmp on a struct: `||` and `&&` do CreateICmpNE against a zero constant,
-    // and the float branch tests isDoubleTy on both sides. Any of those on a
-    // struct operand aborts the compiler with
-    //     assertion "Invalid operand types for ICmp instruction" failed
-    // before the aggregate lowering was ever reached -- which is why struct
-    // equality appeared to work on one path while enums died on both.
-    if (l && r && (l->getType()->isStructTy() || r->getType()->isStructTy())) {
+    // P0-NEW-1: comparisons AND every aggregate-operand use route through the
+    // shared Codegen core, so both paths lower identically and fixes land
+    // once. Aggregate operands short-circuit BEFORE the arithmetic and
+    // boolean branches: `||` does ICmpNE against zero and `+` would build an
+    // FAdd on a struct -- either aborts the compiler.
+    if (l && r) {
         const std::string& o = opTok.lexeme;
-        if (o != "==" && o != "!=") {
-            parseError("'" + o + "' is not defined for structs or enums; use == or !=");
-            return nullptr;
-        }
-        llvm::Value* eq = cg->emitAggregateEqual(l, r, 0);
-        if (!eq) return nullptr;
-        if (o == "==")
-            return cg->builder->CreateZExt(eq, cg->i64Ty, "agg_eq");
-        return cg->builder->CreateZExt(cg->builder->CreateNot(eq), cg->i64Ty, "agg_ne");
+        bool isCompare = (o == "==" || o == "!=" || o == "<" || o == ">" ||
+                          o == "<=" || o == ">=");
+        if (isCompare || l->getType()->isStructTy() || r->getType()->isStructTy())
+            return cg->emitCompareValues(o, l, r);
     }
     TokenType tt = opTok.type;
     if (tt == TokenType::AT) {
@@ -9671,51 +9709,8 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
         auto* andVal = cg->builder->CreateAnd(lBool, rBool, "and");
         return cg->builder->CreateZExt(andVal, cg->i64Ty, "and_ext");
     }
-    // Float compare path
-    if (l->getType()->isDoubleTy() || r->getType()->isDoubleTy()) {
-        if (!l->getType()->isDoubleTy())
-            l = cg->builder->CreateSIToFP(l, llvm::Type::getDoubleTy(*cg->ctx), "lToFP");
-        if (!r->getType()->isDoubleTy())
-            r = cg->builder->CreateSIToFP(r, llvm::Type::getDoubleTy(*cg->ctx), "rToFP");
-        llvm::CmpInst::Predicate pred;
-        std::string& op = opTok.lexeme;
-        if (op == "==") pred = llvm::CmpInst::FCMP_OEQ;
-        else if (op == "!=") pred = llvm::CmpInst::FCMP_ONE;
-        else if (op == "<")  pred = llvm::CmpInst::FCMP_OLT;
-        else if (op == ">")  pred = llvm::CmpInst::FCMP_OGT;
-        else if (op == "<=") pred = llvm::CmpInst::FCMP_OLE;
-        else if (op == ">=") pred = llvm::CmpInst::FCMP_OGE;
-        auto* cmp = cg->builder->CreateFCmp(pred, l, r, "fcmp");
-        return cg->builder->CreateZExt(cmp, cg->i64Ty, "fcmp_ext");
-    }
-
-    llvm::CmpInst::Predicate pred;
-    std::string& op = opTok.lexeme;
-    if (op == "==") pred = llvm::CmpInst::ICMP_EQ;
-    else if (op == "!=") pred = llvm::CmpInst::ICMP_NE;
-    else if (op == "<")  pred = llvm::CmpInst::ICMP_SLT;
-    else if (op == ">")  pred = llvm::CmpInst::ICMP_SGT;
-    else if (op == "<=") pred = llvm::CmpInst::ICMP_SLE;
-    else if (op == ">=") pred = llvm::CmpInst::ICMP_SGE;
-    else { parseError("unknown operator '" + op + "'"); return nullptr; }
-    // String content comparison: ptr vs ptr compares contents
-    // via flint_str_compare (same convention as `+` → concat).
-    if (l->getType()->isPointerTy() && r->getType()->isPointerTy()) {
-        auto it = cg->functionMap.find("flint_str_compare");
-        if (it != cg->functionMap.end()) {
-            auto* sc = cg->builder->CreateCall(it->second, {l, r}, "strcmp");
-            auto* z = llvm::ConstantInt::get(cg->i64Ty, 0);
-            auto* scmp = cg->builder->CreateICmp(pred, sc, z, "scmp");
-            return cg->builder->CreateZExt(scmp, cg->i64Ty, "scmp_ext");
-        }
-    }
-    // Normalize types: pointer vs integer zero → null pointer comparison
-    if (l->getType()->isPointerTy() && r->getType()->isIntegerTy())
-        r = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(l->getType()));
-    else if (l->getType()->isIntegerTy() && r->getType()->isPointerTy())
-        l = llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(r->getType()));
-    auto* cmp = cg->builder->CreateICmp(pred, l, r, "cmp");
-    return cg->builder->CreateZExt(cmp, cg->i64Ty, "cmp_ext");
+    parseError("unknown operator '" + opTok.lexeme + "'");
+    return nullptr;
 }
 
 llvm::Value* Parser::emitIndexEmit(llvm::Value* base, llvm::Value* index) {
@@ -9894,99 +9889,101 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
 
     if (callee == "print") {
         if (args.empty()) { parseError("print() needs an arg"); return nullptr; }
-        if (args[0]->getType() == cg->i8PtrTy) {
-            auto it = cg->functionMap.find("flint_println_str");
-            if (it != cg->functionMap.end()) cg->builder->CreateCall(it->second, {args[0]});
-        } else if (args[0]->getType()->isDoubleTy()) {
-            auto it = cg->functionMap.find("flint_println_f64");
-            if (it != cg->functionMap.end()) cg->builder->CreateCall(it->second, {args[0]});
-        } else {
-            auto it = cg->functionMap.find("flint_println_i64");
-            if (it != cg->functionMap.end()) cg->builder->CreateCall(it->second, {args[0]});
-        }
-        return nullptr;
+        // P0-NEW-1: shared dispatch — key on the VALUE type, and unsupported
+        // types now get a diagnostic instead of a silent wrong branch.
+        return cg->emitPrintCall(args[0]);
     }
 
     if (callee == "flint_array_get") {
         if (args.size() != 2) { parseError("flint_array_get needs 2 args"); return nullptr; }
-        auto* dataPtr = cg->builder->CreateExtractValue(args[0], {0}, "arr_data");
-        auto* len = cg->builder->CreateExtractValue(args[0], {1}, "arr_len");
-        cg->emitLoopBoundsCheck(args[1], len);
-        auto* elemPtr = cg->builder->CreateGEP(cg->i64Ty, dataPtr, args[1], "arr_elem");
-        return cg->builder->CreateLoad(cg->i64Ty, elemPtr, "arr_elem_val");
+        // P0-NEW-1: shared core — the struct guard now applies here too.
+        return cg->emitArrayGetCore(args[0], args[1]);
     }
 
     if (callee == "flint_array_set") {
         if (args.size() != 3) { parseError("flint_array_set needs 3 args"); return nullptr; }
-        auto* dataPtr = cg->builder->CreateExtractValue(args[0], {0}, "arr_data");
-        auto* len = cg->builder->CreateExtractValue(args[0], {1}, "arr_len");
-        cg->emitLoopBoundsCheck(args[1], len);
-        auto* elemPtr = cg->builder->CreateGEP(cg->i64Ty, dataPtr, args[1], "arr_elem");
-        cg->builder->CreateStore(args[2], elemPtr);
-        return llvm::ConstantInt::get(cg->i64Ty, 0);
+        // P0-NEW-1: shared core — the struct guard now applies here too.
+        return cg->emitArraySetCore(args[0], args[1], args[2]);
     }
 
     if (callee == "flint_array_data") {
         if (args.size() != 1) { parseError("flint_array_data needs 1 arg"); return nullptr; }
-        return cg->builder->CreateExtractValue(args[0], {0}, "arr_data");
+        // P0-NEW-1: shared core (both paths).
+        return cg->emitArrayDataCore(args[0]);
     }
 
     if (callee == "flint_array_get_ptr") {
         if (args.size() != 2) { parseError("flint_array_get_ptr needs 2 args"); return nullptr; }
-        auto* elemPtr = cg->builder->CreateGEP(cg->i64Ty, args[0], args[1], "arr_elem");
-        return cg->builder->CreateLoad(cg->i64Ty, elemPtr, "arr_elem_val");
+        // P0-NEW-1: shared core (both paths).
+        return cg->emitArrayGetPtrCore(args[0], args[1]);
     }
 
     if (callee == "flint_array_set_ptr") {
         if (args.size() != 3) { parseError("flint_array_set_ptr needs 3 args"); return nullptr; }
-        auto* elemPtr = cg->builder->CreateGEP(cg->i64Ty, args[0], args[1], "arr_elem");
-        cg->builder->CreateStore(args[2], elemPtr);
-        return llvm::ConstantInt::get(cg->i64Ty, 0);
+        // P0-NEW-1: shared core (both paths).
+        return cg->emitArraySetPtrCore(args[0], args[1], args[2]);
     }
 
     auto fIt = cg->functionMap.find(callee);
     if (fIt != cg->functionMap.end()) {
-        return cg->builder->CreateCall(fIt->second, args, callee);
+        // P0-NEW-1: shared call guard — the Parser copy had none, so a
+        // wrong-arity or wrong-type call built invalid IR here.
+        return cg->createCallChecked(callee, fIt->second, args);
     }
     auto gIt = cg->genericFunctions.find(callee);
     if (gIt != cg->genericFunctions.end()) {
         cg->typeSubstMap.clear();
         auto* genFn = gIt->second;
-        for (size_t i = 0; i < genFn->typeParams.size(); i++) {
-            if (i < genFn->params.size() && i < args.size()) {
-                auto* argTy = args[i]->getType();
-                for (auto& [sName, sd] : structRegistry) {
-                    auto* st = llvm::StructType::getTypeByName(*cg->ctx, sName);
-                    if (st && argTy == st) {
-                        cg->typeSubstMap[genFn->typeParams[i]] = Type::struct_(sName);
-                        break;
-                    }
+        // P0-NEW-1: the by-PARAMETER rule, matching the AST path: a type
+        // parameter infers from the ARGUMENT filling the parameter that
+        // mentions it. Indexing type params by argument position -- the old
+        // copy of this loop -- instantiated `fn swap<T,U>(a: U, b: T)` with
+        // T and U swapped, silently. Un-inferrable still defaults to i64
+        // (emit mode has no AST to interrogate); the shared call guard
+        // below catches any resulting misfit instead of letting LLVM
+        // reject the module.
+        auto inferFromArg = [&](const std::string& tp, size_t pi) {
+            if (pi >= args.size()) return;
+            auto* argTy = args[pi]->getType();
+            for (auto& [sName, sd] : structRegistry) {
+                auto* st = llvm::StructType::getTypeByName(*cg->ctx, sName);
+                if (st && argTy == st) {
+                    cg->typeSubstMap[tp] = Type::struct_(sName);
+                    return;
                 }
-                auto eit = enumRegistry.begin();
-                while (eit != enumRegistry.end()) {
-                    auto* enumTy = llvm::StructType::getTypeByName(*cg->ctx, eit->second.name);
-                    if (enumTy && argTy == enumTy) {
-                        cg->typeSubstMap[genFn->typeParams[i]] = Type::enum_(eit->second.name);
-                        break;
-                    }
-                    ++eit;
-                }
-                if (argTy == cg->i64Ty) cg->typeSubstMap[genFn->typeParams[i]] = Type::i64();
-                // f64 was missing here, so a generic called with a double was
-                // instantiated as i64 and the call failed with an LLVM type
-                // mismatch instead of a Flint diagnostic.
-                if (argTy == llvm::Type::getDoubleTy(*cg->ctx)) {
-                    cg->typeSubstMap[genFn->typeParams[i]] = Type::f64();
-                }
-                if (argTy == cg->i8PtrTy) cg->typeSubstMap[genFn->typeParams[i]] = Type::str();
             }
+            auto eit = enumRegistry.begin();
+            while (eit != enumRegistry.end()) {
+                auto* ety = llvm::StructType::getTypeByName(*cg->ctx, eit->second.name);
+                if (ety && argTy == ety) {
+                    cg->typeSubstMap[tp] = Type::enum_(eit->second.name);
+                    return;
+                }
+                ++eit;
+            }
+            if (argTy == cg->i64Ty) { cg->typeSubstMap[tp] = Type::i64(); return; }
+            if (argTy == llvm::Type::getDoubleTy(*cg->ctx)) { cg->typeSubstMap[tp] = Type::f64(); return; }
+            if (argTy == cg->i8PtrTy) { cg->typeSubstMap[tp] = Type::str(); }
+        };
+        for (size_t ti = 0; ti < genFn->typeParams.size(); ti++) {
+            const std::string& tp = genFn->typeParams[ti];
+            size_t pi = (size_t)-1;
+            for (size_t pp = 0; pp < genFn->params.size(); pp++) {
+                if (genFn->params[pp].second.kind == TypeKind::TypeParam &&
+                    genFn->params[pp].second.structName == tp) {
+                    pi = pp;
+                    break;
+                }
+            }
+            if (pi != (size_t)-1) inferFromArg(tp, pi);
         }
         std::string instanceKey = callee;
         for (auto& [k, v] : cg->typeSubstMap) instanceKey += ":" + k + "=" + std::to_string((int)v.kind);
         auto cacheIt = cg->genericCache.find(instanceKey);
         if (cacheIt != cg->genericCache.end()) {
             cg->typeSubstMap.clear();
-            return cg->builder->CreateCall(cacheIt->second, args, callee);
+            // P0-NEW-1: shared call guard (both paths).
+            return cg->createCallChecked(callee, cacheIt->second, args, /*instantiationMsg=*/true);
         }
         {
             std::vector<Type> typeArgs;
@@ -9997,7 +9994,8 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
             auto* spec = cg->specialize(genFn, typeArgs);
             cg->typeSubstMap.clear();
             if (!spec) return nullptr;
-            return cg->builder->CreateCall(spec, args, callee);
+            // P0-NEW-1: shared call guard (both paths).
+            return cg->createCallChecked(callee, spec, args, /*instantiationMsg=*/true);
         }
     }
     // M3 dispatch: method syntax reaches here as fa_<name>; try to resolve
@@ -10023,7 +10021,8 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
             parseError("no type in scope implements '" + impl->name + "'");
             return nullptr;
         }
-        return cg->builder->CreateCall(fit->second, args, impl->name);
+        // P0-NEW-1: shared call guard (both paths).
+        return cg->createCallChecked(impl->name, fit->second, args);
     }
     parseError("call to unknown function '" + callee + "'");
     return nullptr;
