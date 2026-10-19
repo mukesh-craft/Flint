@@ -1,0 +1,7 @@
+fn apply(g: fn(i64) -> i64, x: i64) -> i64 {
+    return g(x);
+}
+fn main() -> i64 {
+    print(apply(|x: i64| x + 1, 5));
+    return 0;
+}
