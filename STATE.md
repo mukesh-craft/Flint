@@ -74,3 +74,18 @@ NEXT:
    tests/t_flow.fl; test_errors.sh asserts the message.
 3. M6: cascade fix
 4. M7: last, only if budget allows
+
+NEXT:
+M5 DONE (committed).
+- 'parallel for' syntax REPLACED at both paths (parseParallelForStmt and
+  parseParallelForStmtEmit) with the migration error per memory.md B6; exact
+  spans found by index+anchor, whole-body replacement (the last-session trap):
+  not one line spliced.
+- KW_PARALLEL token and flint_parallel_for runtime symbol kept (ABI).
+- tests/t_flow.fl migrated to a plain `for i in range(5)` printing 100..104
+  (same expectations, no run.sh change needed there).
+- NEW: tests/t_pfor_removed.fl + run.sh check_fail asserting the migration
+  message (the M5 gate; test_errors.sh only catalogs stage3 emit-strings, so
+  the parse-side message belongs in run.sh).
+- Gates: run.sh smoke 30/30; selfhost fixed-point byte-identical after the
+  change; everything else untouched.

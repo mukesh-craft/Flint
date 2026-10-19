@@ -3316,80 +3316,13 @@ private:
     }
 
     std::unique_ptr<ExprAST> parseParallelForStmt() {
-        // parallel for i in start..end { body }
-        // Desugars at parse time to a worker function + flint_parallel_for call
-        advance(); // 'parallel'
-        consume(TokenType::KW_FOR, "expected 'for' after 'parallel'");
-        Token loopVar = consume(TokenType::IDENTIFIER, "expected loop variable name");
-        consume(TokenType::KW_IN, "expected 'in'");
-        auto startExpr = parseExpression();
-        if (!startExpr) return nullptr;
-        consume(TokenType::DOTDOT, "expected '..'");
-        auto endExpr = parseExpression();
-        if (!endExpr) return nullptr;
-        // Worker param scope (same fix as parseForStmt): the body sees the
-        // loop var as declared while parsing.
-        bool hadPLoop = declaredVars.count(loopVar.lexeme) != 0;
-        Type savedPTy = Type::i64();
-        auto psit = varTypeMap.find(loopVar.lexeme);
-        if (psit != varTypeMap.end()) savedPTy = psit->second;
-        declaredVars.insert(loopVar.lexeme);
-        varTypeMap[loopVar.lexeme] = Type::i64();
-        auto body = parseBlock();
-        if (!hadPLoop) {
-            declaredVars.erase(loopVar.lexeme);
-            varTypeMap.erase(loopVar.lexeme);
-        } else {
-            varTypeMap[loopVar.lexeme] = savedPTy;
-        }
-        if (!body) return nullptr;
-
-        // parallel for i in start..end { body }
-        // Desugars to: fn __pfor_N(i: i64) -> i64 { body; return 0 }
-        //              flint_parallel_for(end - start, &__pfor_N, 0)
-        static int pforCounter = 0;
-        std::string workerName = "__pfor_" + std::to_string(pforCounter++);
-
-        auto block = std::make_unique<BlockStmtAST>();
-
-        // Worker function: fn __pfor_N(i: i64) -> i64 { body; return 0 }.
-        // Hoisted to pendingFns (drained into prog->functions by
-        // parseProgram): a nested FunctionAST inside the block would never
-        // be declared or emitted, leaving `&__pfor_N` unresolvable.
-        auto workerFn = std::make_unique<FunctionAST>();
-        workerFn->name = workerName;
-        workerFn->returnType = Type::i64();
-        workerFn->params.push_back({loopVar.lexeme, Type::i64()});
-        auto bodyBlock = static_cast<BlockStmtAST*>(body.get());
-        auto retStmt = std::make_unique<ReturnStmtAST>(std::make_unique<NumberExprAST>(0));
-        retStmt->loc = loopVar.loc;
-        bodyBlock->stmts.push_back(std::move(retStmt));
-        workerFn->body = std::move(body);
-        workerFn->loc = loopVar.loc;
-        pendingFns.push_back(std::move(workerFn));
-
-        // Build call: flint_parallel_for(count, &workerName, 0)
-        // count = end - start (run-time computation)
-        std::vector<std::unique_ptr<ExprAST>> pforArgs;
-        auto varE = std::make_unique<VariableExprAST>(loopVar.lexeme);
-        auto subExpr = std::make_unique<BinaryExprAST>('-', std::move(endExpr), std::move(startExpr));
-        subExpr->loc = loopVar.loc;
-        pforArgs.push_back(std::move(subExpr));
-
-        auto varRef = std::make_unique<VariableExprAST>(workerName);
-        varRef->loc = loopVar.loc;
-        auto addrOf = std::make_unique<RefExprAST>(std::move(varRef));
-        addrOf->loc = loopVar.loc;
-        pforArgs.push_back(std::move(addrOf));
-
-        auto zero = std::make_unique<NumberExprAST>(0);
-        zero->loc = loopVar.loc;
-        pforArgs.push_back(std::move(zero));
-
-        auto parallelCall = std::make_unique<CallExprAST>("flint_parallel_for", std::move(pforArgs));
-        parallelCall->loc = loopVar.loc;
-        block->stmts.push_back(std::move(parallelCall));
-        return block;
+        // B6 migration: `parallel for` is removed rather than fixed. The old
+        // desugar ran a worker on pthreads with by-value snapshots, which is
+        // a cross-thread use-after-free for non-copyable captures, and the
+        // runtime call had no result channel. The token stays for lexing;
+        // the syntax is refused here with migration advice.
+        parseError("'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce");
+        return nullptr;
     }
 
     std::unique_ptr<ExprAST> parsePythonBlock() {
@@ -10493,74 +10426,9 @@ void Parser::parseForStmtEmit() {
 }
 
 void Parser::parseParallelForStmtEmit() {
-    // parallel for i in start..end { body }
-    // -> declares a worker function with body, then calls flint_parallel_for(length, &worker, 0)
-    advance(); // 'parallel'
-    consume(TokenType::KW_FOR, "expected 'for' after 'parallel'");
-    Token loopVar = consume(TokenType::IDENTIFIER, "expected loop variable name");
-    consume(TokenType::KW_IN, "expected 'in'");
-    auto* startVal = parseExpressionEmit();
-    consume(TokenType::DOTDOT, "expected '..'");
-    auto* endVal = parseExpressionEmit();
-    consume(TokenType::LBRACE, "expected '{' for parallel for body");
-    if (!startVal || !endVal) return;
-
-    // Length = end - start (clamped to >= 0)
-    auto* zero = llvm::ConstantInt::get(cg->i64Ty, 0);
-    auto* length = cg->builder->CreateSub(endVal, startVal, "pfor_len");
-    auto* lengthClamped = cg->builder->CreateSelect(
-        cg->builder->CreateICmpSLT(length, zero), zero, length, "pfor_len_clamped");
-
-    // Unique worker function name
-    static int pforEmitCounter = 0;
-    std::string workerName = "__pfor_emit_" + std::to_string(pforEmitCounter++);
-
-    // Declare worker: i64(i64) -> i64 (iteration index -> result)
-    auto* workerTy = llvm::FunctionType::get(cg->i64Ty, {cg->i64Ty}, false);
-    auto* workerFn = llvm::Function::Create(workerTy,
-        llvm::Function::InternalLinkage, workerName, cg->mod.get());
-    cg->functionMap[workerName] = workerFn;
-
-    // Save codegen state
-    auto* savedFunc = cg->currentFunc;
-    auto* savedBB   = cg->builder->GetInsertBlock();
-    auto savedSym   = cg->symTable; // copy assuming copyable
-
-    // Build worker function body. Worker receives the *raw* iteration index from
-    // flint_parallel_for. For most use cases (start == 0), the index IS the loop var.
-    // For non-zero start, we expose `startVal` as a global so the user can compute
-    // (start + i) if needed. (For simplicity, the worker just receives 0..length-1.)
-    auto* entry = llvm::BasicBlock::Create(*cg->ctx, "entry", workerFn);
-    cg->builder->SetInsertPoint(entry);
-    cg->currentFunc = workerFn;
-    cg->symTable = SymbolTable();
-
-    auto argIt = workerFn->args().begin();
-    auto* iAlloca = cg->createEntryAlloca(cg->i64Ty, loopVar.lexeme);
-    cg->builder->CreateStore(&*argIt, iAlloca);
-    cg->symTable.declare(loopVar.lexeme, {Type::i64(), iAlloca, nullptr, true, false, 0});
-
-    // Parse parallel for body
-    cg->symTable.enterScope();
-    while (!check(TokenType::RBRACE) && !isAtEnd()) {
-        parseStatementEmit();
-    }
-    consume(TokenType::RBRACE, "expected '}' for parallel for body");
-    cg->symTable.exitScope();
-    if (!cg->builder->GetInsertBlock()->getTerminator())
-        cg->builder->CreateRet(llvm::ConstantInt::get(cg->i64Ty, 0));
-
-    // Restore
-    cg->currentFunc = savedFunc;
-    cg->builder->SetInsertPoint(savedBB);
-    cg->symTable = savedSym;
-
-    // Emit: flint_parallel_for(length, bitcast worker to str, 0)
-    auto* parallelFn = cg->functionMap["flint_parallel_for"];
-    if (!parallelFn) { parseError("flint_parallel_for not declared"); return; }
-    auto* workerAsPtr = cg->builder->CreateBitCast(workerFn,
-        llvm::PointerType::get(*cg->ctx, 0), workerName + "_ptr");
-    cg->builder->CreateCall(parallelFn, {lengthClamped, workerAsPtr, zero});
+    // B6 migration: see parseParallelForStmt. Same removal, same advice, on
+    // the emit path.
+    parseError("'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce");
 }
 
 void Parser::parsePythonBlockEmit() {
