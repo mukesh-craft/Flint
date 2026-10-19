@@ -4370,6 +4370,24 @@ private:
                 }
                 return ec;
             }
+            // M2b: explicit type arguments, `f::<T1, T2>(...)`.
+            //
+            // `::` is two COLON tokens to the lexer, so no lexer change is
+            // needed and the token contract (lexdiff) stays intact. Nothing
+            // in the language used `::` before, so the form is unambiguous.
+            std::vector<Type> explicitTypeArgs;
+            if (check(TokenType::COLON) && peek(1).type == TokenType::COLON) {
+                advance(); // ':'
+                advance(); // ':'
+                if (!match(TokenType::LT)) {
+                    parseError("expected '<' after '::' before explicit type arguments");
+                    return nullptr;
+                }
+                do {
+                    explicitTypeArgs.push_back(parseType());
+                } while (match(TokenType::COMMA));
+                consume(TokenType::GT, "expected '>' after explicit type arguments");
+            }
             if (match(TokenType::LPAREN)) {
                 std::vector<std::unique_ptr<ExprAST>> args;
                 if (!check(TokenType::RPAREN)) {
@@ -4392,6 +4410,7 @@ private:
                 }
                 consume(TokenType::RPAREN, "expected ')' after arguments");
                 auto c = std::make_unique<CallExprAST>(name, std::move(args));
+                c->typeArgs = std::move(explicitTypeArgs);
                 c->loc = loc;
                 return c;
             }
@@ -4513,8 +4532,10 @@ public:
     int parseTensorNumEmit(double& out, bool& isF);
     llvm::Value* emitStructLiteralEmit(const std::string& name);
     llvm::Value* emitEnumConstructEmit(const std::string& enumName, const std::string& variantName);
-    llvm::Value* emitCallEmit(const std::string& callee);
-    llvm::Value* emitDirectCall(const std::string& callee, std::vector<llvm::Value*>& args);
+    llvm::Value* emitCallEmit(const std::string& callee,
+                              const std::vector<Type>& explicitTypeArgs = {});
+    llvm::Value* emitDirectCall(const std::string& callee, std::vector<llvm::Value*>& args,
+                                 const std::vector<Type>& explicitTypeArgs = {});
     llvm::Value* parseMatchEmit();
     void parseStatementEmit();
     void parseExpressionStmtEmit();
@@ -8494,6 +8515,45 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         if (git != genericFunctions.end()) {
             auto* generic = git->second;
 
+            // M2b: explicit type arguments (`f::<T>(...)`) override
+            // inference. They are concrete types by construction — a type
+            // parameter would have nothing to resolve to.
+            if (!call->typeArgs.empty()) {
+                if (call->typeArgs.size() != generic->typeParams.size())
+                    return codegenError("'" + call->callee + "' expects " +
+                        std::to_string(generic->typeParams.size()) +
+                        " type argument(s), got " +
+                        std::to_string(call->typeArgs.size()));
+                for (auto& ta : call->typeArgs)
+                    if (ta.kind == TypeKind::TypeParam)
+                        return codegenError("the explicit type argument for '" +
+                            call->callee + "' must be a concrete type");
+                llvm::Function* ef = nullptr;
+                auto ecit = genericCache.find(mangle(call->callee, call->typeArgs));
+                if (ecit != genericCache.end()) {
+                    ef = ecit->second;
+                } else {
+                    ef = specialize(generic, call->typeArgs);
+                }
+                if (!ef) return codegenError(std::string("failed to specialize '") + call->callee + "'");
+                std::vector<llvm::Value*> eargs;
+                for (auto& a : call->args) {
+                    auto* v = emitExpr(a.get());
+                    if (!v) return nullptr;
+                    eargs.push_back(v);
+                    if (a->kind == NodeKind::Variable) {
+                        auto* varArg = static_cast<VariableExprAST*>(a.get());
+                        auto* srcSym = symTable.lookup(varArg->name);
+                        if (srcSym && !srcSym->type.isCopyType()) {
+                            if (srcSym->borrowCount > 0)
+                                return codegenError("cannot move while borrowed");
+                            srcSym->moved = true;
+                        }
+                    }
+                }
+                return createCallChecked(call->callee, ef, eargs, /*instantiationMsg=*/true);
+            }
+
             // Infer each type parameter from the ARGUMENT that fills the
             // parameter which mentions it.
             //
@@ -8584,6 +8644,10 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             // into a Flint diagnostic. P0-NEW-1: shared guard (both paths).
             return createCallChecked(call->callee, f, args, /*instantiationMsg=*/true);
         }
+
+        if (!call->typeArgs.empty())
+            return codegenError("explicit type arguments are only allowed on a generic function; '" +
+                call->callee + "' is not generic");
 
         if (call->callee == "print") {
             if (call->args.empty()) { return codegenError("print() needs an arg"); }
@@ -9560,7 +9624,22 @@ llvm::Value* Parser::parseIdentEmit() {
             auto* voidArg = cg->builder->CreateIntToPtr(argVal, cg->i8PtrTy, "thread_arg");
             return cg->builder->CreateCall(createFn, {wrapperPtr, voidArg}, "thread_id");
         }
-        return emitCallEmit(name);
+        // M2b: explicit type arguments in emit mode — the same syntax and
+        // the same rules as the AST path (both paths must agree).
+        std::vector<Type> explicitTypeArgs;
+        if (check(TokenType::COLON) && peek(1).type == TokenType::COLON) {
+            advance(); // ':'
+            advance(); // ':'
+            if (!match(TokenType::LT)) {
+                parseError("expected '<' after '::' before explicit type arguments");
+                return nullptr;
+            }
+            do {
+                explicitTypeArgs.push_back(parseType());
+            } while (match(TokenType::COMMA));
+            consume(TokenType::GT, "expected '>' after explicit type arguments");
+        }
+        return emitCallEmit(name, explicitTypeArgs);
     }
     if (structRegistry.count(name) && match(TokenType::LBRACE)) {
         return emitStructLiteralEmit(name);
@@ -9898,7 +9977,8 @@ llvm::Value* Parser::emitEnumConstructEmit(const std::string& enumName, const st
     return cg->builder->CreateLoad(enumTy, alloca, enumName + "_val");
 }
 
-llvm::Value* Parser::emitCallEmit(const std::string& callee) {
+llvm::Value* Parser::emitCallEmit(const std::string& callee,
+                                  const std::vector<Type>& explicitTypeArgs) {
     std::vector<llvm::Value*> args;
     if (!check(TokenType::RPAREN)) {
         do {
@@ -9907,10 +9987,11 @@ llvm::Value* Parser::emitCallEmit(const std::string& callee) {
         } while (match(TokenType::COMMA));
     }
     consume(TokenType::RPAREN, "expected ')' after arguments");
-    return emitDirectCall(callee, args);
+    return emitDirectCall(callee, args, explicitTypeArgs);
 }
 
-llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm::Value*>& args) {
+llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm::Value*>& args,
+                                    const std::vector<Type>& explicitTypeArgs) {
     // Map methods (emit-mode): fa_has/fa_get/fa_set only used on maps.
     if (callee == "fa_has" || callee == "fa_get" || callee == "fa_set") {
         std::string target = callee == "fa_has" ? "flint_map_has"
@@ -9966,6 +10047,11 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
         return cg->emitArraySetPtrCore(args[0], args[1], args[2]);
     }
 
+    if (!explicitTypeArgs.empty()) {
+        parseError("explicit type arguments are only allowed on a generic function; '" +
+            callee + "' is not generic");
+        return nullptr;
+    }
     auto fIt = cg->functionMap.find(callee);
     if (fIt != cg->functionMap.end()) {
         // P0-NEW-1: shared call guard — the Parser copy had none, so a
@@ -9976,6 +10062,28 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
     if (gIt != cg->genericFunctions.end()) {
         cg->typeSubstMap.clear();
         auto* genFn = gIt->second;
+        // M2b: explicit type arguments (`f::<T>(...)`) override inference,
+        // exactly as in the AST path.
+        if (!explicitTypeArgs.empty()) {
+            if (explicitTypeArgs.size() != genFn->typeParams.size()) {
+                parseError("'" + callee + "' expects " +
+                    std::to_string(genFn->typeParams.size()) + " type argument(s), got " +
+                    std::to_string(explicitTypeArgs.size()));
+                cg->typeSubstMap.clear();
+                return nullptr;
+            }
+            for (auto& ta : explicitTypeArgs) {
+                if (ta.kind == TypeKind::TypeParam) {
+                    parseError("the explicit type argument for '" + callee + "' must be a concrete type");
+                    cg->typeSubstMap.clear();
+                    return nullptr;
+                }
+            }
+            auto* espec = cg->specialize(genFn, explicitTypeArgs);
+            cg->typeSubstMap.clear();
+            if (!espec) { parseError("failed to specialize '" + callee + "'"); return nullptr; }
+            return cg->createCallChecked(callee, espec, args, /*instantiationMsg=*/true);
+        }
         // P0-NEW-1: the by-PARAMETER rule, matching the AST path: a type
         // parameter infers from the ARGUMENT filling the parameter that
         // mentions it. Indexing type params by argument position -- the old
