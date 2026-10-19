@@ -3926,7 +3926,7 @@ which needs the Rust array representation (M7).
 | M2 | partially done: param matching + f64 FCmp shipped; `unifyParamType` for index/`Cast`/`StructLiteral` args NOT done |
 | P0-NEW-1 path collapse | not started (B-tasks, 2026-10-19 chat) |
 | P0-NEW-2 enum payload width | not started (B-tasks) |
-| P0-NEW-3 tensor index check | not started (B-tasks; first of next chat) |
+| P0-NEW-3 tensor index check | **done** (narrow stop-gap, commit below) |
 | M3 traits | **done** — commit 1219665 |
 | M4 lambda as a value | **done** — commit a6b89e6 |
 | M5 remove `parallel for` | **done** — commit 9553f8c |
