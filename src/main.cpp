@@ -2445,8 +2445,11 @@ public:
                     auto fn = parseFunctionDefNoKeyword();
                     if (fn) { prog->functions.push_back(std::move(fn)); declaredVars.clear(); }
                 } else {
-                    auto stmt = parseExprStmt();
-                    if (stmt) { prog->topStmts.push_back(std::move(stmt)); declaredVars.clear(); }
+                    // M6: `name (something not a fn shape)` used to be parsed
+                    // silently as an expression statement (garbage accepted,
+                    // rc=0). One clean error, one line, no cascade.
+                    parseError("expected a top-level statement or a 'fn name(params) { body }' definition; '(name) (' here does not look like either");
+                    skipToLineEndTokens();
                 }
             } else if (check(TokenType::IDENTIFIER) && peek(1).type == TokenType::IDENTIFIER) {
                 // Bare function def: name param1 param2 ... { body } or name param1 param2 ... -> type { body }
@@ -2460,8 +2463,10 @@ public:
                     auto fn = parseFunctionDefNoKeyword();
                     if (fn) { prog->functions.push_back(std::move(fn)); declaredVars.clear(); }
                 } else {
-                    auto stmt = parseExprStmt();
-                    if (stmt) { prog->topStmts.push_back(std::move(stmt)); declaredVars.clear(); }
+                    // M6: `name name` without a body shape used to be silently
+                    // accepted (rc=0, nothing happened). One clean error.
+                    parseError("expected a top-level statement or a 'fn name(params) { body }' definition; 'name name' here does not look like either");
+                    skipToLineEndTokens();
                 }
             } else {
                 // Top-level statement (expression, call, etc.) — treat as script
@@ -2479,6 +2484,15 @@ public:
         for (auto& w : pendingFns) prog->functions.push_back(std::move(w));
         pendingFns.clear();
         return prog;
+    }
+
+    // M6: after a one-off error, skip the rest of the line so a single bad
+    // construct yields one error instead of one error per leftover token.
+    void skipToLineEndTokens() {
+        while (!isAtEnd() && !check(TokenType::NEWLINE) && !check(TokenType::SEMICOLON))
+            advance();
+        match(TokenType::NEWLINE);
+        match(TokenType::SEMICOLON);
     }
 
     // Try to parse a function definition without a leading keyword (fn/def).
@@ -4243,6 +4257,15 @@ private:
                 } while (match(TokenType::COMMA));
             }
             consume(TokenType::PIPE, "expected '|' to close lambda params");
+            // M6: `|p| -> T { ... }` is not a lambda form (lambdas have no
+            // return annotation). Previously the body parse silently
+            // accepted it and codegen later said "empty lambda body". One
+            // syntax error, then skip to line end so the cascade stops.
+            if (check(TokenType::ARROW)) {
+                parseError("a lambda has no '-> Ret' form: write an expression body (|x| x + 1); use a named fn when you need a return annotation");
+                skipToLineEndTokens();
+                return nullptr;
+            }
             // Scope the params for the body (restored after).
             auto savedVars = declaredVars;
             auto savedTypes = varTypeMap;

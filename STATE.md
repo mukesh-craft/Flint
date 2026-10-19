@@ -89,3 +89,20 @@ M5 DONE (committed).
   the parse-side message belongs in run.sh).
 - Gates: run.sh smoke 30/30; selfhost fixed-point byte-identical after the
   change; everything else untouched.
+
+NEXT:
+M6 DONE (committed).
+- `|p| -> T {}` now fails at the parse with one error ("a lambda has no
+  '-> Ret' form..."), then skips to line end; the old flow silently accepted
+  the form and codegen said "empty lambda body" + "function body emission
+  failed" (2 messages, exit 1).
+- Top-level `name (not-a-fn)` and `name name` candidates that fail the
+  isFunc lookahead (LBRACE/ARROW within 30 tokens, break at NEWLINE/SEMI/EOF)
+  now error once ("expected a top-level statement or a 'fn name(params)
+  { body }' definition; ...") instead of silently parseExprStmt-ing garbage
+  (previously rc=0, nothing ran).
+- New Parser::skipToLineEndTokens() — after a one-off error, skip tokens to
+  NEWLINE/SEMICOLON/EOF and consume the boundary; exactly-one-error contract.
+- Gates: smoke 30/30; parse-gate 131; lexdiff 130; differential 11; errors
+  catalog 128/128. Malformed fixtures in $TMP/opencode (m6lambda, m6ident,
+  m6ident2) — each exactly one error, rc=1.
