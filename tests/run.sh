@@ -41,6 +41,13 @@ check tests/t_generic_infer.fl "2"
 check tests/t_generic_infer.fl "1.5"
 check tests/t_generic_infer.fl "7"
 check tests/t_generic_infer.fl "4"
+# M2b: explicit type arguments `f::<T>(...)`. New syntax, so the fixture
+# lives in tests_manual/ (the self-hosted parser does not implement it yet).
+check tests_manual/t_explicit_targs.fl "5"
+check tests_manual/t_explicit_targs.fl "3"
+check tests_manual/t_explicit_targs.fl "7"
+check tests_manual/t_explicit_targs.fl "2.5"
+check tests_manual/t_explicit_targs.fl "42"
 check tests/t_types.fl "HELLO"
 check tests/t_types.fl "42"
 # util + time under JIT: these load .o files whose atomics must resolve in
@@ -71,5 +78,8 @@ check_flag --version "flintc "
 check_fail tests/t_for_bad.fl "for-in needs an array or str collection"
 # B6: 'parallel for' is removed with a migration message.
 check_fail tests/t_pfor_removed.fl "'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce"
+# M2b: explicit type arguments — wrong count, and a non-generic callee.
+check_fail tests_manual/t_explicit_targs_bad.fl "'idc' expects 1 type argument(s), got 2"
+check_fail tests_manual/t_explicit_targs_nongen.fl "explicit type arguments are only allowed on a generic function"
 echo "smoke: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -1,0 +1,37 @@
+# M2b: explicit type arguments — `f::<T>(...)` overrides inference.
+#
+# New syntax, so this fixture lives in tests_manual/ and is NOT part of the
+# corpus the self-hosted parser (stage2/flint_parse.fl) has to re-lex. The
+# self-host pipeline does not implement this syntax yet — the same situation
+# as the `trait` keyword (M3): the shipped C++ compiler has it, the bootstrap
+# ladder does not. The run.sh checks below gate it in the smoke suite.
+#
+# The point of the feature: when inference cannot see the type (a value whose
+# type only exists at runtime, a call whose result is opaque, an explicitly
+# chosen specialization), the caller can state it.
+
+struct Inner { a: i64 }
+
+enum Opt { A, B }
+
+fn idc<T>(x: T) -> T { return x }
+
+fn pair<T, U>(a: T, b: U) -> T { return a }
+
+fn main() {
+    # Explicit and inferred must agree.
+    print(idc::<i64>(5))                 # explicit i64 -> 5
+    print(idc(5))                       # inferred -> 5
+    print(idc::<Inner>(Inner { a: 3 }).a)  # explicit struct -> 3
+    print(idc(Inner { a: 3 }).a)        # inferred struct -> 3
+    print(pair::<i64, str>(7, "x"))     # two explicit type arguments -> 7
+    print(pair::<f64, i64>(2.5, 9))     # f64 first -> 2.5
+
+    # A match arm body is re-parsed in EMIT mode, so this line exercises the
+    # second emit path with the same syntax. Both paths must agree.
+    o = Opt.B
+    match o {
+        Opt.A => { print(0) },
+        Opt.B => { print(idc::<i64>(42)) },
+    }
+}
