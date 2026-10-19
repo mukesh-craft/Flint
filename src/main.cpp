@@ -7769,9 +7769,127 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
     // happen to match. Recursion carries `depth` so a malformed self-referential
     // type cannot loop forever; Flint has no recursive struct values today, so
     // the cap is a guard rather than a real limit.
+    // P0-NEW-2: enum equality without garbage-byte answers.
+    //
+    // An enum value is `{ i8, [N x i8] }` (tag + payload sized to the WIDEST
+    // variant). Bytes a variant never writes are garbage, so byte-comparing
+    // the payload array reported two identical `Pair.Some2(3, 4)` values as
+    // UNEQUAL — which is why enum equality was refused rather than answered
+    // wrongly. The refuse would still be the safe choice, but the width is
+    // now threadable: the variant struct layout `{ i8, T0, T1, ... }` is
+    // exactly the layout the construction path writes, so compare the TAG,
+    // then — once the tags match — dispatch on the tag and compare THAT
+    // variant's payload field by field, typed GEPs only. Unwritten tail
+    // bytes are never read, and two identical payloads compare equal.
+    llvm::Value* emitEnumEqual(llvm::Value* l, llvm::Value* r, EnumDef& ed, int depth) {
+        if (!l || !r) return nullptr;
+        llvm::Type* enumTy = l->getType();
+        auto* tag0 = builder->CreateExtractValue(l, {0}, "eq_tag_l");
+        auto* tag1 = builder->CreateExtractValue(r, {0}, "eq_tag_r");
+        auto* tagEq = builder->CreateICmpEQ(tag0, tag1, "eq_tags");
+
+        auto* allocaL = createEntryAlloca(enumTy, "eqcmp_l");
+        auto* allocaR = createEntryAlloca(enumTy, "eqcmp_r");
+        builder->CreateStore(l, allocaL);
+        builder->CreateStore(r, allocaR);
+        // Result accumulates as i64; a variant body ANDs its payload
+        // comparison into it. Tags unequal or an unknown tag leave 0
+        // (unequal) — never garbage-driven.
+        auto* resultSlot = createEntryAlloca(i64Ty, "eqcmp_r1");
+        builder->CreateStore(llvm::ConstantInt::get(i64Ty, 0), resultSlot);
+
+        // Tags equal -> payload dispatch. Tags differ -> skip straight to
+        // the end, where resultSlot still holds 0 (unequal).
+        auto* bbDispatch = llvm::BasicBlock::Create(*ctx, "eq_dispatch", currentFunc);
+        auto* bbEnd = llvm::BasicBlock::Create(*ctx, "eq_end", currentFunc);
+        builder->CreateCondBr(tagEq, bbDispatch, bbEnd);
+
+        // Tag chain: one block per variant; a matching tag falls into its
+        // compare body, otherwise the chain moves to the next variant.
+        std::vector<llvm::BasicBlock*> condBBs;
+        for (size_t k = 0; k < ed.variants.size(); k++)
+            condBBs.push_back(llvm::BasicBlock::Create(*ctx,
+                "eq_try_" + ed.variants[k].name, currentFunc));
+        builder->SetInsertPoint(bbDispatch);
+        if (condBBs.empty()) {
+            // Tag-only enum: tags already match here, so the result is 1.
+            builder->CreateStore(llvm::ConstantInt::get(i64Ty, 1), resultSlot);
+            builder->CreateBr(bbEnd);
+        } else {
+            builder->CreateBr(condBBs[0]);
+        }
+
+        for (size_t k = 0; k < ed.variants.size(); k++) {
+            auto& var = ed.variants[k];
+            llvm::BasicBlock* bodyBB =
+                llvm::BasicBlock::Create(*ctx, "eq_body_" + var.name, currentFunc);
+            llvm::BasicBlock* nextBB = (k + 1 < ed.variants.size())
+                ? condBBs[k + 1] : bbEnd;
+            builder->SetInsertPoint(condBBs[k]);
+            auto* isK = builder->CreateICmpEQ(tag0,
+                llvm::ConstantInt::get(i8Ty, (uint64_t)k), "eq_is_" + var.name);
+            builder->CreateCondBr(isK, bodyBB, nextBB);
+            builder->SetInsertPoint(bodyBB);
+
+            std::vector<llvm::Type*> fldTys = {i8Ty};
+            for (auto& pt : var.payloadTypes)
+                fldTys.push_back(llvmType(pt, *ctx, mod.get()));
+            auto* varTy = llvm::StructType::get(*ctx, fldTys);
+
+            llvm::Value* varEq = nullptr;
+            for (unsigned j = 1; j < fldTys.size(); j++) {
+                llvm::Value* fL = builder->CreateLoad(fldTys[j],
+                    builder->CreateStructGEP(varTy, allocaL, j, "eq_l." + var.name),
+                    "eq_lf." + var.name);
+                llvm::Value* fR = builder->CreateLoad(fldTys[j],
+                    builder->CreateStructGEP(varTy, allocaR, j, "eq_r." + var.name),
+                    "eq_rf." + var.name);
+                llvm::Value* feq = nullptr;
+                if (fldTys[j]->isFloatingPointTy())
+                    feq = builder->CreateFCmp(llvm::CmpInst::FCMP_OEQ, fL, fR, "eq_f");
+                else if (fldTys[j]->isPointerTy())
+                    feq = builder->CreateICmpEQ(fL, fR, "eq_p");
+                else if (fldTys[j]->isStructTy())
+                    feq = emitAggregateEqual(fL, fR, depth + 1);
+                else
+                    feq = builder->CreateICmpEQ(fL, fR, "eq_i");
+                if (!feq) return nullptr;
+                varEq = varEq ? builder->CreateAnd(varEq, feq, "eq_and." + var.name) : feq;
+            }
+            auto* bodyBool = varEq ? varEq : llvm::ConstantInt::getTrue(*ctx);
+            auto* prev = builder->CreateLoad(i64Ty, resultSlot, "eq_prev");
+            auto* both = builder->CreateAnd(prev,
+                builder->CreateZExt(bodyBool, i64Ty, "eq_ext." + var.name),
+                "eq_acc." + var.name);
+            builder->CreateStore(both, resultSlot);
+            builder->CreateBr(nextBB);
+        }
+
+        builder->SetInsertPoint(bbEnd);
+        auto* acc = builder->CreateLoad(i64Ty, resultSlot, "eq_acc_final");
+        return builder->CreateICmpNE(acc, llvm::ConstantInt::get(i64Ty, 0), "eq_bool");
+    }
+
     llvm::Value* emitAggregateEqual(llvm::Value* l, llvm::Value* r, int depth) {
         if (!l || !r || depth > 16) return nullptr;
         llvm::Type* t = l->getType();
+        // P0-NEW-2: named struct whose name is a registered ENUM -> the
+        // per-variant payload compare. Kept at the top so the nested-struct
+        // recursion below routes enum payloads the same way.
+        if (t->isStructTy() && llvm::isa<llvm::StructType>(t)) {
+            auto* st = llvm::cast<llvm::StructType>(t);
+            // Enum types are identified (non-literal) structs; literal
+            // aggregates from the struct path have no name to look up.
+            if (st->isLiteral()) { /* not a registered enum */ }
+            else {
+                auto eit = enumRegistry.find(st->getName().str());
+                if (eit != enumRegistry.end()) {
+                    if (r->getType() != t)
+                        return codegenError("cannot compare enum '" + st->getName().str() + "' with a value of a different type");
+                    return emitEnumEqual(l, r, eit->second, depth);
+                }
+            }
+        }
         // Array fields are compared element-wise.
         //
         // An enum's LLVM type is `{ i8, [N x i8] }`: a tag followed by a PACKED
@@ -7782,16 +7900,10 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         // so `E.B(3) == E.B(3)` killed the compiler while struct equality --
         // whose fields are all scalars -- worked.
         if (t->isArrayTy() || r->getType()->isArrayTy()) {
-            // A packed payload array inside an enum. Comparing it byte-wise is
-            // NOT correct here: the array is sized to the widest variant, so
-            // bytes past the payload a given variant actually writes are
-            // whatever was on the stack. That made two identical
-            // `Some2(3, 4)` values compare UNEQUAL -- a confidently wrong
-            // answer, which is worse than the abort this replaced.
-            //
-            // Doing it properly needs the number of payload bytes each variant
-            // writes, which lives in the enum definition, not in the LLVM
-            // type. Until that is threaded through, refuse rather than lie.
+            // Struct fields can still hold typed arrays ([N x i64] etc.) whose
+            // representation is NOT the enum payload: byte-comparing those is
+            // as wrong as before, and per-element lowering for struct fields
+            // is separate work. Refuse until then.
             return nullptr;
         }
         if (!t->isStructTy()) {

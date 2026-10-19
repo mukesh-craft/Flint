@@ -52,15 +52,30 @@ fn main() {
     print(n1 == n4)
 
     # --- enums ------------------------------------------------------------
-    # REFUSED, not wrong. An enum's payload is a packed array sized to the
-    # widest variant, so bytes a variant never writes hold whatever was on the
-    # stack. Byte-comparing that reports two identical Some2(3,4) values as
-    # UNEQUAL, which is worse than the abort it replaced. The compiler reports
-    # this instead of guessing. Correct enum equality needs the payload width
-    # per variant threaded from the enum definition into comparison -- tracked
-    # in memory.md.
-    #
-    # The remaining assertions below are scalars, which still work.
+    # P0-NEW-2: enum equality compares the tag, then -- only when the tags
+    # match -- that one variant's payload FIELD by field. An enum's payload
+    # is a packed array sized to the widest variant, so bytes a variant never
+    # writes hold garbage: byte-comparing them reported two identical
+    # Some2(3, 4) values as UNEQUAL. Field-wise compares never read those
+    # tail bytes, so identical values compare equal and this fixture pins
+    # the regression.
+    p1 = Pair.Some2(3, 4)
+    p2 = Pair.Some2(3, 4)
+    p3 = Pair.Some2(3, 5)
+    p4 = Pair.None
+    p5 = Pair.None
+    print(p1 == p2)
+    print(p1 == p3)
+    print(p1 != p2)
+    print(p1 != p3)
+    print(p4 == p5)
+    print(p1 == p4)
+
+    color = Color.Green
+    print(color == Color.Green)
+    print(color != Color.Red)
+
+    # The remaining assertions below are scalars mixed into one `==`.
     print(1 == 1)
     print(2.5 == 2.5)
 }
