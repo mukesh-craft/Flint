@@ -61,5 +61,7 @@ check_flag() { # $1=flag $2=expected-prefix: --help/--version must exit 0 and pr
 check_flag --help "USAGE"
 check_flag --version "flintc "
 check_fail tests/t_for_bad.fl "for-in needs an array or str collection"
+# B6: 'parallel for' is removed with a migration message.
+check_fail tests/t_pfor_removed.fl "'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce"
 echo "smoke: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
