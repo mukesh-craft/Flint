@@ -1,30 +1,178 @@
-# STATE — Finish milestones M3–M7
-GOAL: Ship M3 (traits), M4 (lambda-as-value), M5 (remove parallel-for), M6 (diagnostics), M7 ([T] containers); each gated + committed.
-STATUS: M3 committed; M4 starting
-POLICY: compact at ~65% context; offload raw logs to $TMPDIR/opencode/
-CONSTRAINTS (verbatim from user/session): RAM 3.6GB (one build at a time); Rust wherever possible; Linux/Windows/macOS; never break token contract (lexdiff/parse_gate/fixpoint gates unmodified = proof); two emit paths (Codegen + Parser) must both get every fix.
+# STATE — Flint compiler work log + pick-up guide
 
-KEY FILES:
-- src/main.cpp — the whole compiler (~12k lines)
-- tests/test_differential.sh, test_ai.sh, test_rust_stdlib.sh, test_generics.sh, test_no_hang.sh, test_selfhost.sh — must stay green
-- memory.md:3667-3712 — milestone specs
+**Read this file first. It is self-contained: everything needed to verify the
+current state and continue without re-deriving context.**
 
-MILESTONE SPECS (from memory.md):
-- M3 traits: traitRegistry, contextual parse, name+arity resolution, ambiguity error, `P.area(s)` qualification. Gate: lexdiff/parse_gate/fixpoint green+unmodified.
-- M4 lambda: `fn` type in parseType, env-pointer materialization in emitExpr, `call` = pure LLVM indirect call. Gate: `apply(|x| x + 1, 5)` works; escaping closure still errors.
-- M5 parallel-for removal: parser change + migration error, keep runtime symbol. Gate: tests/t_flow.fl migrated; test_errors.sh asserts message; self-host unaffected.
-- M6 diagnostics: stop cascade for `|p| -> T {}` at :8374; tighten top-level `IDENTIFIER IDENTIFIER` at :2333. Gate: exactly one error per malformed input.
-- M7 [T] containers: deferred; needs Rust array rep (memory.md §4) + explicit ABI decision.
+GOAL: finish the remaining tracked work items of the audit (memory.md §3 bug
+table, §5 milestones), one gated commit at a time, with no silent answers.
 
-DECISIONS:
-- M4 design (researched, LLVM opaque-pointer docs + discourse, 2026-10-18): fn ptr = plain `ptr`, indirect call = `CreateCall(fnType, loadedPtr, args)`, no bitcast needed (LLVM 21). Closure = `{fnptr, captures...}` in memory.
-- M5 lesson from last session: replacing parseParallelForStmtEmit = delete ENTIRE body (old body refs startVal/endVal/loopVar after it); apply in BOTH paths (AST :2849, emit :10009).
+STATUS (2026-10-19, commit `3f062e4`): milestone wave M3–M6 landed; M7 deferred
+by maintainer; B-wave P0-NEW-1/2/3 landed; M2 residue part 1 landed
+(generic inference for cast + nested-call arguments). All gates green on the
+fresh build.
 
-DEAD ENDS (do not retry):
-- Element-wise enum payload comparison → wrong answers (garbage bytes past variant payload). Refusal with diagnostic is current shipped state (9e166ae).
-- Last session's M5 attempt: brace-matching replacement landed wrong → 4 build errors → reverted. This time: read exact function bounds first, replace whole function atomically.
+POLICY: STATE.md is the durable ledger — update it IN PLACE after each
+meaningful step. Offload raw logs to `$TMPDIR/opencode/`. Keep this file
+under ~8K tokens; rewrite, don't append forever.
 
-NEXT:
+CONSTRAINTS (from the user, verbatim in spirit): RAM 3.6 GB (one build at a
+time); Rust wherever it pays; Linux/Windows/macOS support; NEVER break the
+token contract — `test_lexdiff.sh` / `test_parse_gate.sh` / `test_fixpoint.sh`
+green is the proof; the two emit paths (Codegen AST + single-pass Parser) must
+BOTH receive every fix (the P0-NEW-1 collapse now enforces this with shared
+cores).
+
+---
+
+## 1. HOW TO BUILD AND VERIFY (this device, Termux aarch64)
+
+```bash
+cd /data/data/com.termux/files/home/Flint
+
+# 1. syntax check (fast, ~3-8 min; the full compile is the slow part)
+timeout 480 clang++ -std=c++17 -fsyntax-only -I$(llvm-config --includedir) src/main.cpp
+
+# 2. full build (12-15 min) — ALWAYS detached; a tool timeout kills the
+#    process group and orphans the compile
+(setsid nohup bash build.sh > build.log 2>&1 < /dev/null &)
+#    poll:  grep -c "error:" build.log ; grep -n "Build complete" build.log
+#            ls -la flintc      # mtime must be NEWER than your last edit
+
+# 3. gates (each is a separate script; expect minutes each)
+bash tests/run.sh                  # smoke (now 36 checks)
+bash tests/test_lexdiff.sh         # 131
+bash tests/test_parse_gate.sh      # 132
+bash tests/test_fixpoint.sh        # 132 (self-host PARSER round-trip)
+bash tests/test_errors.sh          # 128/128 catalog
+bash tests/test_differential.sh    # 11/11 — NEEDS the self-host binaries (see below)
+bash tests/test_generics.sh        # 7/7
+bash tests/test_no_hang.sh         # 88/88
+```
+
+### Traps that WILL cost you time (all hit in this session)
+- **Stale `flintc`**: editing `src/main.cpp` does NOT change `flintc` until a
+  build finishes. Rebuild before trusting any test result.
+- **`/tmp` is not writable** on Termux. Use
+  `T=/data/data/com.termux/files/usr/tmp/opencode`.
+- **Pipe eats the exit code**: `./flintc f.fl | head; echo $?` reports `head`'s
+  code. Verify with `>/dev/null 2>&1` and no pipe.
+- **`test_differential.sh` needs the self-host binaries**
+  (`$TMPDIR/slipstream/self/{lex,parse,emit}.0`). If they are missing the gate
+  reports `1 passed, 10 failed` with `self binaries (build via
+  tests/test_selfhost.sh A ...)` — that is a MISSING ARTIFACT, not a code
+  divergence. Rebuild with `bash tests/test_selfhost.sh A` (~4 min, detached).
+  Termux may clean `$TMPDIR` between sessions, so expect to rebuild it.
+- **Tool timeouts kill process groups**: never run a >8 min command in the
+  foreground; use the detached pattern above and poll.
+- **`pkill -f` can match your own shell**: use the bracket trick
+  (`pkill -f "test_selfhos[t]"`).
+- **Never `open('w')` a source file without writing to it** (once zeroed
+  `src/main.cpp` that way). Use the `write`/`edit` tools.
+
+### Verifying a compiler change, honestly
+Map EVERY printed line of a fixture to its assertion, one by one. Eyeballing
+"1s and 0s" once produced a false "all 16 verified" claim that shipped a real
+bug (the enum accumulator, see HISTORY). Per-case probes (`$T/probe.fl`) beat
+a single fixture diff.
+
+---
+
+## 2. OPEN ITEMS — what is actually left (status verified 2026-10-19)
+
+| # | Item | Status | Where |
+|---|---|---|---|
+| 1 | **M2b — explicit type arguments `f::<T>(...)`** | OPEN. `::` is not lexed; `idc::<f64>(2.5)` → "expected ')' after arguments". Spec: memory.md:3687-3691 ("add `f::<T>(...)` explicit type arguments"). Token-contract risk: `lexdiff`/`parse_gate` must stay green (contextual detection, no lexer keyword — the M3 precedent). | `src/main.cpp` parseType/parsePrimary path |
+| 2 | **`let h = inc` — named function as a value** | OPEN. Refuses with advice: "function 'inc' cannot be used as a value here; bind a lambda or pass it in a direct call". M4 shipped lambda-as-value; named-fn adapters do not exist. | `src/main.cpp` emitExpr/emitVarDecl (M4 section, memory.md:3957) |
+| 3 | **M2c — delete the remaining silent i64 defaults** | PARTIAL. The generic inference no longer defaults for cast/call args. Still silent: `exprFlintType` default arm, unknown-variable fallback, binary-without-`+` fallback. Turning them into errors risks the self-host fixed point — only do it with the full gate set green. | `src/main.cpp` exprFlintType |
+| 4 | **B8 — type-level generic enums (`Option<T>`)** | OPEN by design. `Option.Some(i64)` is a fixed i64 payload; ROADMAP.md:466 overclaims. Needs a maintainer decision (it changes the type system + ABI), not a unilateral change. | memory.md:3628 |
+| 5 | **M2d — arrays as generic arguments** | OPEN. `idc([1, 2])` cannot be used (`.length` on a non-struct). Inference would need `T = Array(i64)`; probe first whether generic instantiation over an array type works end-to-end before enabling inference. | `src/main.cpp` exprFlintType `case NodeKind::Array` |
+| 6 | **P4 ship list** | OPEN: signed release tags (repo has 0 tags), SBOM, error-code docs, semver freeze. `v1_gate_check.sh` exists and reports 12/12 **after** `bash tests/test_selfhost.sh` once (self-host binaries must exist). | memory.md:1604, 1624 |
+| 7 | **Environment-bound (cannot finish on this device)** | QBE backend needs an external `qbe` binary (path unverified, exit 127); Windows/macOS real runs + CI never executed from here; WASM objects are valid but there is no WASI execution; nightly/coverage-guided fuzz runs are not wired to any CI runner (the corpus + `tests/test_fuzz_corpus.sh` exist and pass). | memory.md:946, 1602 |
+| 8 | **M7 `[T]` containers** | DEFERRED by maintainer decision (2026-10-19). Needs the Rust `{length, elem_size, ptr}` representation (§4) plus an explicit ABI decision. Do NOT start without that decision. | memory.md:3711, 3934 |
+
+**Closed since the audit (do not re-open):**
+- N1 (payload-enum `match` in a non-`main` function hung the compiler) — FIXED
+  earlier; `tests/t_payload_match.fl` is the regression fixture and passes
+  (7, 0, 6, 9, 12, 24, 0, 10). The audit note at memory.md:3793 ("not yet
+  root-caused") is STALE — the root cause was the single-binding arm parser
+  plus `consume()` not advancing on error, so the arm loop could not progress.
+- D1–D4 (for-array segfault, `s[1]` crash, …) — FIXED (memory.md:3145).
+- `parallel for`, `--test` dead, Python JIT symbols, strrev SIGABRT, missing
+  LICENSE — all closed in earlier sessions.
+- B1 (float tensor `a[0]` garbage) — closed by the narrow refusal
+  (P0-NEW-3, `67edab9`); the thorough fix needs M7.
+- B2 (f64 generic leaking raw LLVM IR), B4 (lambda as value), B5 (trait
+  keyword), B6 (parallel for), B7 (specialize latent bugs) — closed.
+- B9 (array API pairing) — mitigated by the shared call guard; the API shape
+  itself is unchanged (documented, not a bug).
+
+### Recommended order
+1 → 2 → 3 → 5 → 6 → (4 and 7 need decisions/other machines) → 8 only after a
+maintainer ABI decision.
+
+---
+
+## 3. NEXT (concrete)
+
+1. **M2b explicit type arguments** (`f::<T>(...)`):
+   - Syntax decision: `::` must be lexed or contextually detected. The M3
+     precedent (`trait`) is CONTEXTUAL parsing with NO lexer keyword — follow
+     it, so `lexdiff`/`parse_gate` stay byte-identical.
+   - Semantics: explicit type args override inference; they must feed the
+     SAME instantiation path (`mangle` + `specialize` + `genericCache`) so
+     `f::<f64>(2.5)` and `f(2.5)` agree.
+   - Gate: `tests/t_generic_infer.fl` gains an explicit-type-arg case; all
+     gates green; error message names the parameter when the explicit type
+     contradicts the argument.
+2. **`let h = inc` named-fn-as-value**: a named function used as a value needs
+   an adapter: a thunk `{fnptr, ...}` like the lambda env box, so `h(3)` is an
+   indirect call through the same path lambdas use. Reuse M4's box protocol
+   (`src/main.cpp` `emitLambdaDef` / `emitCall` fn-typed branch).
+3. Then the M2c/M2d residue and the P4 ship list.
+
+---
+
+## 4. KEY FILES / ANCHORS
+
+- `src/main.cpp` — the whole compiler (~12,900 lines).
+  - Shared emit cores (P0-NEW-1): `emitCompareValues`, `createCallChecked`,
+    `emitPrintCall`, `emitArrayGet/Set/Data/GetPtr/SetPtrCore`, `emitEnumEqual`
+    (P0-NEW-2), `inferGenericArgType` (M2 residue).
+  - `exprFlintType` (~:5836) — the inference walker; `Parser::inferCallType`
+    (~:2229) — builtin return types only.
+  - `emitCall` (~:8380) — lambda rewrite, fn-value call, generic dispatch.
+  - `Parser::emitBinaryOpEmit` / `Parser::emitDirectCall` — the emit-mode
+    path; both route to the shared cores now.
+- `tests/run.sh` — smoke + `check_fail` cases; `tests/test_*.sh` — the gate
+  suite; `tests/t_generic_infer.fl` — M2-residue regression fixture.
+- `memory.md` — the audit: §3 bug table (B1–B9), §4 Rust candidates, §5
+  milestones, §6 rejected approaches, §7 risks, §8 open decisions, §9 traps.
+- `COMPATIBILITY.md` — C++ vs self-host divergences (D1–D4 all fixed).
+- `stage2/flint_parse.fl`, `stage3/flint_emit.fl` — the self-hosted pipeline.
+  NOTE: it implements **no generics at all** (no `typeParams`), so generic
+  programs are C++-compiler-only and the differential ladder cannot cover them.
+
+## 5. DEAD ENDS (do not retry)
+
+- Element-wise / byte-wise enum payload comparison → wrong answers (garbage
+  bytes past the variant payload). Solved instead by per-variant FIELD
+  comparison (`emitEnumEqual`), not by byte comparison.
+- Byte-comparing an enum payload array: bytes a variant never writes are stack
+  garbage. Never do this.
+- `hasStructName()` does not exist on `llvm::StructType` in this LLVM
+  version — use `isLiteral()` to distinguish identified (named) structs.
+- The enum accumulator must OR variant bodies into the result slot, never AND
+  them against a zero-initialized slot (that bug shipped once).
+- Re-running `test_differential.sh` without the self-host binaries produces
+  fake failures — build phase A first.
+- Replacing a whole function by brace-matching text surgery: the M5 attempt
+  landed wrong. Read exact function bounds, replace atomically, and
+  syntax-check before building.
+
+---
+
+# HISTORY (milestone + session log, kept for traceability)
+
 M3 DONE (all gates green). Replayed after I zeroed src/main.cpp with a bare
 python open('w') that was never written to — rule: NEVER call open('w')
 without .write(); use the write tool or the edit tool for source changes.
@@ -180,3 +328,30 @@ P0-NEW-1 DONE. Duplicated emit paths collapsed to shared Codegen cores:
 - Gates: smoke 30/30, lexdiff 130, parse_gate 131, fixpoint 131, errors
   128/128, differential 11/11, generics 7/7; bad-arity diag; enum ==/!=
   per-case probes.
+
+M2 RESIDUE PART 1 (commit 3f062e4). Generic argument inference learned two
+argument shapes it did not know:
+- a CAST argument — its type is the cast TARGET;
+- a nested CALL argument — the callee's return type, resolved with the same
+  by-parameter rule, recursively.
+Both previously fell through to i64, so the program failed later with a
+message about the instantiation ("expects i64") instead of about the program.
+Codegen::inferGenericArgType (new) handles both plus the variable case;
+exprFlintType gained the Cast case so every inference site agrees.
+- Fixture: tests/t_generic_infer.fl (6 smoke checks; the 1.5 line is the
+  discriminator — an i64 instantiation would print 1).
+- Gates: smoke 36/36, lexdiff 131, parse_gate 132, fixpoint 132, errors
+  128/128, differential 11/11, generics 7/7, no-hang 88/88.
+- Trap: test_differential.sh reported "1 passed, 10 failed" because the
+  self-host binaries ($TMPDIR/slipstream/self) had been cleaned from tmp —
+  rebuild with `bash tests/test_selfhost.sh A` and it is 11/11 again. Not a
+  code divergence; do not chase it.
+- Verified state of the audit's N1: ALREADY FIXED before this session
+  (tests/t_payload_match.fl passes; root cause was the single-binding arm
+  parser plus consume() not advancing on error, so the arm loop could not
+  progress). The memory.md:3793 note "not yet root-caused" is stale.
+
+STATE.md REWRITTEN as a pick-up guide: §1 build/verify recipes + device
+traps, §2 the verified open-items table (8 items, with M2b explicit type
+args first), §3 concrete next steps, §4 file anchors, §5 dead ends. The
+milestone history is preserved below this header.
