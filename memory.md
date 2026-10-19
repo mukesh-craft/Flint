@@ -3924,11 +3924,62 @@ which needs the Rust array representation (M7).
 |---|---|
 | M0, M1 | done |
 | M2 | partially done: param matching + f64 FCmp shipped; `unifyParamType` for index/`Cast`/`StructLiteral` args NOT done |
-| **P0-NEW-1 path collapse** | **not started — outranks M3** |
-| P0-NEW-2 enum payload width | not started |
-| P0-NEW-3 tensor index check | not started |
-| M3 traits | not started |
-| M4 lambda as a value | not started |
-| M5 remove `parallel for` | not started |
-| M6 diagnostics | not started |
-| M7 `[T]` containers | deferred; needs an ABI decision first |
+| P0-NEW-1 path collapse | not started (B-tasks, 2026-10-19 chat) |
+| P0-NEW-2 enum payload width | not started (B-tasks) |
+| P0-NEW-3 tensor index check | not started (B-tasks; first of next chat) |
+| M3 traits | **done** — commit 1219665 |
+| M4 lambda as a value | **done** — commit a6b89e6 |
+| M5 remove `parallel for` | **done** — commit 9553f8c |
+| M6 diagnostics | **done** — commit d65ed3f |
+| M7 `[T]` containers | **deferred by maintainer decision (2026-10-19)** |
+
+# Addendum (2026-10-19, after M3-M6) — milestone wave complete
+
+All milestone work landed in ONE session with every gate green at each
+commit:
+
+- **M3 static traits (1219665).** traitRegistry beside structRegistry; `trait`
+  stays contextually parsed (no lexer keyword — token contract proven intact:
+  lexdiff 130, parse_gate 131, fixpoint pass); name+arity dispatch (exactly-one
+  → call, zero → "no type in scope implements", >1 → "ambiguous
+  (candidates:)"); `P.area(s)` qualification via M3 UFCS. Pre-existing gate
+  breaks discovered and FIXED: binary string-literal fixtures (NUL truncates
+  the self-host lexer) extracted to tests/fixtures/*.bin read via
+  flint_read_file; flint_parse.fl spelled out `and`/`or` (pp keeps source
+  spelling) and accepts multi-binding match payloads.
+- **M4 lambda-as-a-value (a6b89e6).** `TypeKind::Func` with
+  funcParams/funcRet (funcRet is a shared_ptr — a struct cannot hold a Type
+  member of itself); `fn(T1,T2) -> Ret` in parseType (arrow required);
+  uniform closure protocol: outlined fn = (env, userargs...), env box =
+  {fnptr, caps...} in the defining frame; every call indirect (load field 0,
+  CreateCall(fnTy, ptr, {box,...})); fn-typed params/bindings; escape rule =
+  hard error at return/global store; named-fn-as-value refuses with clean
+  advice (`let h = inc` — future work). Gates: apply(|x| x+1, 5) == 6
+  in-run; escaping closure fails rc=1; smoke 29/29; all suites rc=0
+  (differential, generics, no_hang, errors, parse_gate, lexdiff, fixpoint,
+  python, ai, rust_stdlib); selfhost fixed point held.
+- **M5 `parallel for` removal (9553f8c).** parseParallelForStmt AND
+  parseParallelForStmtEmit replaced wholesale with the B6 migration error
+  ("'parallel for' was removed: it could not capture variables and had no
+  result channel. Use a plain 'for' loop, or move the work into a Rust
+  runtime function such as flint_parallel_reduce"); KW_PARALLEL token and the
+  flint_parallel_for runtime symbol kept (ABI); tests/t_flow.fl migrated to a
+  plain for (100..104 same expectations); NEW tests/t_pfor_removed.fl with
+  run.sh check_fail asserting the message (test_errors.sh only catalogs the
+  stage3 emit strings, so the parse-side message lives in run.sh). Smoke
+  30/30; selfhost byte-identical after the change.
+- **M6 diagnostics (d65ed3f).** `|p| -> T {}` refuses at the parse ("a lambda
+  has no '-> Ret' form...") — the old flow silently accepted it and codegen
+  reported "empty lambda body" + "function body emission failed"; top-level
+  `name (not-a-fn)` and `name name` candidates that fail the isFunc lookahead
+  now error once instead of silently parseExprStmt-ing garbage (previously
+  rc=0 NOTHING happened). Parser::skipToLineEndTokens() enforces the
+  exactly-one-error contract. Gates: smoke 30/30; parse-gate 131; lexdiff
+  130; differential 11; errors catalog 128/128; three malformed fixtures each
+  produced exactly one error with a precise location.
+
+**M7 decision (2026-10-19, maintainer):** `[T]` containers stay DEFERRED
+(memory.md §8 decision #3). The Rust {length, elem_size, ptr} representation
+(§4) is approved IF a real program needs it later; the narrow B1 stop-gap
+(tensor index refusal — P0-NEW-3) is the first B-task of the next chat and
+does not pay for the ABI change.

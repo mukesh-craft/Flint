@@ -106,3 +106,9 @@ M6 DONE (committed).
 - Gates: smoke 30/30; parse-gate 131; lexdiff 130; differential 11; errors
   catalog 128/128. Malformed fixtures in $TMP/opencode (m6lambda, m6ident,
   m6ident2) — each exactly one error, rc=1.
+
+SESSION CLOSE (2026-10-19): M3-M6 committed (1219665, a6b89e6, 9553f8c,
+d65ed3f). M7 deferred by maintainer decision — next chat starts with
+B tasks in priority order: P0-NEW-3 (tensor index refusal) → P0-NEW-1
+(path collapse) → P0-NEW-2 (enum payload width). All baselines green:
+smoke 30/30, selfhost fixed point, all suites rc=0 at the final commit.
