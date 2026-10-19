@@ -3825,13 +3825,18 @@ deadlocks the compiler. That is a severe limitation, not a cosmetic one — it
 means pattern matching cannot be used in real code, and it is the most likely
 reason `match` has felt unfinished.
 
-Not yet root-caused: the search did not reach the emission loop. Next step is
-to bisect the match/block-merging path in `emitStmt`'s `NodeKind::Match` arm
-(`src/main.cpp:5700` region) looking for an unbounded loop over pending merge
-blocks. Until it is fixed, no test corpus should include a payload-enum match in
-a non-`main` function, and `tests/test_generics.sh` now has an explicit
-"compiler does not hang" check with `timeout -s KILL` so a regression is
-reported instead of stalling CI.
+**RESOLVED — this note was STALE when read back (verified 2026-10-19).** The
+root cause was NOT in the match emission path: the match-ARM parser accepted
+exactly one binding name, so `Node(a, b)` was a parse error, and `consume()`
+reported the error WITHOUT advancing the token cursor, so the enclosing arm
+loop could not make progress and spun forever. Both are fixed: patterns bind
+one name per payload field, and `consume()` always advances when recovering.
+The regression fixture is `tests/t_payload_match.fl` (passes: 7, 0, 6, 9, 12,
+24, 0, 10) and `tests/test_generics.sh` keeps an explicit no-hang check with
+`timeout -s KILL`. No test corpus needs to avoid payload-enum matches in a
+non-`main` function any more. Lesson (this file's own §9 trap list): a doc
+claim about behaviour is not evidence — compile the 5-line program before
+believing it, even when the doc is this file.
 
 ## N2. Rust placement that paid off, and one trap
 
@@ -3923,7 +3928,7 @@ which needs the Rust array representation (M7).
 | Item | State |
 |---|---|
 | M0, M1 | done |
-| M2 | partially done: param matching + f64 FCmp shipped; `unifyParamType` for index/`Cast`/`StructLiteral` args NOT done |
+| M2 | partially done: param matching + f64 FCmp shipped; cast + nested-call args now infer (commit 3f062e4); STILL OPEN: explicit `f::<T>(...)` type args, deleting the remaining silent i64 defaults, arrays as generic arguments |
 | P0-NEW-1 path collapse | **done** (compare/call/generic cores shared, commit below) |
 | P0-NEW-2 enum payload width | **done** (per-variant field compare, commit below) |
 | P0-NEW-3 tensor index check | **done** (narrow stop-gap, commit below) |
@@ -4039,3 +4044,33 @@ commit:
 (§4) is approved IF a real program needs it later; the narrow B1 stop-gap
 (tensor index refusal — P0-NEW-3) is the first B-task of the next chat and
 does not pay for the ABI change.
+
+# Addendum (2026-10-19, later) — M2 residue part 1 + a STATE pick-up guide
+
+- **M2 residue part 1 (commit 3f062e4).** Generic argument inference learned
+  two argument shapes it did not know: a CAST argument (its type is the cast
+  target) and a nested CALL argument (the callee's return type, resolved with
+  the same by-parameter rule, recursively). Both used to fall through to i64,
+  so the program failed later with a message about the instantiation
+  ("expects i64") instead of about the program. New
+  `Codegen::inferGenericArgType`; `exprFlintType` gained the Cast case.
+  Fixture `tests/t_generic_infer.fl` (6 smoke checks; the 1.5 line is the
+  discriminator — an i64 instantiation would print 1). Gates: smoke 36/36,
+  lexdiff 131, parse_gate 132, fixpoint 132, errors 128/128, differential
+  11/11, generics 7/7, no-hang 88/88. Still open in M2: explicit `f::<T>(...)`
+  type arguments, deleting the remaining silent i64 defaults, and arrays as
+  generic arguments (`idc([1,2])` — probe whether generic instantiation over
+  an array type works end-to-end before enabling inference for it).
+- **STATE.md is now a pick-up guide (commit b54ae7b).** §1 build/verify
+  recipes and the device traps (stale `flintc`, `/tmp` unwritable, pipes
+  eating exit codes, tool timeouts killing process groups, pkill matching its
+  own shell); §2 the VERIFIED open-items table (8 items) with the note that
+  N1 was already fixed and the audit note was stale; §3 concrete next steps;
+  §4 file anchors; §5 dead ends. The milestone history is preserved below the
+  guide header.
+- **Gate dependency worth knowing:** `test_differential.sh` needs the
+  self-host binaries under `$TMPDIR/slipstream/self` (build with
+  `bash tests/test_selfhost.sh A`). If tmp was cleaned, the gate reports
+  "1 passed, 10 failed" with `self binaries` — that is a missing artifact,
+  not a divergence. `test_no_hang.sh` (88 checks) is the gate that proves no
+  corpus file hangs the compiler.
