@@ -33,6 +33,14 @@ check tests/t_flow.fl "103"
 check tests/t_flow.fl "104"
 check tests/t_funcs.fl "42"
 check tests/t_funcs.fl "55"
+# M2 residue: generic argument inference for cast and nested-call arguments.
+# The 1.5 line is the discriminator: an i64 instantiation would print 1.
+check tests/t_generic_infer.fl "5"
+check tests/t_generic_infer.fl "9"
+check tests/t_generic_infer.fl "2"
+check tests/t_generic_infer.fl "1.5"
+check tests/t_generic_infer.fl "7"
+check tests/t_generic_infer.fl "4"
 check tests/t_types.fl "HELLO"
 check tests/t_types.fl "42"
 # util + time under JIT: these load .o files whose atomics must resolve in

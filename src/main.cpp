@@ -5901,7 +5901,60 @@ public:
                 return Type::enum_(static_cast<EnumConstructAST*>(e)->enumName);
             case NodeKind::StructLiteral:
                 return Type::struct_(static_cast<StructLiteralAST*>(e)->structName);
+            // M2 residue: a cast's type IS its target type. Without this
+            // case `id(c(5 as f64))` fell to the default i64, instantiated
+            // the generic with i64, and the call guard then rejected the
+            // already-mis-instanciated call ("expects i64").
+            case NodeKind::Cast:
+                return static_cast<CastExprAST*>(e)->target;
             default: return Type::i64();
+        }
+    }
+
+    // M2 residue: the argument type resolver for generic inference. The
+    // plain walker (exprFlintType) knows numbers, strings, variables,
+    // structs, enums, field access and '+'. Two shapes were still missing
+    // and silently instantiated i64:
+    //   * a CAST argument -- its truth is the cast target type;
+    //   * a nested CALL argument -- the callee's (possibly generic) return
+    //     type, resolved with the same by-parameter rule the inference
+    //     loop itself uses, recursively. That makes idc(idc(Inner{a:1})
+    //     ) infer T = Inner instead of instantiating i64 and erroring in
+    //     the creationCallChecked guard.
+    Type inferGenericArgType(ExprAST* argIn) {
+        ExprAST* arg = argIn;
+        while (true) {
+            if (!arg) return Type::i64();
+            if (arg->kind == NodeKind::Cast)
+                return static_cast<CastExprAST*>(arg)->target;
+            if (arg->kind == NodeKind::Call) {
+                auto* c = static_cast<CallExprAST*>(arg);
+                auto git2 = genericFunctions.find(c->callee);
+                if (git2 != genericFunctions.end()) {
+                    auto* gen2 = git2->second;
+                    if (gen2->returnType.kind == TypeKind::TypeParam) {
+                        size_t pi2 = SIZE_MAX;
+                        for (size_t qq = 0; qq < gen2->params.size(); qq++) {
+                            if (gen2->params[qq].second.kind == TypeKind::TypeParam &&
+                                gen2->params[qq].second.structName ==
+                                    gen2->returnType.structName) {
+                                pi2 = qq; break;
+                            }
+                        }
+                        if (pi2 != SIZE_MAX && pi2 < c->args.size()) {
+                            arg = c->args[pi2].get(); // descend into the arg
+                            continue;
+                        }
+                        return Type::i64(); // un-inferrable return-only param
+                    }
+                    return resolveType(gen2->returnType);
+                }
+            }
+            if (arg->kind == NodeKind::Variable) {
+                auto* var = static_cast<VariableExprAST*>(arg);
+                if (const Symbol* sym = symTable.lookup(var->name)) return sym->type;
+            }
+            return exprFlintType(arg, nullptr, &symTable);
         }
     }
 
@@ -8474,23 +8527,12 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 Type inferred;
                 if (argIndex != SIZE_MAX && argIndex < call->args.size()) {
                     ExprAST* arg = call->args[argIndex].get();
-                    // A variable argument carries its declared type in the
-                    // symbol table, which exprFlintType cannot see (it only
-                    // knows the optional `vars` map used during type
-                    // inference). Consult the table first, so struct and enum
-                    // locals still infer correctly, then fall back to
-                    // structural inference for everything else.
-                    if (arg->kind == NodeKind::Variable) {
-                        auto* var = static_cast<VariableExprAST*>(arg);
-                        auto* sym = symTable.lookup(var->name);
-                        if (sym) {
-                            inferred = sym->type;
-                        } else {
-                            inferred = exprFlintType(arg, nullptr, &symTable);
-                        }
-                    } else {
-                        inferred = exprFlintType(arg, nullptr);
-                    }
+                    // M2 residue: a variable argument carries its declared
+                    // type; casts carry their target; a nested generic call
+                    // resolves its return with the same by-parameter rule.
+                    // inferGenericArgType covers all three and falls back to
+                    // exprFlintType (with the RIGHT symTable) otherwise.
+                    inferred = inferGenericArgType(arg);
                 }
                 if (inferred.kind == TypeKind::Void || inferred.kind == TypeKind::TypeParam) {
                     // Un-inferrable. Defaulting to i64 here is how the old
