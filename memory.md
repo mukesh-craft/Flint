@@ -3925,7 +3925,7 @@ which needs the Rust array representation (M7).
 | M0, M1 | done |
 | M2 | partially done: param matching + f64 FCmp shipped; `unifyParamType` for index/`Cast`/`StructLiteral` args NOT done |
 | P0-NEW-1 path collapse | not started (B-tasks, 2026-10-19 chat) |
-| P0-NEW-2 enum payload width | not started (B-tasks) |
+| P0-NEW-2 enum payload width | **done** (per-variant field compare, commit below) |
 | P0-NEW-3 tensor index check | **done** (narrow stop-gap, commit below) |
 | M3 traits | **done** — commit 1219665 |
 | M4 lambda as a value | **done** — commit a6b89e6 |
@@ -3977,6 +3977,25 @@ commit:
   exactly-one-error contract. Gates: smoke 30/30; parse-gate 131; lexdiff
   130; differential 11; errors catalog 128/128; three malformed fixtures each
   produced exactly one error with a precise location.
+
+**B-tasks of the next chat, in order:** P0-NEW-3 → P0-NEW-1 → P0-NEW-2
+(user's priority). P0-NEW-3 landed as commit 67edab9.
+
+- **P0-NEW-2 enum equality (per-variant payload width).** EmitEnumEqual keyed
+  off `enumRegistry` at the top of emitAggregateEqual (both callers unchanged):
+  compare the i8 tags; when they match, chain across variant blocks, and in
+  each variant body bit-free GEP into `{ i8, T0..Tn }` (the IDENTICAL layout
+  both constructor sites write) and compare only the fields the variant
+  declared — garbage tail bytes are never read. Result accumulates in an i64
+  slot (0 = unequal), tags differing or unknown tags short to bbEnd, tag-only
+  enums store 1 immediately. Refusal stays for non-enum struct array fields.
+  Fixture: tests/t_agg_eq.fl enum section now asserts Some2(3,4)==Some2(3,4)
+  → 1 (the exact case that motivated the refusal is now pinned), cross-variant
+  → 0, None==None → 1. Gates: smoke 30/30, lexdiff 130, parse_gate 131,
+  fixpoint, errors 128/128, differential 11. Traps hit: a first naive
+  paste-by-anchor edit left the old refusal tail duplicated (brace mismatch);
+  LLVM StructType has no hasStructName() in this version — literal-struct
+  detection via isLiteral() only.
 
 **M7 decision (2026-10-19, maintainer):** `[T]` containers stay DEFERRED
 (memory.md §8 decision #3). The Rust {length, elem_size, ptr} representation

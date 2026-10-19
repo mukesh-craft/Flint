@@ -131,3 +131,23 @@ without M7) then implemented the NARROW stop-gap:
 - Note: post-refusal output keeps the driver banner "function body emission
   failed" — the same artifact as other codegen-time failures; parse-time
   one-error contract (M6) is unaffected.
+
+P0-NEW-2 DONE. Enum equality now answers instead of refusing:
+- Hook at the top of Codegen::emitAggregateEqual: a named struct whose
+  llvm name is in enumRegistry routes to emitEnumEqual; both callers
+  (codegen 6743, parser-emit 9441) need no change. Literal (non-enum)
+  structs with array fields keep the old refusal.
+- emitEnumEqual CFG: alloca both values; tag i8 compare; equal -> dispatch
+  chain over variants; each variant body GEPs into { i8, T0..Tn } (layout
+  IDENTICAL to both constructor sites — verified Parser::emitEnumConstructEmit
+  and Codegen::emitEnumConstruct) and compares exactly the declared payload
+  fields (ICmp/FCmp; struct payload recurses via emitAggregateEqual);
+  i64 result slot accumulates AND; unknown tag or tag mismatch -> 0 -> NE.
+- Fixture tests/t_agg_eq.fl: enum section now asserts the real answers —
+  Some2(3,4)==Some2(3,4) → 1 (the original regression that motivated the
+  refusal), cross-payload → 0, None==None → 1, Option/color/NE covered.
+  All 16 outputs verified by run. Gates: smoke 30/30, lexdiff, parse_gate,
+  fixpoint, errors 128/128, differential 11 — all rc=0.
+- Traps: first anchor-paste edit duplicated the old refusal tail (brace
+  mismatch broke the class); llvm::StructType in this LLVM has NO
+  hasStructName() — isLiteral() is the discriminator.
