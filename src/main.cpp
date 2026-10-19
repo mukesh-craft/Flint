@@ -1077,12 +1077,19 @@ private:
 // TYPE
 // ============================================================================
 
-enum class TypeKind { I64, F64, Str, Bool, Void, Ptr, Array, Ref, Struct, Enum, TypeParam, Map };
+enum class TypeKind { I64, F64, Str, Bool, Void, Ptr, Array, Ref, Struct, Enum, TypeParam, Map, Func };
 
 struct Type {
     TypeKind kind = TypeKind::Void;
     std::shared_ptr<Type> elemType;
     std::string structName;
+    // Function-type payload (only when kind == Func). The parser stores the
+    // declared parameter types explicitly: an indirect call through such a
+    // value needs the full signature at runtime.
+    std::vector<Type> funcParams;
+    // Indirect member: a struct cannot contain an unqualified member of its
+    // own type; elemType uses the same shared_ptr pattern.
+    std::shared_ptr<Type> funcRet;
 
     bool operator==(const Type& o) const {
         if (kind != o.kind) return false;
@@ -1093,6 +1100,9 @@ struct Type {
         if (kind == TypeKind::Struct) return structName == o.structName;
         if (kind == TypeKind::Enum) return structName == o.structName;
         if (kind == TypeKind::TypeParam) return structName == o.structName;
+        if (kind == TypeKind::Func)
+            return funcParams == o.funcParams && funcRet && o.funcRet &&
+                   *funcRet == *o.funcRet;
         return true;
     }
     bool operator!=(const Type& o) const { return !(*this == o); }
@@ -1109,6 +1119,12 @@ struct Type {
     static Type enum_(const std::string& n) { Type t; t.kind = TypeKind::Enum; t.structName = n; return t; }
     static Type typeParam(const std::string& n) { Type t; t.kind = TypeKind::TypeParam; t.structName = n; return t; }
     static Type map() { Type t; t.kind = TypeKind::Map; return t; }
+    static Type fn_(std::vector<Type> ps, Type ret) {
+        Type t; t.kind = TypeKind::Func;
+        t.funcParams = std::move(ps);
+        t.funcRet = std::make_shared<Type>(ret);
+        return t;
+    }
 
     // Only genuinely copyable scalars. Str and Map are bare heap pointers:
     // treating them as Copy let a moved-out binding be used again, which is
@@ -1170,6 +1186,9 @@ struct EnumDef {
             return llvm::StructType::getTypeByName(ctx, t.structName);
         case TypeKind::TypeParam:
             return llvm::Type::getInt64Ty(ctx); // placeholder, substituted before use
+        case TypeKind::Func:
+            // First-class function values are env-box pointers {fnptr, caps...}
+            return llvm::PointerType::get(ctx, 0);
     }
     return llvm::Type::getInt64Ty(ctx);
 }
@@ -2098,6 +2117,11 @@ struct Symbol {
     std::vector<std::string> lambdaCapNames;
     std::vector<Type> lambdaCapTypes;
     std::vector<llvm::AllocaInst*> lambdaCapSlots;
+    // M4 env box: { fnptr, cap0, cap1, ... } allocated in the defining frame.
+    // The first-class function VALUE is this pointer; an indirect call loads
+    // the callee from field 0 and passes the box itself as the first arg.
+    llvm::Value* lambdaEnv = nullptr;
+    llvm::StructType* lambdaBoxTy = nullptr;
 };
 
 class SymbolTable {
@@ -2691,6 +2715,24 @@ private:
         if (match(TokenType::KW_STR))  return Type::str();
         if (match(TokenType::KW_BOOL)) return Type::boolean();
         if (match(TokenType::KW_PTR))  return Type::ptr_();
+        if (check(TokenType::KW_FN) && peek(1).type == TokenType::LPAREN) {
+            // First-class function type: `fn(T1, T2) -> Ret`. The declared
+            // signature is stored verbatim: an indirect call through such a
+            // value needs the exact parameter and return types at runtime.
+            advance(); // 'fn'
+            advance(); // '('
+            std::vector<Type> ps;
+            if (!check(TokenType::RPAREN)) {
+                do { ps.push_back(parseType()); } while (match(TokenType::COMMA));
+            }
+            consume(TokenType::RPAREN, "expected ')' after fn type parameters");
+            if (!match(TokenType::ARROW)) {
+                parseError("a fn type needs an explicit return type (fn(...) -> Ret); without it an indirect call cannot know what the callee returns");
+                return Type::i64();
+            }
+            Type ret = parseType();
+            return Type::fn_(std::move(ps), ret);
+        }
         if (match(TokenType::AMPERSAND)) {
             Type inner = parseType();
             return Type::ref(inner);
@@ -2750,7 +2792,15 @@ private:
                 }
                 return Type::i64();
             }
-            case NodeKind::Lambda:
+            case NodeKind::Lambda: {
+                // A lambda literal has first-class fn type: declared params
+                // plus the (parse-inferred) return type of its body.
+                auto* l = static_cast<LambdaExprAST*>(expr);
+                std::vector<Type> ps;
+                ps.reserve(l->params.size());
+                for (auto& p : l->params) ps.push_back(p.second);
+                return Type::fn_(std::move(ps), l->retType);
+            }
             case NodeKind::Unwrap: return Type::i64();
             case NodeKind::Call: {
                 auto* c = static_cast<CallExprAST*>(expr);
@@ -6362,14 +6412,22 @@ public:
                         auto* gv = git->second.global;
                         return builder->CreateLoad(llvmType(git->second.type, *ctx, mod.get()), gv, v->name.c_str());
                     }
+                    if (functionMap.count(v->name))
+                        return codegenError("function '" + v->name + "' cannot be used as a value here; bind a lambda or pass it in a direct call");
                     return codegenError(std::string("undefined var '") + v->name + "'");
                 }
                 if (sym->moved) {
                     return codegenError(std::string("use of moved variable '") + v->name + "'");
                 }
-                // Lambdas have no first-class value (P0-6: direct calls only).
+                // First-class fn value (M4): the binding IS an env box
+                // {fnptr, cap0, cap1, ...} allocated in the defining frame.
+                // Yield the box pointer; indirect calls pull the code pointer
+                // from field 0 and pass the box as the env argument.
                 if (sym->isLambda) {
-                    return codegenError(std::string("cannot use lambda '") + v->name + "' as a value");
+                    return builder->CreatePointerCast(
+                        sym->lambdaEnv,
+                        llvmType(sym->type, *ctx, mod.get()),
+                        v->name + "_fnval");
                 }
                 if (sym->borrowCount > 0 && !sym->type.isCopyType()) {
                     return codegenError(std::string("cannot move '") + v->name + "' while borrowed");
@@ -6378,11 +6436,24 @@ public:
                 return builder->CreateLoad(llvmType(sym->type, *ctx, mod.get()), ptr, v->name.c_str());
             }
             case NodeKind::Lambda: {
-                // Bare lambda expressions have no binding — lambdas must be
-                // bound with `name = |params| body` (outlined in emitVarDecl).
-                // As arguments, return values, or array elements they are
-                // rejected here (P0-6: direct calls only).
-                return codegenError("lambdas must be bound with `name = |params| body`");
+                // Inline lambda in value position (M4): outline, snapshot the
+                // caps into a fresh env box allocated in the CURRENT frame,
+                // and yield the box pointer. Escaping uses are still refused:
+                // the box dies with this frame, so returning it or storing it
+                // into a global are errors (checked at emitReturn / Assign).
+                auto* lam = static_cast<LambdaExprAST*>(node);
+                static int inlineLamCount = 0;
+                std::string iname = "__inline_lam_" + std::to_string(inlineLamCount++);
+                emitLambdaDef(iname, lam);
+                if (cgHadError) return nullptr;
+                auto* isym = symTable.lookup(iname);
+                if (!isym || !isym->isLambda || !isym->lambdaEnv) {
+                    return nullptr; // emitLambdaDef already reported the error
+                }
+                return builder->CreatePointerCast(
+                    isym->lambdaEnv,
+                    llvmType(isym->type, *ctx, mod.get()),
+                    "lam_val");
             }
             case NodeKind::Unwrap: {
                 auto* uw = static_cast<UnwrapExprAST*>(node);
@@ -6433,6 +6504,18 @@ public:
                     }
                     if (!git->second.isMutable) {
                         return codegenError(std::string("cannot assign to immutable global '") + a->varName + "'");
+                    }
+                    // M4: a global outlives every frame; storing an env box
+                    // pointer (its captures live in some frame's static area)
+                    // into a global is a use-after-return by construction.
+                    if (a->rhs->kind == NodeKind::Lambda)
+                        return codegenError("cannot store a lambda into global '" + a->varName + "': it would escape its defining frame");
+                    if (a->rhs->kind == NodeKind::Variable) {
+                        auto* vn = static_cast<VariableExprAST*>(a->rhs.get());
+                        auto* srcSym = symTable.lookup(vn->name);
+                        if (srcSym && (srcSym->isLambda ||
+                            (!srcSym->isLambda && srcSym->type.kind == TypeKind::Func)))
+                            return codegenError("cannot store a function value into global '" + a->varName + "': it would escape its defining frame");
                     }
                     auto* val = emitExpr(a->rhs.get());
                     if (!val) return nullptr;
@@ -6769,6 +6852,7 @@ public:
         static int lamCounter = 0;
         std::string lamName = "__lam_" + name + "_" + std::to_string(lamCounter++);
         // 1. Resolve captures in the defining scope (by value, snapshot now).
+        //    The snapshot VALUES go straight into the env box (4).
         struct CapVal { std::string cname; Type ctype; llvm::Value* cval; };
         std::vector<CapVal> caps;
         for (auto& cn : lam->captures) {
@@ -6786,7 +6870,10 @@ public:
             }
             caps.push_back({cn, sym->type, v});
         }
-        // 2. Build the outlined function (user params, then captures).
+        // 2. Outlined function, uniform protocol: (env, user params...) -> ret.
+        //    Captures ride in the env box the call site passes; the body reads
+        //    them from it, so the signature is callable through a plain fn(X)
+        //    indirect call at runtime.
         std::vector<llvm::Type*> paramTys;
         std::vector<Type> paramFlint;
         for (auto& p : lam->params) {
@@ -6794,17 +6881,19 @@ public:
             paramFlint.push_back(pt);
             paramTys.push_back(llvmType(pt, *ctx, mod.get()));
         }
-        for (auto& c : caps) paramTys.push_back(llvmType(c.ctype, *ctx, mod.get()));
         Type retFlint = lam->retType;
         llvm::Type* retTy = (retFlint.kind == TypeKind::Void)
             ? (llvm::Type*)voidTy
             : (llvm::Type*)llvmType(retFlint, *ctx, mod.get());
-        auto* fTy = llvm::FunctionType::get(retTy, paramTys, false);
+        auto* envPtrTy_i8 = llvm::PointerType::get(*ctx, 0);
+        std::vector<llvm::Type*> fullParamTys = {envPtrTy_i8};
+        fullParamTys.insert(fullParamTys.end(), paramTys.begin(), paramTys.end());
+        auto* fTy = llvm::FunctionType::get(retTy, fullParamTys, false);
         auto* fn = llvm::Function::Create(fTy, llvm::Function::InternalLinkage, lamName, mod.get());
         functionMap[lamName] = fn;
         // 3. Declare the lambda entry BEFORE emitting the body (recursion).
         Symbol entry;
-        entry.type = Type::i64();
+        entry.type = Type::fn_(paramFlint, retFlint);
         entry.isLambda = true;
         entry.lambdaFn = fn;
         entry.lambdaDefinedIn = currentFunc;
@@ -6813,13 +6902,25 @@ public:
             entry.lambdaCapNames.push_back(c.cname);
             entry.lambdaCapTypes.push_back(c.ctype);
         }
-        // 4. Freeze captures into hidden slots in the defining function.
+        // 4. The env box: {fnptr, capped values...}. Allocated in the defining
+        //    frame; the lambda VALUE is this pointer.
+        std::vector<llvm::Type*> boxFieldTys = {envPtrTy_i8};
+        for (auto& c : caps) boxFieldTys.push_back(llvmType(c.ctype, *ctx, mod.get()));
+        auto* envTy = llvm::StructType::create(*ctx, boxFieldTys, "lambox." + lamName);
+        auto* envBox = createEntryAlloca(envTy, "lambox_" + name);
+        builder->CreateStore(llvm::Constant::getNullValue(envPtrTy_i8),
+                             builder->CreateStructGEP(envTy, envBox, 0, "lambox.fnptr_slot"));
         for (size_t i = 0; i < caps.size(); i++) {
-            auto* slot = createEntryAlloca(llvmType(caps[i].ctype, *ctx, mod.get()),
-                                           "lamcap_" + name + "_" + std::to_string(i));
-            builder->CreateStore(caps[i].cval, slot);
-            entry.lambdaCapSlots.push_back(slot);
+            auto* g = builder->CreateStructGEP(envTy, envBox,
+                                               1 + i, "lambox." + caps[i].cname);
+            builder->CreateStore(caps[i].cval, g);
         }
+        {
+            auto* fslot = builder->CreateStructGEP(envTy, envBox, 0, "lambox.fn");
+            builder->CreateStore(fn, fslot);
+        }
+        entry.lambdaEnv = envBox;
+        entry.lambdaBoxTy = envTy;
         if (!symTable.declare(name, entry)) {
             codegenError("cannot rebind '" + name + "' as lambda");
             return;
@@ -6854,23 +6955,45 @@ public:
         auto* entryBB = llvm::BasicBlock::Create(*ctx, "entry", fn);
         builder->SetInsertPoint(entryBB);
         symTable.enterScope();
+        {
+            // The env parameter arrives first; capture values live in it.
+            auto* envArgPtr = fn->arg_begin();
+            envArgPtr->setName("__env");
+            size_t ci = 0;
+            for (auto& c : caps) {
+                auto* g = builder->CreateStructGEP(envTy, envArgPtr,
+                                                   1 + ci, "env." + c.cname);
+                auto* v = builder->CreateLoad(llvmType(c.ctype, *ctx, mod.get()), g,
+                                              c.cname + "_value");
+                auto* slot = builder->CreateAlloca(llvmType(c.ctype, *ctx, mod.get()),
+                                                   nullptr, c.cname);
+                builder->CreateStore(v, slot);
+                Symbol cg;
+                cg.type = c.ctype;
+                cg.alloca = slot;
+                cg.isMutable = false; // captures are read-only
+                symTable.declare(c.cname, cg);
+                ci++;
+            }
+        }
         size_t pi = 0;
         for (auto& arg : fn->args()) {
+            if (pi == 0) { pi = 1; continue; } // env pointer, handled above
             std::string pName;
             Type pType;
-            if (pi < lam->params.size()) {
-                pName = lam->params[pi].first;
-                pType = paramFlint[pi];
+            if (pi - 1 < lam->params.size()) {
+                pName = lam->params[pi - 1].first;
+                pType = paramFlint[pi - 1];
             } else {
-                pName = caps[pi - lam->params.size()].cname;
-                pType = caps[pi - lam->params.size()].ctype;
+                pName = "env_extra";
+                pType = Type::i64();
             }
             auto* alloca = builder->CreateAlloca(llvmType(pType, *ctx, mod.get()), nullptr, pName);
             builder->CreateStore(&arg, alloca);
             Symbol ps;
             ps.type = pType;
             ps.alloca = alloca;
-            ps.isMutable = false; // params and captures are read-only
+            ps.isMutable = false; // params are read-only
             symTable.declare(pName, ps);
             pi++;
         }
@@ -6911,6 +7034,34 @@ public:
         llvm::Type* lty = llvmType(rt, *ctx, mod.get());
         // Emit init first to get its LLVM type (may differ from declared type for builtins)
         auto* init = emitExpr(decl->init.get());
+        // M4: binding through a lambda VALUE (`let g = f`). The source
+        // symbol holds the fn type; an i64-inferred variable declaration
+        // would silently demote the value (the i64-or-void ladder below
+        // turns a stray ptr into Type::str()). Copy the fn type across
+        // instead; an explicit fn annotation is checked against it.
+        if (init && decl->init->kind == NodeKind::Variable) {
+            auto* vn = static_cast<VariableExprAST*>(decl->init.get());
+            auto* srcSym = symTable.lookup(vn->name);
+            const Symbol* gs = nullptr;
+            auto gvit = globalSymTable.find(vn->name);
+            if (gvit != globalSymTable.end()) gs = &gvit->second;
+            const Symbol* cs = srcSym ? srcSym : gs;
+            if (cs && cs->isLambda && cs->type.kind == TypeKind::Func) {
+                Type ann = resolveType(decl->varType);
+                if (ann.kind == TypeKind::Func) {
+                    if (!(ann == cs->type)) {
+                        codegenError("cannot bind lambda '" + vn->name +
+                            "': declared signature differs from the lambda's fn type");
+                        return;
+                    }
+                } else if (ann.kind != TypeKind::I64 && ann.kind != TypeKind::Void) {
+                    codegenError("cannot bind a lambda value to a non-fn type");
+                    return;
+                }
+                rt = cs->type;
+                lty = llvmType(rt, *ctx, mod.get());
+            }
+        }
         if (init && (rt.kind == TypeKind::I64 || rt.kind == TypeKind::Void) && init->getType() != lty) {
             lty = init->getType();
             // Infer the correct Flint type from the LLVM type
@@ -6999,6 +7150,26 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             if (it != functionMap.end()) builder->CreateCall(it->second, {});
         }
         if (ret->value) {
+            // M4: an env box lives in the defining frame's static area.
+            // Returning one would hand out a pointer to dead locals the
+            // moment the frame returns, so function values cannot cross a
+            // return boundary (closure-escape rule from the M4 spec).
+            if (ret->value->kind == NodeKind::Lambda) {
+                codegenError("cannot return a lambda: it would escape its defining frame");
+                return;
+            }
+            if (ret->value->kind == NodeKind::Variable) {
+                auto* vn = static_cast<VariableExprAST*>(ret->value.get());
+                auto* srcSym = symTable.lookup(vn->name);
+                const Symbol* gs = nullptr;
+                auto gvit = globalSymTable.find(vn->name);
+                if (gvit != globalSymTable.end()) gs = &gvit->second;
+                const Symbol* cs = srcSym ? srcSym : gs;
+                if (cs && (cs->isLambda || (!cs->isLambda && cs->type.kind == TypeKind::Func))) {
+                    codegenError("cannot return a function value: it would escape its defining frame");
+                    return;
+                }
+            }
             auto* v = emitExpr(ret->value.get());
             if (v) {
                 if (currentFunc && currentFunc->getName() == "main") {
@@ -7821,35 +7992,52 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
     // added, the default below stays a *unique* marker rather than a shared
     // one, so an unhandled kind degrades into a missed cache hit (a
     // performance cost) instead of a wrong answer.
+    // Injective kind tag for a Type (generic-instantiation mangles). fn types
+    // carry a signature: encoding mirrors their structure so fn two distinct
+    // signatures never collide.
+    static void typeMangleTag(std::string& s, const Type& t) {
+        switch (t.kind) {
+            case TypeKind::I64: s += "i64"; return;
+            case TypeKind::F64: s += "f64"; return;
+            case TypeKind::Str: s += "str"; return;
+            case TypeKind::Bool: s += "bool"; return;
+            case TypeKind::Ptr: s += "ptr"; return;
+            case TypeKind::Void: s += "void"; return;
+            case TypeKind::TypeParam: s += "tp"; return;
+            case TypeKind::Ref: s += "ref"; return;
+            case TypeKind::Array: s += "arr"; return;
+            case TypeKind::Map: s += "map"; return;
+            case TypeKind::Struct:
+                // Struct and enum names are user-supplied, so they must be
+                // distinguishable from the fixed tags above: a struct named
+                // "i64" would otherwise collide with an i64 instantiation.
+                s += "s:" + (t.structName.empty() ? std::string("?") : t.structName); return;
+            case TypeKind::Enum:
+                s += "e:" + (t.structName.empty() ? std::string("?") : t.structName); return;
+            case TypeKind::Func: {
+                s += "fn<";
+                for (size_t i = 0; i < t.funcParams.size(); i++) {
+                    if (i) s += ",";
+                    typeMangleTag(s, t.funcParams[i]);
+                }
+                s += ">->";
+                if (t.funcRet) typeMangleTag(s, *t.funcRet);
+                return;
+            }
+            default: s += "unknown_kind"; return;
+        }
+    }
+
     std::string mangle(const std::string& fnName, const std::vector<Type>& typeArgs) {
         std::string s = fnName;
         for (auto& ta : typeArgs) {
             s += ".";
-            switch (ta.kind) {
-                case TypeKind::I64: s += "i64"; break;
-                case TypeKind::F64: s += "f64"; break;
-                case TypeKind::Str: s += "str"; break;
-                case TypeKind::Bool: s += "bool"; break;
-                case TypeKind::Ptr: s += "ptr"; break;
-                case TypeKind::Void: s += "void"; break;
-                case TypeKind::TypeParam: s += "tp"; break;
-                case TypeKind::Ref: s += "ref"; break;
-                case TypeKind::Array: s += "arr"; break;
-                case TypeKind::Map: s += "map"; break;
-                case TypeKind::Struct:
-                    // Struct and enum names are user-supplied, so they must be
-                    // distinguishable from the fixed tags above: a struct named
-                    // "i64" would otherwise collide with an i64 instantiation.
-                    s += "s:" + (ta.structName.empty() ? std::string("?") : ta.structName);
-                    break;
-                case TypeKind::Enum:
-                    s += "e:" + (ta.structName.empty() ? std::string("?") : ta.structName);
-                    break;
-                default: s += "unknown_kind"; break;
-            }
+            typeMangleTag(s, ta);
         }
         return s;
     }
+
+
 
     llvm::Function* specialize(FunctionAST* generic, const std::vector<Type>& typeArgs) {
         if (generic->typeParams.size() != typeArgs.size()) return nullptr;
@@ -7953,20 +8141,24 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         // Cross-function calls are rejected (closures don't escape).
         {
             auto* lsym = symTable.lookup(call->callee);
-            if (lsym && lsym->isLambda) {
-                bool selfRecurse = (lsym->lambdaFn == currentFunc);
-                if (lsym->lambdaDefinedIn != currentFunc && !selfRecurse)
+            auto* glsym = symTable.lookup(call->callee) ? nullptr
+                : &globalSymTable[call->callee];
+            if ((lsym && lsym->isLambda) || (glsym && glsym->isLambda)) {
+                Symbol* Lsym = lsym ? lsym : glsym;
+                bool selfRecurse = (Lsym->lambdaFn == currentFunc);
+                if (Lsym->lambdaDefinedIn != currentFunc && !selfRecurse)
                     return codegenError("cannot call lambda '" + call->callee + "' from a different function");
-                if (call->args.size() != lsym->lambdaParamTypes.size())
+                if (call->args.size() != Lsym->lambdaParamTypes.size())
                     return codegenError("lambda '" + call->callee + "' expects " +
-                        std::to_string(lsym->lambdaParamTypes.size()) + " argument(s), got " +
+                        std::to_string(Lsym->lambdaParamTypes.size()) + " argument(s), got " +
                         std::to_string(call->args.size()));
                 std::vector<llvm::Value*> largs;
-                auto* lamFnTy = lsym->lambdaFn->getFunctionType();
+                auto* lamFnTy = Lsym->lambdaFn->getFunctionType();
+                largs.push_back(Lsym->lambdaEnv);
                 for (size_t i = 0; i < call->args.size(); i++) {
                     auto* v = emitExpr(call->args[i].get());
                     if (!v) return nullptr;
-                    llvm::Type* want = lamFnTy->getParamType(i);
+                    llvm::Type* want = lamFnTy->getParamType(i + 1);
                     if (v->getType() != want) {
                         if (v->getType()->isIntegerTy(64) && want->isDoubleTy())
                             v = builder->CreateSIToFP(v, want, "lamarg");
@@ -7975,18 +8167,61 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                     }
                     largs.push_back(v);
                 }
-                if (selfRecurse) {
-                    // Forward our own capture params (definer slots are
-                    // unreachable from inside the outlined function).
-                    for (size_t i = 0; i < lsym->lambdaCapNames.size(); i++)
-                        largs.push_back(currentFunc->getArg(lsym->lambdaParamTypes.size() + i));
-                } else {
-                    for (size_t i = 0; i < lsym->lambdaCapSlots.size(); i++) {
-                        llvm::Type* ct = llvmType(lsym->lambdaCapTypes[i], *ctx, mod.get());
-                        largs.push_back(builder->CreateLoad(ct, lsym->lambdaCapSlots[i], "lamcap_use"));
-                    }
+                // Pure indirect call: load the callee from env box field 0
+                // and pass the box as the env argument. The outlined fn's
+                // signature IS fn(env, userargs...) and no cap args exist.
+                {
+                    auto* fslotPtr = builder->CreateStructGEP(Lsym->lambdaBoxTy,
+                                                              Lsym->lambdaEnv, 0, "lam.env.fnptr");
+                    auto* fnPtr = builder->CreateLoad(llvm::PointerType::get(*ctx, 0),
+                                                      fslotPtr, "lam.env.fn");
+                    return builder->CreateCall(lamFnTy, fnPtr, largs, "lam_call");
                 }
-                return builder->CreateCall(lsym->lambdaFn, largs, "lam_call");
+            }
+        }
+        // M4: `g(x)` where g is an fn-typed value (param or fn-typed
+        // binding). The value is an env box: field 0 is the code pointer,
+        // the box itself travels as the env argument. Pure indirect call —
+        // looking g up in functionMap would be wrong (fn values have no
+        // static name).
+        {
+            Symbol* vsym = symTable.lookup(call->callee);
+            const Symbol* gvs = nullptr;
+            auto gvit = globalSymTable.find(call->callee);
+            if (gvit != globalSymTable.end()) gvs = &gvit->second;
+            Symbol glCopy;
+            Symbol* cs = vsym;
+            if (!cs && gvs) { glCopy = *gvs; cs = &glCopy; }
+            if (cs && !cs->isLambda && cs->type.kind == TypeKind::Func && cs->type.funcRet) {
+                if (call->args.size() != cs->type.funcParams.size())
+                    return codegenError("function value '" + call->callee + "' expects " +
+                        std::to_string(cs->type.funcParams.size()) + " argument(s), got " +
+                        std::to_string(call->args.size()));
+                VariableExprAST cvNode(call->callee);
+                auto* calleeVal = emitExpr(&cvNode);
+                if (!calleeVal) return nullptr;
+                auto* fnPtr = builder->CreateLoad(llvm::PointerType::get(*ctx, 0),
+                                                  calleeVal, "fncall.fn");
+                auto* pty = llvm::PointerType::get(*ctx, 0);
+                std::vector<llvm::Type*> ptys = {pty};
+                std::vector<llvm::Value*> avals = {calleeVal};
+                for (size_t i = 0; i < call->args.size(); i++) {
+                    auto* v = emitExpr(call->args[i].get());
+                    if (!v) return nullptr;
+                    llvm::Type* want = llvmType(cs->type.funcParams[i], *ctx, mod.get());
+                    ptys.push_back(want);
+                    if (v->getType() != want) {
+                        if (v->getType()->isIntegerTy(64) && want->isDoubleTy())
+                            v = builder->CreateSIToFP(v, want, "fnarg");
+                        else if (!(v->getType()->isPointerTy() && want->isPointerTy()))
+                            return codegenError("function value '" + call->callee +
+                                "' argument type mismatch (parameter " + std::to_string(i + 1) + ")");
+                    }
+                    avals.push_back(v);
+                }
+                auto* cty = llvm::FunctionType::get(
+                    llvmType(*cs->type.funcRet, *ctx, mod.get()), ptys, false);
+                return builder->CreateCall(cty, fnPtr, avals, "fnval_call");
             }
         }
         // Handle generic function call
@@ -8416,6 +8651,27 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         std::vector<llvm::Value*> args;
         for (size_t ai = 0; ai < call->args.size(); ai++) {
             ExprAST* a = call->args[ai].get();
+            // M4: a lambda argument type-checks against the callee's
+            // declared parameter. fn-typed params accept any signature
+            // match; anything else refuses the closure outright — with a
+            // ptr-sized env box flowing under opaque pointers, LLVM could
+            // not catch a bad signature at the call itself.
+            if (a && a->kind == NodeKind::Lambda) {
+                auto fit = functionDefs.find(call->callee);
+                if (fit != functionDefs.end() && ai < fit->second->params.size()) {
+                    Type wantTy = fit->second->params[ai].second;
+                    auto* lam = static_cast<LambdaExprAST*>(a);
+                    std::vector<Type> lamPs;
+                    lamPs.reserve(lam->params.size());
+                    for (auto& lp : lam->params) lamPs.push_back(lp.second);
+                    Type lamTy = Type::fn_(std::move(lamPs), lam->retType);
+                    if (wantTy.kind != TypeKind::Func)
+                        return codegenError("cannot pass a lambda to parameter '" + fit->second->params[ai].first +
+                            "' of '" + call->callee + "': the parameter is not a fn type");
+                    if (!(wantTy == lamTy))
+                        return codegenError("lambda does not match the fn type of parameter '" + fit->second->params[ai].first + "' of '" + call->callee + "'");
+                }
+            }
             llvm::Value* v = nullptr;
             // Array-to-pointer decay: passing an array where a pointer is
             // expected yields the address of its first element, as in C.

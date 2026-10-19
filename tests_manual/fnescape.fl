@@ -1,0 +1,7 @@
+fn esc() -> fn(i64) -> i64 {
+    let f = |x: i64| x + 1;
+    return f;
+}
+fn main() -> i64 {
+    return esc()(2);
+}

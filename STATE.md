@@ -36,3 +36,41 @@ NEXT:
 3. M5: atomic replace of parseParallelForStmtEmit both paths, migrate t_flow.fl
 4. M6: cascade fix
 5. M7: last, only if budget allows
+
+NEXT:
+M4 DONE (all gates green, committed).
+- fn types: TypeKind::Func; funcParams vector<Type>, funcRet shared_ptr<Type>
+  (a struct can't hold a Type member of itself — direct member was ill-formed,
+  first build broke with "field has incomplete type" + inheritance cascades).
+- Uniform closure protocol: outlined lambda = fn(env, userargs...) -> ret;
+  env box = {fnptr, caps...} (fnptr slot written explicitly, caps by-value).
+  ALL calls indirect: load field 0 as ptr, CreateCall(fnTy, loadedPtr,
+  {box, args...}). fn-typed params/bindings work through the same path.
+- emitExpr(Variable) on a lambda binding now yields the box pointer (fn value);
+  inline lambda (call-site arg) materializes via emitLambdaDef with a synthetic
+  "__inline_lam_N" binding, then yields its box.
+- Escape rule (hard error): fn value in return position, or stored into a
+  global. Real adapters for named functions as values (let h = inc) are future
+  work; that case now fails clean: "function 'inc' cannot be used as a value
+  here; bind a lambda or pass it in a direct call".
+- emitVarDecl: lambda-value binding copies the source's fn type (annotation
+  mismatch = error); prevents the i64 ladder demoting a ptr init to str.
+- emitCall: fn-typed callee branch BEFORE the generic/direct lookup (arity +
+  param coercion + arg type mismatch); lambda args type-check against the
+  callee's declared fn params (functionDefs).
+- Gates: tests_manual/fncall.fl (apply(|x| x+1, 5) == 6 in run), fnescape.fl
+  (compile error), fnglobal.fl (exit=2), smokes: 29/29; suites differential,
+  generics, no_hang, errors, parse_gate, lexdiff, fixpoint, python, ai,
+  rust_stdlib all rc=0; selfhost fixed point stable.
+- Known cosmetic: after the escape guard error, body emission continues and a
+  second verifier line can print (M6 will stop cascades).
+
+NEXT:
+2. M5: atomic replace of parseParallelForStmtEmit both paths (AST + emit);
+   migration error message per memory.md B6 ("was removed: it could not
+   capture variables and had no result channel. Use a plain 'for' loop, or
+   move the work into a Rust runtime function such as
+   flint_parallel_reduce"); keep KW_PARALLEL + runtime symbol; migrate
+   tests/t_flow.fl; test_errors.sh asserts the message.
+3. M6: cascade fix
+4. M7: last, only if budget allows
