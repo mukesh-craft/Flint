@@ -232,31 +232,49 @@ still open; "done" is the observable state that closes it.
 
 **Verify**: `bash tests/test_print_size.sh` and `bash tools/bench_gate.sh`.
 
-### 4.2 P0 — Typed HIR/MIR (roadmap Phase 2)
+### 4.2 P0 — Phase 2: a type checker and a typed HIR (REVISED 2026-10-20)
 
-**What**: the compiler goes AST → LLVM IR directly. There is no typed
-intermediate form, so the compiler cannot answer "what is the type of this
-expression", cannot run its own range/alias/escape analyses, and the LSP
-cannot be built on the compiler's semantics.
+**Read this before starting Phase 2.** The first draft of this item said
+"add a typed HIR/MIR". The research pass (below) and a red-team pass on
+that draft found it was **vague in a way that would have wasted weeks**:
 
-**Why it is first among the compiler work**: it is the precondition for
-4.3 (range analysis), 4.4 (escape analysis → escaping closures), 4.5
-(capability types) and 4.7 (a non-drifting LSP). Everything else in the
-type-system plan is cheaper *after* it.
+- Flint has **no type checker**. Types are guessed in ~6 places
+  (`exprFlintType`, `emitVarDecl`'s ladder, `inferGenericArgType`,
+  `typeMangleTag`, the annotation checks). A "typed HIR" that merely records
+  those guesses would be a typed tree full of lies — and the M2c work
+  (removing the silent i64 defaults) is evidence of how wrong the guesses
+  were. **So the first deliverable is a real type checker, not a data
+  structure.**
+- The **self-host pipeline cannot consume such an HIR yet**: stage2/stage3
+  have no generics at all (measured: 0 `typeParams`), so they cannot even
+  *express* an HIR with generic parameters. The pipeline converges **after**
+  the C++ side, if at all (§4.9).
+- The **LSP is in Rust, the compiler in C++**. "Share the HIR" is not free
+  and not automatic — it is a decision (see §4.7 and the decision list).
+- **Checks are code today**, emitted inline. They must become *data*
+  (IR-level operations) before a profile or an analysis can remove them.
+- A full **SSA MIR is a backend rewrite** — the thing we must not do. A
+  typed HIR plus a side CFG (for region inference only) is enough.
 
-**Do** (incremental, never a rewrite):
-1. A `HIR` module in the compiler: names resolved, types annotated, generic
-   instantiation *decided* (not at emit time), traits resolved.
-2. Codegen consumes HIR for a small subset first (functions, arithmetic),
-   then grows.
-3. The self-host pipeline (stage2/stage3) targets the same HIR — that is
-   how D5 closes (§4.9).
+**The revised plan, in delivery order** (each step independently gated and
+shippable; the full design is in `docs/LANGUAGE-ROADMAP.md` §13/§27, the
+research behind it in §6.11):
 
-**Done when**: the compiler answers type queries for an LSP, and a generic
-call is instantiated in the type phase.
+| step | deliverable | gate |
+|---|---|---|
+| **2A.0** | a **type checker** for the subset that is decidable today: local variable declarations, function signatures, literal types | it must AGREE with the compiler's current behaviour on the whole corpus (a differential gate) — and the gate must also report where the current guesses are WRONG, which turns it into a bug-finder |
+| **2A.1** | **types carry facts**: an array's *length* when it is known (literals), the resolved trait for a call, the instantiated type arguments | a fact is only used when it is exact; a wrong fact must be impossible by construction |
+| **2B** | **checks become IR-level operations** (a bounds check and an overflow check as explicit operations, not inline compare+branch) | the profile decides insertion (safe/unsafe), and an analysis can drop an operation that is proven unnecessary |
+| **2C** | **analyses on the HIR**: range/length analysis (static bounds proofs), then escape analysis (Swift's criteria: does not escape + uses post-dominate the allocation) | a check that cannot be proven is KEPT — the safe direction; a failed closure promotion produces a *diagnostic saying why* |
+| **2D** | **regions** (NLL-style, from the CFG) → escaping closures | deferred until 2C's escape analysis exists; they are the same machinery |
+| **2E** | **the pipeline consumes the same semantics** (D5) | only after the language features the HIR needs exist in the pipeline |
 
-**Reference**: the design sketch and the migration table are in
-`docs/LANGUAGE-ROADMAP.md` §13 and §27.
+**First slice actually started (2026-10-20):** step 2A.1's length fact —
+a literal array's length becomes part of its type, the bounds check uses
+the exact constant when the type carries it, and a literal out-of-range
+index still traps in safe mode. It is the smallest honest piece of "types
+carry facts", it is measurable (`--check-bce` counts), and it needs no
+rewrite.
 
 ### 4.3 P1 — Range analysis → check elimination (roadmap Phase 3/5)
 
@@ -398,7 +416,8 @@ re-implementing the semantics. Until then, D5 is the honest record.
 ```
 Phase 0  MEASUREMENT   bench + size + safety gates in CI, --print-size      ← 4.1
 Phase 1  RECOVER       regressions (link fix DONE; IR comparison next)        ← 6.1
-Phase 2  UNIFY         typed HIR/MIR; C++ authoritative; pipeline → HIR      ← 4.2, 4.9
+Phase 2  UNIFY         type checker → typed HIR (2A) → facts (2A.1) →          ← 4.2
+                        check ops as data (2B) → analyses (2C) → regions (2D)
 Phase 3  SAFETY        range analysis, BCE, regions, capabilities, T?        ← 4.3-4.5
 Phase 4  TYPE SYSTEM   assoc types, dyn, operator overloading, const generics ← 4.8
 Phase 5  OPTIMIZATION  BCE/overflow elimination, devirt, specialization, PGO  ← 4.3
@@ -614,7 +633,67 @@ cache stores the already-optimized module, so the "checks emitted" count was
 gone. A diagnostic that depends on cache state is not a diagnostic; the flag
 now bypasses the cache.
 
-### 6.10 Decision log
+### 6.10 Phase 2 research and red team (2026-10-20)
+
+**Sources consulted** (all current, 2026 unless noted):
+
+- **k2's compiler architecture** (k2-lang.org/docs/compiler-architecture) —
+  the closest working template to what Phase 2 needs: AST → HIR (names
+  resolved) → HIR (fully typed) → HIR (comptime-folded) → MIR
+  (monomorphized) → MIR (**safety checks inserted as a pass**) → backend.
+  Three ideas taken: (a) *bidirectional* type inference — "check mode pushes
+  an expected type down, synthesize mode pulls a type up"; (b) *one IR, two
+  backends*, so both share 100 % of the semantics; (c) *check insertion is a
+  pass*, so "ReleaseFast" simply has no checks in the IR — "there is nothing
+  for the optimizer to remove".
+- **rustc's borrow-check guide** (rustc-dev-guide) — the MIR is "far less
+  complex than the HIR", the radical desugaring prevents borrow-checker
+  bugs, and MIR is what makes *non-lexical lifetimes* possible (regions from
+  the CFG). Also: MIR type checking is a second pass whose purpose is to
+  collect region constraints — and it doubles as a self-check ("if something
+  fails in MIR type checking that passed in HIR type checking, something has
+  gone wrong").
+- **rust-analyzer and rustc** (RFC 2912, the shared-parser issue #10765) —
+  the LSP is a *third frontend*; sharing the parser with rustc took four
+  years and is still open ("parser/AST has wide APIs, so extracting that is
+  a whole lot of poorly factorable work"). The solution Rust reached:
+  extract shared *libraries* (`rustc_type_ir`, `rustc_next_trait_solver`,
+  `rustc_lexer`, `rustc_ast_ir`) and let each frontend implement an
+  `Interner` trait.
+- **Swift's StackPromotion / AllocBoxToStack** (swiftlang/swift) — stack
+  promotion needs two conditions (the allocation does not escape; its uses
+  post-dominate the allocation), and when promotion fails Swift *diagnoses
+  why* ("mustbeonstack": "Due to user: ...").
+- **BCE realism**: Rust's own numbers — "bounds check elimination: usually
+  works, but not reliable; good: constant bounds, straight-line code; bad:
+  checks in loops" (Rust Heart LLVM, 2024-10). SAFECode eliminated "many"
+  runtime bounds checks with *interprocedural* static analysis.
+
+**Red team on the first draft of the Phase 2 plan** (the plan said "add a
+typed HIR/MIR"):
+
+| # | objection | severity | what it changes |
+|---|---|---|---|
+| A | Flint has **no type checker**; a HIR recording the current guesses would be a typed tree full of lies | **blocker** | the first deliverable is a real (bidirectional) type checker, with a differential gate against today's behaviour |
+| B | the self-host pipeline cannot express generics/traits (0 `typeParams` in stage2) so it cannot consume such an HIR | **blocker** | the pipeline converges *after* the C++ side; D5 is not a Phase 2 deliverable |
+| C | the LSP is in Rust, the compiler in C++: sharing the HIR is a *decision* (shared library + query API, a Flint rewrite, or accept drift) | serious | the LSP item moves to the decision list; it is not assumed |
+| D | checks are code, not data, so no profile or analysis can remove one | serious | "checks become IR-level operations" is its own step (2B) |
+| E | a full SSA MIR is a backend rewrite | serious | MIR is deferred; a side CFG is enough for region inference |
+
+**Dead ends and non-findings (do not retry):**
+- "Just build an SSA MIR like Rust" — rejected (objection E): it is a
+  rewrite of the backend.
+- "Let the HIR record what the current inference guesses" — rejected
+  (objection A): it would encode the wrong types; the M2c work is the
+  evidence of how wrong they were.
+- "Make the Rust LSP consume the C++ HIR directly" — rejected for now
+  (objection C): cross-language sharing is the 4-year problem Rust still
+  has open; the cheap alternative is a query API on the compiler (the
+  "flintc api" idea) and it is a maintainer decision.
+- "Write the LSP in Flint" — blocked by D5: the pipeline has no traits or
+  generics yet.
+
+### 6.11 Decision log
 
 | decision | rationale | rejected alternative |
 |---|---|---|
