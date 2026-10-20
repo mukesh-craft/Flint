@@ -4268,3 +4268,38 @@ inference as the target for the ownership model (Polonius Alpha);
 `--print-size` shaped like Bloaty/cargo-bloat/twiggy; `--unsafe` framed as
 a C++26-style safety profile; the LSP's first features taken from LSP 3.17/3.18;
 and a curated (not mirrored) registry.
+
+# Addendum (2026-10-20, later) — Phase 0 measurement + two codegen defects
+
+- **Phase 0 measurement infrastructure (fdbf119, 660fab3, 26920a8).**
+  `flintc --print-size` now reports the artifact's own size attribution
+  (file bytes, section bytes, header bytes, .bss reserved, per-class symbol
+  attribution, sections, dynamic dependencies, objects offered to the
+  linker); `--print-size-json=PATH` writes it as JSON. Every number is read
+  from the artifact, and `tests/test_print_size.sh` checks the report is
+  TRUE against the file on disk. `tools/bench_gate.sh` is the measurement
+  gate: runtime > +3%, binary > +5%, compile time > +10% fails, baselines
+  are per machine (a baseline from another machine is refused rather than
+  silently compared), and timings use the minimum of N runs. CI runs the
+  size gate as a required step; the measurement job is advisory until a
+  per-runner baseline exists.
+- **DEFECT 1 (660fab3): invalid IR for fn-typed returns.** The default
+  terminator built its return value with `ConstantInt::get(retType, 0)` --
+  an integer constant with a POINTER type, because an `fn(...)` return type
+  is a pointer (M4). A valid program (`fn get() -> fn(i64) -> i64 { }`)
+  failed with an internal LLVM error ("ret i0 0") instead of compiling. The
+  terminator now uses the null value OF THE RETURN TYPE. **A new type can
+  invalidate code that predates it** -- the fix was to look for every use
+  of the return type, not just the new one.
+- **DEFECT 2 (fdbf119): copying a function value lost its fn type.**
+  `h = inc; g = h; g(5)` failed with "undefined function 'g'". Three
+  sites answered "is this binding a function value?" with three different
+  rules; the binding site used the one that predates named-function
+  values. There is now ONE predicate, `Symbol::isFunctionValue`.
+- **One error per program, codegen side (660fab3).** After a codegen
+  error the emitter kept going and LLVM's verifier printed a second
+  message about the compiler's internals. emitStmt/emitExpr now stop after
+  the first error, and `tests/test_one_error.sh` enforces it.
+- **Codegen diagnostics now carry a location (26920a8):**
+  `codegen: 9:12: cannot return a function value: ...`, matching the parse
+  errors, which always had one.
