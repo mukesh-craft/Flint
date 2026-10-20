@@ -6458,8 +6458,21 @@ public:
                         auto* gv = git->second.global;
                         return builder->CreateLoad(llvmType(git->second.type, *ctx, mod.get()), gv, v->name.c_str());
                     }
-                    if (functionMap.count(v->name))
+                    if (functionMap.count(v->name)) {
+                        // M4 follow-up: a named function used as a value
+                        // becomes a thunk with the same env-box shape as a
+                        // lambda, so the fn-value call path needs no
+                        // special case.
+                        llvm::Value* fv = namedFnValue(v->name);
+                        if (fv) return fv;
                         return codegenError("function '" + v->name + "' cannot be used as a value here; bind a lambda or pass it in a direct call");
+                    }
+                    if (genericFunctions.count(v->name))
+                        return codegenError("generic function '" + v->name +
+                            "' cannot be used as a value yet; instantiate it first");
+                    if (functionDefs.count(v->name))
+                        return codegenError("function '" + v->name +
+                            "' cannot be used as a value here; bind a lambda or pass it in a direct call");
                     return codegenError(std::string("undefined var '") + v->name + "'");
                 }
                 if (sym->moved) {
@@ -6836,6 +6849,95 @@ public:
         }
     }
 
+    // M4 follow-up: a NAMED function used as a value (`let h = inc`).
+    //
+    // A lambda's value is an env box {fnptr, caps...} and calls go through
+    // the uniform protocol fn(env, args...). A named function has no
+    // captures, so it can join that protocol with a THUNK: a generated
+    // wrapper with the same shape that ignores its env argument and
+    // forwards to the real function. Then the call site needs no
+    // discriminator -- a named-function value and a lambda value are the
+    // same kind of thing at runtime, and the existing fn-value call path
+    // works unchanged.
+    //
+    // The thunk is generated ONCE per named function and cached, so two
+    // bindings of the same function share it.
+    std::unordered_map<std::string, llvm::Function*> namedFnThunks;
+    std::unordered_map<std::string, Type> namedFnTypes;
+
+    // Returns the thunk for `name`, creating it on first use. `fnTyOut` gets
+    // the Flint fn type of the function (params -> ret), so the binding
+    // carries the same signature the thunk implements.
+    llvm::Function* namedFnThunk(const std::string& name, Type& fnTyOut) {
+        auto cached = namedFnThunks.find(name);
+        auto tyIt = namedFnTypes.find(name);
+        if (cached != namedFnThunks.end() && tyIt != namedFnTypes.end()) {
+            fnTyOut = tyIt->second;
+            return cached->second;
+        }
+        auto defIt = functionDefs.find(name);
+        if (defIt == functionDefs.end()) return nullptr;
+        FunctionAST* def = defIt->second;
+        auto realIt = functionMap.find(name);
+        if (realIt == functionMap.end()) return nullptr;
+        llvm::Function* real = realIt->second;
+        llvm::FunctionType* realTy = real->getFunctionType();
+        if (!realTy) return nullptr;
+        if (def->typeParams.size() > 0) return nullptr; // generic: needs instantiation
+        // The Flint-level signature: declared parameter types and return
+        // type. Defaults are not part of it -- a value has one fixed shape.
+        std::vector<Type> ps;
+        for (auto& p : def->params) ps.push_back(resolveType(p.second));
+        Type ret = resolveType(def->returnType);
+        if (ret.kind == TypeKind::Void) return nullptr; // a void fn has no value
+        fnTyOut = Type::fn_(ps, ret);
+        // The thunk: fn(env, args...) -> ret. The env parameter is ignored
+        // (a named function captures nothing) but its PRESENCE is what makes
+        // the value indistinguishable from a lambda at the call site.
+        std::vector<llvm::Type*> paramTys;
+        paramTys.push_back(llvm::PointerType::get(*ctx, 0)); // env
+        for (size_t i = 0; i < realTy->getNumParams(); i++)
+            paramTys.push_back(realTy->getParamType(i));
+        auto* thunkTy = llvm::FunctionType::get(realTy->getReturnType(), paramTys, false);
+        std::string thunkName = "__thunk_" + name;
+        auto* thunk = llvm::Function::Create(thunkTy, llvm::GlobalValue::InternalLinkage,
+                                             thunkName, mod.get());
+        functionMap[thunkName] = thunk;
+        // Body: forward every argument, drop the env.
+        auto* savedFunc = currentFunc;
+        auto savedIP = builder->saveIP();
+        currentFunc = thunk;
+        auto* entry = llvm::BasicBlock::Create(*ctx, "entry", thunk);
+        builder->SetInsertPoint(entry);
+        std::vector<llvm::Value*> fwd;
+        for (size_t i = 1; i < thunk->arg_size(); i++)
+            fwd.push_back(thunk->getArg(i));
+        auto* call = builder->CreateCall(realTy, real, fwd, "thunk_call");
+        builder->CreateRet(call);
+        currentFunc = savedFunc;
+        builder->restoreIP(savedIP);
+        namedFnThunks[name] = thunk;
+        namedFnTypes[name] = fnTyOut;
+        return thunk;
+    }
+
+    // Materializes a named function as a value: a box {fnptr} in the
+    // CURRENT frame, exactly the shape a lambda's env box has, so the
+    // fn-value call path can call it with no special case. The box lives in
+    // this frame, so the same escape rules as lambdas apply to it.
+    llvm::Value* namedFnValue(const std::string& name) {
+        Type fnTy;
+        llvm::Function* thunk = namedFnThunk(name, fnTy);
+        if (!thunk) return nullptr;
+        auto* boxTy = llvm::StructType::get(*ctx, llvm::ArrayRef<llvm::Type*>{
+            llvm::PointerType::get(*ctx, 0)});
+        auto* box = createEntryAlloca(boxTy, "fnval_" + name);
+        auto* slot = builder->CreateStructGEP(boxTy, box, 0, "fnval.slot");
+        builder->CreateStore(thunk, slot);
+        return builder->CreatePointerCast(box, llvmType(fnTy, *ctx, mod.get()),
+                                           "fnval.ptr");
+    }
+
     // P0-6 closure conversion (re-added after 2026-09-14 wipe): outline
     // `name = |params| body` to __lam_<name>_<N>(params..., captures...).
     // Captures are evaluated NOW (by value) into hidden slots in the defining
@@ -7044,6 +7146,27 @@ public:
             auto gvit = globalSymTable.find(vn->name);
             if (gvit != globalSymTable.end()) gs = &gvit->second;
             const Symbol* cs = srcSym ? srcSym : gs;
+            // M4 follow-up: `let h = inc` binds a NAMED function. The
+            // source is a function, not a symbol, so the fn type comes from
+            // the function's own definition.
+            if (!cs && functionMap.count(vn->name)) {
+                Type fnTy;
+                if (namedFnThunk(vn->name, fnTy)) {
+                    Type ann = resolveType(decl->varType);
+                    if (ann.kind == TypeKind::Func) {
+                        if (!(ann == fnTy)) {
+                            codegenError("cannot bind function '" + vn->name +
+                                "': declared signature differs from the function's signature");
+                            return;
+                        }
+                    } else if (ann.kind != TypeKind::I64 && ann.kind != TypeKind::Void) {
+                        codegenError("cannot bind a function value to a non-fn type");
+                        return;
+                    }
+                    rt = fnTy;
+                    lty = llvmType(rt, *ctx, mod.get());
+                }
+            }
             if (cs && cs->isLambda && cs->type.kind == TypeKind::Func) {
                 Type ann = resolveType(decl->varType);
                 if (ann.kind == TypeKind::Func) {
