@@ -208,6 +208,15 @@ still open; "done" is the observable state that closes it.
 - CI: the size gate runs as a required step; the measurement job is
   **advisory** until a per-runner baseline exists.
 
+**Also landed in the same pass**:
+- `tests/test_one_error.sh` — the machine-checkable form of "one error per
+  program": every known-bad fixture must produce exactly ONE error line. The
+  parse side had this contract since M6; this pass closed the codegen side
+  (emitStmt/emitExpr now stop after the first error) and added the gate.
+- Codegen diagnostics now carry a source location
+  (`codegen: 9:12: cannot return a function value: ...`), matching the
+  parse errors, which have always had one.
+
 **Still open**:
 - A *history* (the JSON per commit is produced, but nothing accumulates or
   charts it yet) and a dashboard page.
@@ -560,7 +569,31 @@ rule) and as the three wrong ledger claims (§3.1): **a rule that is written
 down more than once is a rule that will disagree with itself.** The fix is
 not to write the rule correctly three times; it is to write it once.
 
-### 6.8 Decision log
+### 6.8 Two more defects the code-quality pass found
+
+**Invalid IR for `fn`-typed returns.** A function whose return type is a
+FUNCTION TYPE and which falls off the end built its default return value
+with `ConstantInt::get(retType, 0)` — an integer constant with a POINTER
+type, because an `fn(...)` return type is a pointer (M4). The result was an
+internal LLVM error instead of a working program:
+
+```
+Function return type does not match operand type of return inst!
+  ret i0 0
+```
+
+The terminator now uses the null value **of the return type**. Fixture:
+`tests_manual/t_fn_return_type.fl`. This one only appeared when the M4
+feature (fn-typed returns) met an older code path — a reminder that a new
+type can invalidate code that predates it.
+
+**Codegen kept going after an error.** After `codegenError`, the emitter
+continued, so the IR no longer matched the source and LLVM's verifier
+printed a second message about the compiler's internals on top of the
+user's real error. `emitStmt`/`emitExpr` now stop once an error has been
+reported.
+
+### 6.9 Decision log
 
 | decision | rationale | rejected alternative |
 |---|---|---|
