@@ -44,3 +44,6 @@ compile_commands.json
 /editors/vscode/bin/
 /editors/vscode/.keywords.json
 /runtime/rust/target/
+
+# benchmark scratch output (tools/bench_tooling.sh run artifacts)
+bench_out/
