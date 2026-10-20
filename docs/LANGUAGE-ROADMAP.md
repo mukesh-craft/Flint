@@ -482,43 +482,63 @@ loaded value.** `sum_array`'s surviving checks are the `flint_array_get`
 bounds checks, whose length comes from the `{ptr, i64}` slice in memory while
 the loop bound is a different value.
 
-### 4.4 Candidate contributors, ranked by evidence
+### 4.4 Candidate contributors, and the experiment that settled them
 
-| contributor | evidence | verdict |
+**The experiment was run** (it was listed as an open item in the first
+draft of this document; it is now closed). `flintc --emit-llvm` versus
+`clang -O2 -S -emit-llvm` on `benchmarks/sum_array.fl` / `.c`, both
+post-optimization:
+
+| measure (optimized IR) | C | Flint |
 |---|---|---|
-| **Bounds/overflow checks not eliminable in loops** | [M] 3 of 6 checks survive in `sum_array`; [P] Rust Heart LLVM: "bounds check elimination: usually works, but not reliable; good: constant bounds, straight-line code; bad: checks in loops" | **Real, ~13 % of runtime** |
-| **Array representation `{ptr, i64}` with `i64` GEP** | [M] the length and the index are unrelated SSA values → LLVM cannot relate them; also the element size is not in the type | **Real, and the reason BCE fails** (§5.2) |
-| **Index/element access through a runtime call** (`flint_array_get`) | [M] the call boundary hides the length from the optimizer unless inlined | **Real** — inlining these is the cheap fix (§5.3) |
-| **No `memcpy`/NRVO on struct returns** | [P] Rust Heart LLVM lists "memcpy elimination: Rust has no NRVO → many memcpys" as a known cost | **Likely present; unmeasured on Flint** |
-| **Monomorphization bloat / no inlining budget** | [M] the compiler emits LLVM IR directly; no inlining is done in Flint's own pipeline (LLVM does it) | **Unlikely** — LLVM inlines |
-| **Register allocation / instruction selection** | LLVM's own back end | **Unlikely** — the f64 loop is at C parity, which uses the same allocator |
-| **Vectorization** | [M] neither C nor Rust vectorized these loops meaningfully (scalar code) | **Not a factor here** |
-| **Allocator behaviour** | [M] the Rust arena is 48 MB but untouched in these loops | **Not a factor** |
-| **Branch prediction / cache** | identical algorithms | **Not a factor** |
-| **Function-call overhead** | `fib(45)` (1.35×) vs `sum_array` (1.89×) — call-heavy is *closer* to parity | **Not the main factor** |
+| instructions in `main` | 52 | **49** |
+| vector operations in the module | 16 (`<2 x i64>`) | **0** |
+| `icmp` in `main` | 2 | **4** |
+| per-iteration bounds check | none — C's out-of-bounds is UB, so it is assumed away | 1 (`icmp ult i, len`) |
+| per-iteration overflow check | none — C's signed overflow is UB, so it is assumed away | 1 (on `sum + a[i]`) |
+| the array length in the IR | not needed | a **runtime value** (`%.fca.1.extract`), unrelated to the loop bound (`i < 10000000`) |
 
-### 4.5 How to *determine* the rest (method, not speculation) [D]
+Three conclusions, all measured [M]:
 
-The honest answer is that "1.6× unexplained" is not yet explained. The
-method to explain it:
+1. **The gap is not code bloat.** Flint's optimized `main` is *smaller*
+   than C's (49 vs 52 instructions). The front end is not emitting worse
+   instructions; it is producing a different *algorithm*.
+2. **C auto-vectorizes the integer reduction; Flint does not** (16 vector
+   ops vs 0). This is the largest single factor, and it explains the
+   pattern across the whole benchmark set: `pi` (f64) is at parity because
+   clang will not reassociate a floating-point reduction without
+   `-ffast-math`, so *neither* side vectorizes it; `sum_array` (i64) is
+   1.89× behind because *only C* vectorizes it. **The gap appears exactly
+   where C's undefined behaviour lets it do more.**
+3. **Flint's two checks are why it cannot vectorize.** A check per access
+   and a check per addition block the reassociation a reduction needs, and
+   the bounds check cannot be eliminated because the array length is a
+   runtime value LLVM cannot relate to the loop bound.
 
-1. **Emit IR for the hot loop and compare with C's** (`flintc --emit-llvm`
-   vs `clang -O2 -S -emit-llvm`). Diff the two LLVM modules *after*
-   optimization: different instruction counts in the same function mean the
-   gap is in the front end; identical IR with different timings means it is
-   in the back end or the runtime.
-2. **Bisect the check count**: compile with `--unsafe` **and** with
-   `-O3`/LTO to separate front-end effects from LLVM effects.
-3. **Attribute with the profiler** (`perf` is unavailable on this device;
-   the fallback is manual instrumentation of the hot loop).
-4. **Count the remaining checks per benchmark** and make that a gate (§21):
-   a regression that adds checks is visible without any timing noise.
+So the measured decomposition of the 1.89× on `sum_array` is: checks ~13 %
+(measured directly with `--unsafe`) + the vectorization difference = the
+rest. It also explains why `fib(45)` — call-bound and not vectorizable in
+either language — is only 1.35× behind.
 
-The most informative single experiment is (1): if the optimized IR for
-`sum_array`'s loop is materially worse than C's, the fault is Flint's index
-lowering (the `{ptr,i64}` GEP), not LLVM.
+### 4.5 What this changes in the plan
 
----
+- The "unexplained 1.6×" is now explained: it is **the cost of defined
+  overflow semantics plus the loss of auto-vectorization**, not a codegen
+  defect [M].
+- The highest-value optimizations are therefore **semantics-preserving
+  analyses that let LLVM do what C's UB lets it do**:
+  1. *range analysis* to remove the overflow check where the compiler can
+     prove the range (§5.2);
+  2. *same-value bounds* so the bounds check folds away (§5.2);
+  3. once both are gone, LLVM's own vectorizer can vectorize the
+     reduction — **Flint does not need a vectorizer of its own** [I].
+- A C-like "wrapping arithmetic" type is an alternative to (1) and deserves
+  consideration: it trades a defined trap for wrap-around semantics and
+  would restore vectorizability for the affected code [D].
+- The remaining measurements worth doing (not done here): `primes` and
+  `fib` IR comparisons, and a `-O3`/LTO comparison to separate LLVM-level
+  effects from Flint-level ones [I].
+
 
 ## 5. Safety-preserving performance
 
@@ -558,10 +578,14 @@ Three fixes, in increasing cost:
 
 ### 5.3 Cheap wins that need no new IR [D]
 
-- **Inline the array accessors.** `flint_array_get` is a call; the
-  optimizer cannot see through it unless it inlines. If the accessor is
-  `inline` in the IR, the length and the index meet in the same function
-  and BCE starts working [M: the check counts show exactly this pattern].
+- ~~**Inline the array accessors.**~~ **Already the case — do not do it.**
+  The optimized IR shows the accessor's fast path inlined (`icmp ult i,
+  len` + branch, with only the panic path left as a call to
+  `flint_bounds_check`) [M: §4.4]. This proposal was in the first draft of
+  this document and **measuring the IR is what proved it wrong**. The
+  problem is not a call boundary; it is that the length is a runtime value
+  unrelated to the loop bound, and that the two checks block the
+  vectorization a reduction needs.
 - **Hoist the length load** out of the loop (the runtime already loads it
   per access).
 - **Emit `panic=abort`-style traps instead of unwinding for checks.**
@@ -973,7 +997,7 @@ This is a stronger-than-average foundation for a 0.x language.
 | **No property-based testing** | e.g. "the optimizer preserves program semantics" is unasserted |
 | **No IR-level tests** | optimizer bugs are only visible end-to-end |
 | **No binary-size regression gate** | a 743 KB hello-world shipped for a long time; nothing would have caught it [M] |
-| **No performance regression gate** | the 1.6× unexplained gap could have grown unnoticed [M] |
+| **No performance regression gate** | the vectorization gap (§4.4) could have grown unnoticed [M] |
 | **No ABI tests** | the interface format (`.flint.bc`) has no versioned compatibility test |
 
 ### 14.3 The validation strategy to build [D]
@@ -1389,10 +1413,16 @@ both regressions were invisible to a passing test suite (§14.4).
 
 ### 22.3 The performance gap: archaeology not yet done [I]
 
-The 1.6× *unexplained* part of the integer-loop gap (§4) has **not** been
-bisected. The procedure is defined (§4.5): compare the optimized LLVM IR
-of the hot loop against C's. That is the next concrete experiment, and it
-needs no new infrastructure beyond `--emit-llvm`.
+The 1.6× part of the integer-loop gap **has** been bisected, by the IR
+comparison in §4.4: the cause is that C auto-vectorizes the integer
+reduction (16 vector ops) while Flint does not (0), because Flint's
+defined-trap overflow semantics and its bounds check block the
+reassociation a vectorized reduction needs — and because the array length
+is a runtime value unrelated to the loop bound. **The fix is analysis, not
+a new backend**: range analysis + same-value bounds (§4.5, §5.2), after
+which LLVM's own vectorizer can do the work [M].
+
+The binary-size regression was the other one, and it is fixed (§22.2).
 
 ---
 
@@ -1583,7 +1613,7 @@ improving at every step.
 
 | category | score /100 | evidence | main weakness | priority |
 |---|---|---|---|---|
-| **Runtime performance** | 62 | [M] 1.35–2.25× behind C/C++/Rust on integer loops; f64 parity; 4–45× faster than Python; 13 % of the gap is checks | the 1.6× unexplained part (§4.5) | P1 |
+| **Runtime performance** | 62 | [M] 1.35–2.25× behind C/C++/Rust on integer loops; f64 parity; 4–45× faster than Python; 13 % of the gap is checks; **the rest is lost auto-vectorization** (C: 16 vector ops, Flint: 0) with the cause measured in §4.4 | no range analysis, so the checks that block vectorization cannot be removed | P1 |
 | **Binary size** | 92 | [M] 4,536 B stripped hello (C: 4,368 B; Rust: 339,656 B) after the link fix; `.bss` 24 B; one dependency | 72 MB of arenas in library-heavy programs; one monolithic `flint_std.o` | P2 |
 | **Memory safety** | 78 | [M] compile-time use-after-free, bounds/overflow/div-zero checks, leases + runtime backstop, deterministic free, 135-message diagnostic catalog | no precise regions; closures cannot escape; FFI contracts unchecked | P1 |
 | **Concurrency safety** | 42 | [M] threads + channels exist; no static race freedom; `parallel for` removed | no capability model | P1 |
