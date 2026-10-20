@@ -4387,3 +4387,15 @@ and a curated (not mirrored) registry.
   C), `--unsafe` 9.9 ms (1.19x C), C -O2 8.3 ms. Do NOT hand-write a
   vectorizer (the roadmap rejects that); the next step is to see whether
   LLVM's own vectorizer can be nudged, and otherwise to accept ~1.2x here.
+
+- **Step 2A.0 — the type audit (b75e4c7).** Flint has TWO inference
+  engines (the parser's `inferType` and the codegen's `exprFlintType` +
+  declaration ladder) and nothing compared them. `flintc --type-audit`
+  compares them at every declaration: an ANNOTATED declaration is a
+  contract (a disagreement is a bug), an INFERRED one is a guess (a
+  disagreement is drift). Measured over the corpus (123 files): **0
+  contract violations**, **135 inferred declarations with drift** — and the
+  drift has one shape: the parse-time engine answers i64 (its default)
+  where the codegen engine knows str or f64. The parse-time engine is the
+  weak one, and it is the one a future LSP or type checker would inherit.
+  Gate: `tests/test_type_audit.sh`.

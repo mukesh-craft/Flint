@@ -262,7 +262,7 @@ research behind it in §6.11):
 
 | step | deliverable | gate |
 |---|---|---|
-| **2A.0** | a **type checker** for the subset that is decidable today: local variable declarations, function signatures, literal types | it must AGREE with the compiler's current behaviour on the whole corpus (a differential gate) — and the gate must also report where the current guesses are WRONG, which turns it into a bug-finder |
+| **2A.0** | a **type checker** for the subset that is decidable today: local variable declarations, function signatures, literal types | it must AGREE with the compiler's current behaviour on the whole corpus (a differential gate) — and the gate must also report where the current guesses are WRONG, which turns it into a bug-finder. **STARTED**: the `flintc --type-audit` half of it is done (see below) |
 | **2A.1** | **types carry facts**: an array's *length* when it is known (literals), the resolved trait for a call, the instantiated type arguments | a fact is only used when it is exact; a wrong fact must be impossible by construction |
 | **2B** | **checks become IR-level operations** (a bounds check and an overflow check as explicit operations, not inline compare+branch) | the profile decides insertion (safe/unsafe), and an analysis can drop an operation that is proven unnecessary |
 | **2C** | **analyses on the HIR**: range/length analysis (static bounds proofs), then escape analysis (Swift's criteria: does not escape + uses post-dominate the allocation) | a check that cannot be proven is KEPT — the safe direction; a failed closure promotion produces a *diagnostic saying why* |
@@ -334,6 +334,26 @@ not anything Flint emits. **Do not chase this by hand-writing a
 vectorizer** (the roadmap rejects that): the honest next step is to see
 whether a small, targeted hint (or the loop's shape) makes LLVM's own
 vectorizer take it, and otherwise to accept ~1.2x on this workload.
+
+**Step 2A.0 — the type audit (landed 2026-10-20, commit b75e4c7).**
+Flint infers types in TWO places: the parser's `inferType` and the
+codegen's `exprFlintType` + declaration ladder. Nothing compared them.
+`flintc --type-audit` now does, at every declaration:
+
+- an **annotated** declaration is a CONTRACT (the program states the
+  type) — a disagreement is a BUG;
+- an **inferred** declaration is a GUESS — a disagreement is DRIFT, which
+  is what step 2A must remove.
+
+Measured over the corpus (123 files): **0 contract violations** and **135
+inferred declarations where the two engines still drift**. The drift has
+one shape: the parse-time engine answers **i64** (its default) where the
+codegen engine knows **str** or **f64** — e.g. `benchmarks/pi.fl:9`
+(`denom` parse=i64 codegen=f64), `examples/regex_demo.fl:9` (`replaced`
+parse=i64 codegen=str). So the parse-time engine is the weak one, and it
+is the one a future LSP or checker would inherit. Gate:
+`tests/test_type_audit.sh` (fails on a contract violation, reports the
+drift).
 
 **Dead ends found while doing it (do not retry):**
 - The vestigial `IndexExprAST::unchecked` flag ("R2 BCE-lite: proven
