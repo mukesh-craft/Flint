@@ -1613,7 +1613,7 @@ improving at every step.
 
 | category | score /100 | evidence | main weakness | priority |
 |---|---|---|---|---|
-| **Runtime performance** | 62 | [M] 1.35–2.25× behind C/C++/Rust on integer loops; f64 parity; 4–45× faster than Python; 13 % of the gap is checks; **the rest is lost auto-vectorization** (C: 16 vector ops, Flint: 0) with the cause measured in §4.4 | no range analysis, so the checks that block vectorization cannot be removed | P1 |
+| **Runtime performance** | 70 | [M] sum_array 10M is now **12.0 ms vs C's 8.3 ms (1.44×)** — down from 1.89× after the length fact reached the array builtins (2b45516), and the final IR has **0 bounds-check calls**; f64 parity; 4–45× faster than Python. The checks that remain are the ones needing **range analysis** (primes: `i*i <= limit` does not give LLVM `i <= limit+1`) | no range analysis yet, so the checks that block vectorization still survive | P1 |
 | **Binary size** | 92 | [M] 4,536 B stripped hello (C: 4,368 B; Rust: 339,656 B) after the link fix; `.bss` 24 B; one dependency | 72 MB of arenas in library-heavy programs; one monolithic `flint_std.o` | P2 |
 | **Memory safety** | 78 | [M] compile-time use-after-free, bounds/overflow/div-zero checks, leases + runtime backstop, deterministic free, 135-message diagnostic catalog | no precise regions; closures cannot escape; FFI contracts unchecked | P1 |
 | **Concurrency safety** | 42 | [M] threads + channels exist; no static race freedom; `parallel for` removed | no capability model | P1 |
@@ -1639,6 +1639,23 @@ raise the score. It is a *mitigating factor* for the ecosystem score
 ---
 
 ## 29. Final prioritized roadmap
+
+### Phase 2 (started 2026-10-20) — step 2A.1 LANDED
+
+**Types carry facts.** The length of an array value is now a fact the
+backend uses: the bounds check compares the index against the same value
+the user's loop compares against, and LLVM folds it.
+
+- Measured: sum_array 10M **19.1 ms -> 12.0 ms (-37 %)**, the gap to C
+  **1.89× -> 1.44×**, and **0 bounds-check calls** in the final IR.
+- Safety: a fact is used only where its value DOMINATES the use (a
+  DominatorTree check — a value from inside a loop is not available after
+  it), the fact is cleared on assignment, and an out-of-range access still
+  traps. New gate: `tests/test_bounds_safety.sh`.
+- The remaining gap needs **range analysis** (step 2C): the fact gives
+  the compiler the LENGTH, but proving the INDEX is below it is a range
+  analysis over the loop (primes: `i*i <= limit` does not give LLVM
+  `i <= limit+1`).
 
 ### Phase 0 — Measurement (4–6 weeks) — **PARTLY DONE (2026-10-20)**
 - **Done**: the harnesses (`tools/bench_compare.sh` with 5 languages,
