@@ -73,6 +73,8 @@ jobs:
         run: bash tests/test_unsafe_flag.sh ./flintc
       - name: Bounds-check safety gate (the known-length fact must not weaken checks)
         run: bash tests/test_bounds_safety.sh ./flintc
+      - name: Type-audit gate (the two inference engines must not break a contract)
+        run: bash tests/test_type_audit.sh ./flintc
       - name: Docs-table sync gate (README counts match tree)
         run: bash tools/docs_check.sh .
       - name: Cache-salt gate (flags/imports bust cache)
