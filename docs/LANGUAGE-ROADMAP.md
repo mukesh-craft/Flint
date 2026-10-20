@@ -1039,8 +1039,8 @@ version).
 | safety bug | sanitizer gate + safe/unsafe equivalence property | "ASan clean: N/N" |
 | wrong diagnostic | two-way error catalog + compile-fail corpus | "catalog in sync: N/N" |
 | ABI regression | golden interface files + version matrix | "interfaces compatible: N/N" |
-| **binary-size regression** | **size gate per commit** (§21) | **"size: Δ vs baseline"** |
-| **performance regression** | **bench gate per commit** (§21) | **"runtime: Δ vs baseline"** |
+| **binary-size regression** | `flintc --print-size` + `tests/test_print_size.sh` + `tools/bench_gate.sh` (§21) | **"binary: Δ vs baseline"** |
+| **performance regression** | `tools/bench_gate.sh` (runtime, binary, compile time vs a per-machine baseline) | **"runtime: Δ vs baseline"** |
 
 The last two are the ones this project has been missing, and the 743 KB
 hello-world proves the cost of that gap.
@@ -1640,13 +1640,23 @@ raise the score. It is a *mitigating factor* for the ecosystem score
 
 ## 29. Final prioritized roadmap
 
-### Phase 0 — Measurement (4–6 weeks)
-- Land the benchmark + size + startup harness in CI with per-commit JSON
-  (§21). Include the new `tools/bench_compare.sh` (5 languages) and
-  `tools/bench_tooling.sh`.
-- Add `flintc --print-size` (size attribution JSON) and
-  `flintc --check-bce` into the dashboard.
-- Freeze the baseline: every later phase is measured against it.
+### Phase 0 — Measurement (4–6 weeks) — **PARTLY DONE (2026-10-20)**
+- **Done**: the harnesses (`tools/bench_compare.sh` with 5 languages,
+  `tools/bench_tooling.sh` for size/build/startup, `benchmarks/*.rs` Rust
+  mirrors); `flintc --print-size` (size attribution, text + JSON, read from
+  the artifact) and `flintc --check-bce` (checks emitted vs elided);
+  `tests/test_print_size.sh` (the report must agree with the file on disk);
+  `tools/bench_gate.sh` (the measurement gate: runtime > +3 %, binary > +5 %,
+  compile time > +10 % fails; per-machine baselines; minimum-of-N timings);
+  CI wiring (size gate required, measurement job advisory).
+- **Done**: two defects were found *by* the new instrumentation and fixed —
+  the 743 KB binary (the gate's own history) and the invalid IR for
+  `fn`-typed returns.
+- **Still open**: a per-commit history and a dashboard page; more workloads
+  (allocation, strings, collections, concurrency, networking, and one
+  *realistic application*); the monomorphization share in `--print-size`
+  (twiggy's `monos` idea — the one size contributor still unmeasurable);
+  per-runner baselines so the measurement job can become required.
 - **Exit criteria:** a CI job that reports runtime/binary/compile-time
   deltas per commit, and a documented baseline.
 
@@ -1795,6 +1805,20 @@ growth), and **two frontends** (which blocks velocity). The roadmap above
 attacks them in that order, with measurement first, and without a rewrite.
 
 ---
+
+## 32. Progress log (what actually shipped, in order)
+
+| commit | what |
+|---|---|
+| `46a007e` | the binary-size regression: `--gc-sections`, `--as-needed`, conditional native libraries. 743,520 B → 8,048 B; 72 MB of `.bss` → 24 B; 6 deps → 1 |
+| `46b7c5c` | the performance gap settled by IR comparison (C vectorizes, Flint cannot: defined traps + an unrelated length block the reduction) |
+| `fdbf119` | Phase 0: `flintc --print-size` + `tests/test_print_size.sh` + `tools/bench_gate.sh`; **and** the fn-value copy defect (three rules for "is this a function value?" → one) |
+| `660fab3` | **invalid IR for `fn`-typed returns** (`ConstantInt::get` on a pointer type) and the one-error-per-program contract on the codegen side + `tests/test_one_error.sh` |
+| `26920a8` | codegen diagnostics carry a source location |
+
+Two of those were **user-visible defects** found by reading the code with the
+new measurement tools in hand, not by a failing test — the same shape as the
+two regressions the roadmap predicted would slip through a green suite.
 
 ## 31. Addendum (2026-10-20, deep-research pass) — evidence that sharpened the plan
 
