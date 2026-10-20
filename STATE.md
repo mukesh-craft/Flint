@@ -83,10 +83,11 @@ a single fixture diff.
 |---|---|---|---|
 | 1 | **M2b — explicit type arguments `f::<T>(...)`** | **DONE** (commit 3d3d914). `::` is two COLON tokens, so the lexer is untouched; explicit args override inference and feed the same instantiation path. Fixture in tests_manual/ (the self-host parser does not implement the syntax). | `src/main.cpp` parser + `Codegen::emitCall` + `Parser::emitDirectCall` |
 | 2 | **`let h = inc` — named function as a value** | **DONE** (commit fd8cf09). A named function joins the lambda protocol through a generated THUNK with the same fn(env, args...) shape, so the call site needs no discriminator. Frame-bound like a lambda (escape rules apply). A generic function as a value is refused by name. | `src/main.cpp` `Codegen::namedFnThunk` / `namedFnValue` |
-| 3 | **M2c — delete the remaining silent i64 defaults** | PARTIAL. The generic inference no longer defaults for cast/call args. Still silent: `exprFlintType` default arm, unknown-variable fallback, binary-without-`+` fallback. Turning them into errors risks the self-host fixed point — only do it with the full gate set green. | `src/main.cpp` exprFlintType |
+| 3 | **M2c — delete the remaining silent i64 defaults** | **DONE** (commit 922d03a). The generic argument resolver is strict: an un-inferrable argument is reported by name ("cannot infer type parameter 'T' for 'idc'"). Float arithmetic and float fields infer f64; a call to a user function uses its declared return type. | `src/main.cpp` `Codegen::inferGenericArgType` |
 | 4 | **B8 — type-level generic enums (`Option<T>`)** | OPEN by design. `Option.Some(i64)` is a fixed i64 payload; ROADMAP.md:466 overclaims. Needs a maintainer decision (it changes the type system + ABI), not a unilateral change. | memory.md:3628 |
+| 9 | **The self-host feature gap (D5)** | RECORDED, not closed. The C++ compiler now has `trait`, generics, `f::<T>(...)`, enum equality and named-function values; the self-hosted pipeline (stage2/stage3) has NONE of them. The differential gate is green because it does not cover them. D5 in COMPATIBILITY.md lists the gap and the policy. Porting them is a project of its own (11.7k lines of Flint). | `COMPATIBILITY.md` D5 |
 | 5 | **M2d — arrays as generic arguments** | **DONE** (the AST path already inferred `array(i64)`; the emit path now does too — commit 361d810). `idc([1, 2])` instantiates T = array(i64) and `z[1]` reads 2. (An earlier probe of mine was wrong: `.length` is not a field in this dialect.) | `src/main.cpp` `exprFlintType` + `Parser::emitDirectCall` inference |
-| 6 | **P4 ship list** | OPEN: signed release tags (repo has 0 tags), SBOM, error-code docs, semver freeze. `v1_gate_check.sh` exists and reports 12/12 **after** `bash tests/test_selfhost.sh` once (self-host binaries must exist). | memory.md:1604, 1624 |
+| 6 | **P4 ship list** | MOSTLY DONE: error-code docs shipped (4214082 — `docs/errors-cpp.md`, 135 diagnostics, with a two-way sync gate in CI); the semver freeze and the SBOM generator already existed; signed tags remain (the repo has 0 tags and this device has no GPG key — the procedure is in `docs/RELEASE.md`). | memory.md:1604, 1624 · `docs/RELEASE.md` |
 | 7 | **Environment-bound (cannot finish on this device)** | QBE backend needs an external `qbe` binary (path unverified, exit 127); Windows/macOS real runs + CI never executed from here; WASM objects are valid but there is no WASI execution; nightly/coverage-guided fuzz runs are not wired to any CI runner (the corpus + `tests/test_fuzz_corpus.sh` exist and pass). | memory.md:946, 1602 |
 | 8 | **M7 `[T]` containers** | DEFERRED by maintainer decision (2026-10-19). Needs the Rust `{length, elem_size, ptr}` representation (§4) plus an explicit ABI decision. Do NOT start without that decision. | memory.md:3711, 3934 |
 
@@ -122,30 +123,27 @@ all 137 corpus `.fl` files. Consequences:
   itself is unchanged (documented, not a bug).
 
 ### Recommended order
-3 (M2c silent defaults) → 6 (P4 ship list) → (4 and 7 need decisions/other
-machines) → 8 only after a maintainer ABI decision. Items 1, 2 and 5 are
-DONE (commits 3d3d914, fd8cf09, 361d810).
+9 (port the new features to the self-host pipeline, or narrow the gap) → 4
+and 7 (decisions/other machines) → 8 (only after a maintainer ABI decision).
+Items 1, 2, 3, 5 and most of 6 are DONE (commits 3d3d914, fd8cf09,
+361d810, 922d03a, 4214082).
 
 ---
 
 ## 3. NEXT (concrete)
 
-1. **M2c — delete the remaining silent i64 defaults.** The generic inference no
-   longer defaults for cast/call/array arguments, but `exprFlintType`'s
-   default arm, the unknown-variable fallback and the binary-without-`+`
-   fallback still answer i64 where the truth is unknown. Turning them into
-   errors must keep the self-host fixed point green (131 cases) — the
-   fixpoint gate is the oracle. Change ONE fallback at a time and run the
-   full gate set after each.
-2. **P4 ship list**: signed release tags (the repo has 0 tags), an SBOM, the
-   error-code documentation, and a semver freeze. `v1_gate_check.sh` exists
-   and reports 12/12 — but only after `bash tests/test_selfhost.sh` has
-   built the self-host binaries (they live in tmp and get cleaned).
-3. **The self-host pipeline gap** (see the finding above): the C++ compiler
-   now has traits, generic cast/call inference, `::<` and named-function
-   values; `stage2/flint_parse.fl` + `stage3/flint_emit.fl` have none of
-   them. Either port the features to the Flint pipeline or state the gap in
-   COMPATIBILITY.md as a known divergence.
+1. **The self-host pipeline gap (D5)** — the biggest remaining item. The C++
+   compiler accepts programs the self-hosted pipeline cannot parse or emit:
+   `trait`, generics, `f::<T>(...)`, enum equality, a named function as a
+   value. Either port them to stage2/stage3, or decide the pipeline is a
+   bootstrap-only artifact and say so plainly in README/COMPATIBILITY.
+   Start by measuring: which of the five can the self-host pipeline
+   actually express? (The emitter has some lambda shapes; the parser has no
+   `typeParams` at all.)
+2. **B8 (type-level generic enums)** — needs a maintainer decision; the
+   ROADMAP claims `Option<T>` exists and it does not.
+3. **Signed release tags** — the procedure is documented; the device has no
+   GPG key, so the first signed tag waits for a machine that has one.
 
 ---
 
