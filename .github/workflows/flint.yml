@@ -67,6 +67,8 @@ jobs:
         run: bash tests/test_errors_cpp.sh
       - name: Size-attribution gate (the compiler's own --print-size)
         run: bash tests/test_print_size.sh ./flintc
+      - name: One-error-per-program gate
+        run: bash tests/test_one_error.sh ./flintc
       - name: Docs-table sync gate (README counts match tree)
         run: bash tools/docs_check.sh .
       - name: Cache-salt gate (flags/imports bust cache)

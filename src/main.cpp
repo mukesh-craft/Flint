@@ -6790,7 +6790,14 @@ public:
             if (fn->name == "main") {
             builder->CreateRet(llvm::ConstantInt::get(i32Ty, 0));
             } else if (hasReturnType) {
-                builder->CreateRet(llvm::ConstantInt::get(llvmType(fn->returnType, *ctx, mod.get()), 0));
+                // The null value of the RETURN TYPE, not an integer zero:
+                // an fn(...) return type is a POINTER (M4), and
+                // ConstantInt::get on a pointer type is invalid IR
+                // ("ret i0 0" / "does not match operand type"). A function
+                // with an fn return type that falls off the end used to
+                // fail with an internal LLVM error instead of compiling.
+                llvm::Type* rt = llvmType(fn->returnType, *ctx, mod.get());
+                builder->CreateRet(llvm::Constant::getNullValue(rt));
             } else {
                 builder->CreateRetVoid();
             }
@@ -6816,6 +6823,22 @@ public:
     }
 
     void emitStmt(ExprAST* node) {
+        // ONE error per program, on the codegen side too.
+        //
+        // Once codegen has reported an error, stop emitting. Continuing
+        // builds IR that is no longer consistent with the source (a
+        // function whose return type no longer matches its `ret`), and
+        // LLVM's verifier then prints a SECOND message about the
+        // compiler's internals on top of the user's real error:
+        //
+        //   codegen: cannot return a function value: it would escape ...
+        //   Function return type does not match operand type of return inst!
+        //   function body emission failed
+        //
+        // The user is told about the compiler's internals instead of
+        // about their program. The parse side already had this contract
+        // (M6); this closes the codegen side.
+        if (cgHadError) return;
         // --debug: statement-level line attribution. IRBuilder stamps this
         // DLLocation onto every instruction it inserts until the next
         // statement changes it, so instructions map to Flint source lines.
@@ -6845,6 +6868,9 @@ public:
     }
 
     llvm::Value* emitExpr(ExprAST* node) {
+        // One error per program: after the first codegen error, emit nothing
+        // further (see emitStmt for why).
+        if (cgHadError) return nullptr;
         // --debug: block-tail statements reach here via emitBlockExpr's
         // emitExpr path (bypassing emitStmt), so the line stamp lives here
         // too. Multi-line expressions map to their own lines, which is
@@ -8969,7 +8995,10 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         bool hasRet = retRt.kind != TypeKind::Void;
         if (!builder->GetInsertBlock()->getTerminator()) {
             if (hasRet)
-                builder->CreateRet(llvm::ConstantInt::get(retTy, 0));
+                // The null value of the return type: a generic returning
+                // an fn(...) has a POINTER return type (see the note at the
+                // function-terminator site).
+                builder->CreateRet(llvm::Constant::getNullValue(retTy));
             else
                 builder->CreateRetVoid();
         }
