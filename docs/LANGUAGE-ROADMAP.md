@@ -1793,3 +1793,133 @@ diagnostics are a catalogued contract [M], and the toolchain is one binary
 the safety-performance story), **no package ecosystem** (which blocks
 growth), and **two frontends** (which blocks velocity). The roadmap above
 attacks them in that order, with measurement first, and without a rewrite.
+
+---
+
+## 31. Addendum (2026-10-20, deep-research pass) — evidence that sharpened the plan
+
+A second research pass added the sources below and changed three concrete
+recommendations. Labels as in §0.
+
+### 31.1 The 2026 language landscape (for §2)
+
+| language | 2026 state [P] |
+|---|---|
+| **Rust** | Polonius Alpha on nightly since 2026-08-04 — a *flow-sensitive* borrow checker that accepts conditional borrows NLL rejects ("problem case #3"); one known soundness issue remains; Rust for Linux is now integral in the kernel (mainline drivers, in-kernel Rust) |
+| **Go** | 1.26: Green Tea GC on by default, Swiss Tables maps, cgo overhead −30 %, more slice backing stores stack-allocated; 1.27: a portable, size-agnostic `simd` package (AVX/AVX2/AVX-512, NEON, wasm) with **emulated fallback on every platform**, designed to be "easy to read and understand (even/especially if an LLM ends up writing the code)" |
+| **Zig** | 0.16: self-hosted x86 backend is the Debug default; incremental compilation reached ms-level rebuilds by removing "over-analysis" and making the dependency graph acyclic; still not default because of known bugs and miscompiles |
+| **Swift** | 6.2 shipped "Approachable Concurrency" (`Task.immediate`, isolated `deinit`, WebAssembly, Android SDK preview); Swift 6 mode makes data-race checking the default |
+| **TypeScript** | TS 7 is the native Go port: 8–10× faster builds (vscode 89.11 s → 8.74 s), type-checking "very nearly complete" (20,000 compiler test cases, 74 known gaps); TS 6.0 is the last JS-based release |
+| **Kotlin** | K2 is the default, ~40 % faster builds |
+| **Java** | JDK 25 LTS (Java turned 30) |
+| **C#** | .NET 10 LTS with C# 14; C# won TIOBE's language-of-the-year |
+
+**What changed in the plan**: the vectorization recommendation (§23, §4.5)
+now prefers **Go 1.27's model** — a portable SIMD abstraction in the
+standard library with an emulated fallback — over compiler intrinsics, and
+the roadmap explicitly does *not* propose a Flint vectorizer. The LSP plan
+(§3.5, Phase 7) now cites TypeScript's native port as the precedent: a
+language server backed by a slow type checker is unusable, so the *compiler*
+must become fast (Phase 2) before the server can be good. The borrow-checker
+discussion (§8) now cites Polonius Alpha: **flow-sensitivity** is what makes
+a lifetime system practical, which is the property Flint's region inference
+should aim for.
+
+### 31.2 Domain systems: the measured trade-off curve [P]
+
+Two 2026 systems make the design choice concrete:
+
+- **Reactant.jl** (MLIR + XLA) lowers Julia to XLA: 14.8 TF/s GEMM at
+  N=2048, 17.3 TF/s at N=4096 — matching cuBLAS within 1 % — but compiles in
+  *seconds*.
+- **JLIR** (a Julia-native, MLIR-inspired IR with a lightweight extension
+  model) does the same class of work in **<1.5 ms**, and reaches 96 % of a
+  hand-written CUDA baseline on Black-Scholes and 87 % on DGEMM — but only
+  1.2 TF/s on GEMM, because it does not generate shared-memory tiling.
+
+The paper also states MLIR's own drawback for a language like Flint: "MLIR's
+strong compile-time type requirements and low-level (C++) extension model
+can be a poor match for high-level, dynamically specialized languages".
+
+**What changed in the plan**: §16's design is confirmed and sharpened — a
+**table-driven policy** (data, not code paths), a *lightweight* first tier
+that is fast to compile, and an optional deep-integration tier for one
+domain only. §16.2 gains the explicit rule: *a domain selects among
+existing capabilities; it never introduces new ones*, and the cost of a
+domain is measured in compile time and code size, not in features.
+
+### 31.3 Binary-size attribution: the tooling precedent [P]
+
+The attribution tool required by §6.7 has a well-established shape:
+**Bloaty** (per compile-unit / symbol / section / segment, with size diffs
+"perfect for CI tests"), **cargo-bloat** (per crate), **twiggy**
+(monomorphization), and a pure-Rust equivalent that joins DWARF symbols to
+their source file and *flags monomorphized instantiations*.
+
+**What changed in the plan**: §4.1 (Phase 0) now specifies `--print-size`
+with the same data sources — sections, symbols, per-object, and a
+monomorphization flag — because "monomorphization bloat" is a listed
+contributor and currently unmeasurable in Flint.
+
+### 31.4 `--unsafe` and safety profiles: the industry term [P]
+
+C++26 is standardizing **core safety profiles** (P3081R2): a documented,
+opt-in set of rules, of which "Pro.Bounds" is "don't use pointer arithmetic,
+use `span` instead", with `std::span::at()` (P2821R5) providing
+bounds-checked access and `std::expected` usable in freestanding builds.
+
+**What changed in the plan**: §10 now names the concept Flint's `--unsafe`
+belongs to — a **safety profile**, not a "fast mode" — and §10.3's
+`unsafe { ... }` blocks map onto the same idea as `span::at()`: a checked
+accessor next to the unchecked one, in the same type, so the choice is
+visible at the call site rather than in a build flag. The
+"C++26 saturation arithmetic" paper (P0543R3, shipped in C++26) is
+additionally relevant to §5.5's alternative — an explicitly saturating or
+wrapping arithmetic type as the price of removing the overflow check.
+
+### 31.5 LSP: the current protocol surface [P]
+
+LSP 3.18 (2026-04-06) added inline completions, dynamic text-document
+content, folding-range refresh, multi-range formatting, snippets in
+workspace edits, code-action kind documentation and a debug message kind.
+3.17 (2022) added inlay hints, semantic tokens, type hierarchies, the
+diagnostic **pull** model and notebook documents.
+
+**What changed in the plan**: §3.5 adds the concrete 3.18 features a Flint
+server should implement first (inlay hints, semantic tokens, pull
+diagnostics) and notes that the *pull* diagnostic model is the right default
+for a compiler-backed server (the server computes diagnostics on demand
+rather than pushing them on every keystroke).
+
+### 31.6 Ecosystem scale, for §20 [P]
+
+| registry | packages (2025-12/2026-01) |
+|---|---|
+| npm | 3,750,520 |
+| Go modules | 2,164,784 |
+| PyPI | 705,908 |
+| Maven | 751,350 |
+| PHP (Packagist) | 431,456 |
+| crates.io | 207,981 |
+
+Registraries served 9.8 trillion downloads in 2025 (npm +65 % YoY, PyPI
++51 % YoY) [P: Sonatype State of the Software Supply Chain 2026]. The same
+report's warning is the design constraint for Flint's registry: most
+registry traffic is "transitive dependency sprawl, unused or abandoned
+packages" — so a small language should ship a **small, curated, auditable**
+registry, not a mirror of npm.
+
+**What changed in the plan**: §20 gains an explicit *curation* requirement
+(Flint's registry should be a curated set with provenance and an audit
+feed, since a broad registry is a liability before it is an asset), and
+§28's ecosystem score keeps its "12/100" with the note that the stdlib
+substitutes for breadth but not for *distribution*.
+
+### 31.7 What did NOT change
+
+The measured findings stand: the binary-size regression is fixed
+(§6/§22.2), the performance gap is explained (§4.4), and the ordering of
+the roadmap is unchanged — measurement, then unification, then safety, then
+the type system. The new evidence sharpened *how* to do the vectorization
+and domain work, and it added the safety-profile vocabulary, but it did
+not move a single phase.
