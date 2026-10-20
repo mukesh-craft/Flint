@@ -69,6 +69,8 @@ jobs:
         run: bash tests/test_print_size.sh ./flintc
       - name: One-error-per-program gate
         run: bash tests/test_one_error.sh ./flintc
+      - name: Unsafe-flag contract gate
+        run: bash tests/test_unsafe_flag.sh ./flintc
       - name: Docs-table sync gate (README counts match tree)
         run: bash tools/docs_check.sh .
       - name: Cache-salt gate (flags/imports bust cache)
