@@ -5,6 +5,7 @@
 #include "llvm/IR/BasicBlock.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Verifier.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/MDBuilder.h"
@@ -2459,6 +2460,40 @@ struct Symbol {
     // f64 bits through an i64 GEP; the flag lets the index emitters refuse
     // instead of printing garbage.
     bool isTensor = false;
+    // Phase 2 / step 2A.1 -- a FACT, not a type: the EXACT length of an
+    // array value, when the compiler knows it (a literal initializer).
+    // -1 means "not known".
+    //
+    // Why it matters: the bounds check compares the index against the
+    // length LOADED FROM THE SLICE, and the loop bound is a different
+    // value, so LLVM cannot relate them and the check survives (measured:
+    // 3 of 6 checks survive in sum_array). When the length is a constant
+    // the check compares against that constant, and LLVM folds it away
+    // whenever the index is provably in range.
+    //
+    // Why it is on the Symbol and not in the Type: the length is a property
+    // of the VALUE, not of the type -- `[i64]` may hold any length. A
+    // fact in the type would be copied into places it does not hold.
+    //
+    // It is set ONLY from a literal initializer, so it is exact by
+    // construction, and it is CLEARED on assignment (a binding can be
+    // reassigned to a different array).
+    // The EXACT length of an array value, as an SSA value: a constant for a
+    // literal, or the argument of the flint_array_alloc call that produced
+    // it. null means "not known".
+    //
+    // The runtime form is the important one: `arr = flint_array_alloc(n)`
+    // gives an array whose length IS n (runtime/rust/src/array.rs: `len: n`),
+    // and n is the SAME value the user's loop compares against -- so the
+    // bounds check compares the index against the same SSA value the loop
+    // does, and LLVM folds it away. With the length loaded from the slice,
+    // the two were unrelated values and the check always survived
+    // (measured: 3 of 6 checks survive in sum_array).
+    //
+    // Only LOCAL bindings may carry a non-constant fact: the value must
+    // DOMINATE every use, and a global's initializer value does not
+    // dominate code in other functions.
+    llvm::Value* knownArrayLenValue = nullptr;
     // M4 env box: { fnptr, cap0, cap1, ... } allocated in the defining frame.
     // The first-class function VALUE is this pointer; an indirect call loads
     // the callee from field 0 and passes the box itself as the first arg.
@@ -7082,6 +7117,7 @@ public:
                     }
                     auto* val = emitExpr(a->rhs.get());
                     if (!val) return nullptr;
+                    git->second.knownArrayLenValue = nullptr;
                     return builder->CreateStore(val, git->second.global);
                 }
                 if (!sym->isMutable) { return codegenError(std::string("cannot assign to immutable '") + a->varName + "'"); }
@@ -7107,6 +7143,11 @@ public:
                 // P0-NEW-3: the binding now holds a tensor handle; index
                 // refusals track existence at the binding, not the source.
                 if (a->rhs->kind == NodeKind::Tensor) sym->isTensor = true;
+                // Phase 2 / 2A.1: the binding may now hold a DIFFERENT
+                // array, so the known length no longer holds. Clearing it is
+                // the safe direction: a stale length could be longer than
+                // the value's real length, which would weaken the check.
+                sym->knownArrayLenValue = nullptr;
                 auto* store = builder->CreateStore(val, sym->alloca);
                 if (sym->moved) sym->moved = false;
                 // B2: maintain time-derived set (invalidated on any non-time assign).
@@ -7704,9 +7745,42 @@ public:
         }
         llvm::AllocaInst* alloca = createEntryAlloca(lty, decl->varName);
         symTable.declare(decl->varName, {rt, alloca, nullptr, decl->isMutable, false, 0});
+        // Phase 2 / 2A.1: an array LITERAL has a known exact length. The
+        // runtime array is allocated with exactly that many elements, so
+        // the fact is exact by construction.
+        if (decl->init && decl->init->kind == NodeKind::Array) {
+            auto* arrLit = static_cast<ArrayExprAST*>(decl->init.get());
+            // A spread element (`...other`) makes the runtime length
+            // DYNAMIC, so the fact is only exact when there is no spread.
+            bool hasSpread = false;
+            for (bool sp : arrLit->spreadFlags) if (sp) { hasSpread = true; break; }
+            if (!hasSpread) {
+                auto* arrSym = symTable.lookup(decl->varName);
+                if (arrSym)
+                    arrSym->knownArrayLenValue =
+                        llvm::ConstantInt::get(i64Ty, (uint64_t)arrLit->elements.size());
+            }
+        }
         if (initIsTensor) {
             auto* tref = symTable.lookup(decl->varName);
             if (tref) tref->isTensor = true;
+        }
+        // `arr = flint_array_alloc(n)`: the runtime length is exactly n, and
+        // n is the value the user's own loop compares against -- so the
+        // bounds check and the loop use the SAME value and LLVM folds the
+        // check away. Local bindings only (the value must dominate the use).
+        if (decl->init && decl->init->kind == NodeKind::Call && init) {
+            auto* call = llvm::dyn_cast<llvm::CallInst>(init);
+            if (call && call->getCalledFunction() &&
+                call->getCalledFunction()->getName() == "flint_array_alloc" &&
+                call->arg_size() == 1) {
+                auto* arrSym = symTable.lookup(decl->varName);
+                if (arrSym && arrSym->alloca) {
+                    llvm::Value* n = call->getArgOperand(0);
+                    if (n->getType()->isIntegerTy(64))
+                        arrSym->knownArrayLenValue = n;
+                }
+            }
         }
         // Move: emit init first, then mark source as moved
         if (decl->init->kind == NodeKind::Variable) {
@@ -8219,10 +8293,42 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         emitBoundsCheckInline(idxVal, len);
     }
 
+    // Does this value DOMINATE the current insertion point?
+    //
+    // A fact that carries an SSA value (the argument of the
+    // flint_array_alloc call) may only be used where that value is
+    // available. A value defined inside a loop and used after the loop is
+    // not available there, and using it would be invalid IR (LLVM would
+    // reject the module -- or worse, read a stale register).
+    //
+    // The test is exact: a constant dominates everything, an instruction
+    // dominates the point if it dominates the containing block and comes
+    // before the insertion point inside it.
+    bool valueDominatesHere(llvm::Value* v) {
+        auto* inst = llvm::dyn_cast<llvm::Instruction>(v);
+        if (!inst) return true;              // constants, globals, arguments
+        llvm::BasicBlock* bb = builder->GetInsertBlock();
+        if (!bb) return false;
+        llvm::Function* f = bb->getParent();
+        if (!f || inst->getFunction() != f) return false;
+        if (inst->getParent() == bb) {
+            // Same block: it must come BEFORE the insertion point.
+            for (auto& i : *bb) {
+                if (&i == &*builder->GetInsertPoint()) return false;
+                if (&i == inst) return true;
+            }
+            return false;
+        }
+        llvm::DominatorTree dt(*f);
+        return dt.dominates(inst, bb);
+    }
+
     llvm::Value* emitIndexAccess(IndexExprAST* idx) {
         llvm::Value* base = emitExpr(idx->base.get());
         llvm::Value* index = emitExpr(idx->index.get());
         if (!base || !index) return nullptr;
+        // The exact length of the base, when the compiler knows it.
+        llvm::Value* knownLenValue = nullptr;
 
         // Map read: `m["k"]` / `m[k]`. Map keys are strings (LLVM ptr) while
         // array/str indices are i64, so the index type discriminates (map and
@@ -8266,6 +8372,10 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             auto gsym2 = globalSymTable.find(bv->name);
             if (gsym2 != globalSymTable.end() && gsym2->second.isTensor)
                 return codegenError("tensor values cannot be indexed with []; use flt_get(t, i)");
+            // The known length, when the compiler has it (Phase 2 / 2A.1).
+            if (sym && sym->knownArrayLenValue) knownLenValue = sym->knownArrayLenValue;
+            else if (gsym2 != globalSymTable.end() && gsym2->second.knownArrayLenValue)
+                knownLenValue = gsym2->second.knownArrayLenValue;
         }
         if (index->getType()->isIntegerTy(64) && baseIsMap)
             return codegenError("map index needs a str key (map keys are strings)");
@@ -8273,6 +8383,34 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         if (isArray) {
             llvm::Value* dataPtr = builder->CreateExtractValue(base, {0}, "arr_ptr");
             llvm::Value* len = builder->CreateExtractValue(base, {1}, "arr_len");
+            // Phase 2 / 2A.1 -- use the KNOWN length when the compiler
+            // has it: a constant for a literal array, the alloc's argument
+            // for a runtime array. The check then compares the index
+            // against the same value the user's loop uses, and LLVM folds
+            // the check away. With the length loaded from the slice, the
+            // bound and the loop condition were unrelated values and the
+            // check always survived (measured: 3 of 6 checks survive in
+            // sum_array).
+            //
+            // The fact is EXACT, so this is the same check, not a weaker
+            // one -- and the safety direction is tested: an index that is
+            // not proven in range is still checked.
+            // Only use the fact if its value is available here.
+            if (knownLenValue && valueDominatesHere(knownLenValue))
+                len = knownLenValue;
+            // The "R2 BCE-lite" proof, implemented for real this time (the
+            // flag existed for years and was never set): a LITERAL index into
+            // an array whose length is a KNOWN CONSTANT is provably in
+            // bounds, so the check is unnecessary.
+            if (!idx->unchecked && knownLenValue &&
+                llvm::isa<llvm::ConstantInt>(knownLenValue) &&
+                idx->index->kind == NodeKind::Number) {
+                auto* num = static_cast<NumberExprAST*>(idx->index.get());
+                auto* lenConst = llvm::cast<llvm::ConstantInt>(knownLenValue);
+                if (!num->isFloat && num->isInt && num->intValue >= 0 &&
+                    num->intValue < lenConst->getSExtValue())
+                    idx->unchecked = true;
+            }
             if (!idx->unchecked) {
                 emitBoundsCheckInline(index, len);
             }

@@ -1,0 +1,19 @@
+# The SAFETY direction of the known-length fact: an access that is NOT
+# proven in bounds must still be checked.
+#
+# The compiler knows a literal array's exact length, so a literal index can
+# be proven in range (and the check dropped). This file is the other side:
+# the proof must NOT fire when it should not, and the check must still
+# trap. The compiler cannot be relied on to notice a mistake here -- the
+# test asserts the program ABORTS.
+#
+# (The trap is the runtime's bounds check, so this is a runtime assertion,
+# not a compile-time one. The run.sh check is therefore on the OUTPUT of a
+# run that is expected to fail, which is why this fixture lives in
+# tests_manual/ and is exercised by tests/test_bounds_safety.sh.)
+
+fn main() -> i64 {
+    a = [10, 20, 30]
+    print(a[3])          # out of range: must trap, not read past the end
+    return 0
+}
