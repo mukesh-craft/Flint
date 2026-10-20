@@ -8323,6 +8323,20 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         return dt.dominates(inst, bb);
     }
 
+    // The length fact of an argument expression, when the argument is a
+    // binding that holds an array whose length the compiler knows
+    // (Phase 2 / 2A.1). null when the length is not known.
+    llvm::Value* knownLenOfArg(ExprAST* arg) {
+        if (!arg || arg->kind != NodeKind::Variable) return nullptr;
+        auto* vn = static_cast<VariableExprAST*>(arg);
+        Symbol* sym = symTable.lookup(vn->name);
+        if (sym && sym->knownArrayLenValue) return sym->knownArrayLenValue;
+        auto git = globalSymTable.find(vn->name);
+        if (git != globalSymTable.end() && git->second.knownArrayLenValue)
+            return git->second.knownArrayLenValue;
+        return nullptr;
+    }
+
     llvm::Value* emitIndexAccess(IndexExprAST* idx) {
         llvm::Value* base = emitExpr(idx->base.get());
         llvm::Value* index = emitExpr(idx->index.get());
@@ -8797,24 +8811,35 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
 
     // P0-NEW-1: array-builtin cores. Values in; the struct guard lives HERE
     // (the Parser copy had lost it and extracted field 0 of a bare i64).
-    llvm::Value* emitArrayGetCore(llvm::Value* arr, llvm::Value* idx) {
+    // `knownLen` is the EXACT length of the array when the compiler knows
+    // it (Phase 2 / 2A.1: the length fact on the binding). The check then
+    // compares the index against the SAME value the user's loop compares
+    // against, and LLVM folds it away. Without it the check compares
+    // against the length LOADED FROM THE SLICE, which is an unrelated value
+    // and therefore never folds (measured: 3 of 6 checks survive in
+    // sum_array).
+    llvm::Value* emitArrayGetCore(llvm::Value* arr, llvm::Value* idx,
+                                  llvm::Value* knownLen = nullptr) {
         if (!arr || !idx) return nullptr;
         if (!arr->getType()->isStructTy()) {
             return codegenError("flint_array_get needs an array");
         }
         auto* dataPtr = builder->CreateExtractValue(arr, {0}, "arr_data");
         auto* len = builder->CreateExtractValue(arr, {1}, "arr_len");
+        if (knownLen && valueDominatesHere(knownLen)) len = knownLen;
         emitLoopBoundsCheck(idx, len);
         auto* elemPtr = builder->CreateGEP(i64Ty, dataPtr, idx, "arr_elem");
         return builder->CreateLoad(i64Ty, elemPtr, "arr_elem_val");
     }
-    llvm::Value* emitArraySetCore(llvm::Value* arr, llvm::Value* idx, llvm::Value* val) {
+    llvm::Value* emitArraySetCore(llvm::Value* arr, llvm::Value* idx,
+                                  llvm::Value* val, llvm::Value* knownLen = nullptr) {
         if (!arr || !idx || !val) return nullptr;
         if (!arr->getType()->isStructTy()) {
             return codegenError("flint_array_set needs an array");
         }
         auto* dataPtr = builder->CreateExtractValue(arr, {0}, "arr_data");
         auto* len = builder->CreateExtractValue(arr, {1}, "arr_len");
+        if (knownLen && valueDominatesHere(knownLen)) len = knownLen;
         emitLoopBoundsCheck(idx, len);
         auto* elemPtr = builder->CreateGEP(i64Ty, dataPtr, idx, "arr_elem");
         builder->CreateStore(val, elemPtr);
@@ -9446,7 +9471,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             auto* arrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
             // P0-NEW-1: shared core (both paths).
-            return emitArrayGetCore(arrVal, idxVal);
+            return emitArrayGetCore(arrVal, idxVal, knownLenOfArg(call->args[0].get()));
         }
 
         if (call->callee == "flint_array_set") {
@@ -9455,7 +9480,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             auto* idxVal = emitExpr(call->args[1].get());
             auto* valVal = emitExpr(call->args[2].get());
             // P0-NEW-1: shared core (both paths).
-            return emitArraySetCore(arrVal, idxVal, valVal);
+            return emitArraySetCore(arrVal, idxVal, valVal, knownLenOfArg(call->args[0].get()));
         }
 
         if (call->callee == "flint_array_data") {
