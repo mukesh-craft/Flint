@@ -1,0 +1,13 @@
+# M2c: an argument whose type cannot be determined must be reported by
+# name, not silently instantiated as i64.
+#
+# tests_manual/ (not in the self-host parse corpus: this file must FAIL to
+# compile, and the corpus files are expected to compile).
+
+fn idc<T>(x: T) -> T { return x }
+
+fn main() -> i64 {
+    y = idc(nosuchvariable)
+    print(1)
+    return 0
+}

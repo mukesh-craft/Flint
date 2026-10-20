@@ -5894,6 +5894,17 @@ public:
                     Type rt = exprFlintType(b->rhs.get());
                     if (lt.kind == TypeKind::Str || rt.kind == TypeKind::Str) return Type::str();
                 }
+                // M2c: an arithmetic expression with a float operand is f64.
+                // Returning i64 here made `id(1.5 + 2.5)` instantiate the
+                // generic with i64 -- a silently wrong answer that the call
+                // guard then rejected with a message about the
+                // instantiation instead of the program.
+                {
+                    Type lt = exprFlintType(b->lhs.get(), vars, st);
+                    Type rt = exprFlintType(b->rhs.get(), vars, st);
+                    if (lt.kind == TypeKind::F64 || rt.kind == TypeKind::F64)
+                        return Type::f64();
+                }
                 return Type::i64();
             }
             case NodeKind::Call: {
@@ -5942,18 +5953,112 @@ public:
     //     loop itself uses, recursively. That makes idc(idc(Inner{a:1})
     //     ) infer T = Inner instead of instantiating i64 and erroring in
     //     the creationCallChecked guard.
-    Type inferGenericArgType(ExprAST* argIn) {
-        ExprAST* arg = argIn;
-        while (true) {
-            if (!arg) return Type::i64();
-            if (arg->kind == NodeKind::Cast)
-                return static_cast<CastExprAST*>(arg)->target;
-            if (arg->kind == NodeKind::Call) {
-                auto* c = static_cast<CallExprAST*>(arg);
+    // M2c: the STRICT argument resolver for generic inference. It returns
+    // false when the argument's type cannot be determined, so the caller can
+    // report the parameter by name instead of instantiating i64 and
+    // letting the program fail later with a message about the
+    // instantiation.
+    //
+    // The shapes it knows: variables (symbol table), numbers, strings,
+    // casts (their target type), struct/enum/array/map literals, field
+    // access (through the parsed struct field table), arithmetic (f64 when
+    // an operand is f64), and calls -- a generic callee resolves through the
+    // by-parameter rule (recursively), a user function through its declared
+    // return type, a builtin through the builtin's table.
+    bool inferGenericArgType(ExprAST* argIn, Type& out, int depth = 0) {
+        if (!argIn || depth > 8) return false;
+        switch (argIn->kind) {
+            case NodeKind::Variable: {
+                auto* var = static_cast<VariableExprAST*>(argIn);
+                if (const Symbol* sym = symTable.lookup(var->name)) { out = sym->type; return true; }
+                auto gvit = globalSymTable.find(var->name);
+                if (gvit != globalSymTable.end()) { out = gvit->second.type; return true; }
+                return false; // unknown name
+            }
+            case NodeKind::Number: {
+                auto* n = static_cast<NumberExprAST*>(argIn);
+                if (n->isFloat) { out = Type::f64(); return true; }
+                if (n->isInt) { out = Type::i64(); return true; }
+                double ip;
+                out = (std::modf(n->value, &ip) != 0.0) ? Type::f64() : Type::i64();
+                return true;
+            }
+            case NodeKind::String: out = Type::str(); return true;
+            case NodeKind::Index: {
+                // The element type of an indexed value. Arrays and strings
+                // are i64-valued in this dialect, so the element is i64 --
+                // but only when the base really is one of them; anything
+                // else is not modelled and must be reported.
+                auto* ix = static_cast<IndexExprAST*>(argIn);
+                Type base;
+                if (!inferGenericArgType(ix->base.get(), base, depth + 1)) return false;
+                if (base.kind == TypeKind::Array || base.kind == TypeKind::Str) {
+                    out = Type::i64();
+                    return true;
+                }
+                return false;
+            }
+            case NodeKind::Lambda: {
+                // A lambda's own type is known: its parameter types and its
+                // declared return type.
+                auto* lam = static_cast<LambdaExprAST*>(argIn);
+                if (lam->retType.kind == TypeKind::Void) return false; // not declared
+                std::vector<Type> ps;
+                for (auto& lp : lam->params) ps.push_back(resolveType(lp.second));
+                out = Type::fn_(ps, resolveType(lam->retType));
+                return true;
+            }
+            case NodeKind::Cast:
+                out = static_cast<CastExprAST*>(argIn)->target;
+                return true;
+            case NodeKind::EnumConstruct:
+                out = Type::enum_(static_cast<EnumConstructAST*>(argIn)->enumName);
+                return true;
+            case NodeKind::StructLiteral:
+                out = Type::struct_(static_cast<StructLiteralAST*>(argIn)->structName);
+                return true;
+            case NodeKind::Array: out = Type::array(Type::i64()); return true;
+            case NodeKind::MapLiteral: out = Type::map(); return true;
+            case NodeKind::FieldAccess: {
+                auto* f = static_cast<FieldAccessAST*>(argIn);
+                Type base;
+                if (!inferGenericArgType(f->base.get(), base, depth + 1)) return false;
+                if (base.kind != TypeKind::Struct) return false;
+                auto sit = gStructFieldTypes.find(base.structName);
+                if (sit == gStructFieldTypes.end()) return false;
+                for (auto& fd : sit->second) {
+                    if (fd.first == f->fieldName) { out = fd.second; return true; }
+                }
+                return false; // no such field
+            }
+            case NodeKind::Binary: {
+                auto* b = static_cast<BinaryExprAST*>(argIn);
+                Type lt, rt;
+                bool lok = inferGenericArgType(b->lhs.get(), lt, depth + 1);
+                bool rok = inferGenericArgType(b->rhs.get(), rt, depth + 1);
+                if (!lok || !rok) return false;
+                if (b->op == '+' && (lt.kind == TypeKind::Str || rt.kind == TypeKind::Str)) {
+                    out = Type::str();
+                    return true;
+                }
+                if (lt.kind == TypeKind::F64 || rt.kind == TypeKind::F64) {
+                    out = Type::f64();
+                    return true;
+                }
+                if (lt.kind == TypeKind::I64 && rt.kind == TypeKind::I64) {
+                    out = Type::i64();
+                    return true;
+                }
+                return false;
+            }
+            case NodeKind::Call: {
+                auto* c = static_cast<CallExprAST*>(argIn);
                 auto git2 = genericFunctions.find(c->callee);
                 if (git2 != genericFunctions.end()) {
                     auto* gen2 = git2->second;
                     if (gen2->returnType.kind == TypeKind::TypeParam) {
+                        // The return type is the type parameter: infer it from
+                        // the argument filling the parameter that mentions it.
                         size_t pi2 = SIZE_MAX;
                         for (size_t qq = 0; qq < gen2->params.size(); qq++) {
                             if (gen2->params[qq].second.kind == TypeKind::TypeParam &&
@@ -5962,20 +6067,27 @@ public:
                                 pi2 = qq; break;
                             }
                         }
-                        if (pi2 != SIZE_MAX && pi2 < c->args.size()) {
-                            arg = c->args[pi2].get(); // descend into the arg
-                            continue;
-                        }
-                        return Type::i64(); // un-inferrable return-only param
+                        if (pi2 == SIZE_MAX || pi2 >= c->args.size()) return false;
+                        return inferGenericArgType(c->args[pi2].get(), out, depth + 1);
                     }
-                    return resolveType(gen2->returnType);
+                    out = resolveType(gen2->returnType);
+                    return true;
                 }
+                // A user function: its declared return type, not the
+                // builtins-only table (which answered i64 for every user
+                // function -- a silently wrong instantiation).
+                auto defIt = functionDefs.find(c->callee);
+                if (defIt != functionDefs.end()) {
+                    out = resolveType(defIt->second->returnType);
+                    return true;
+                }
+                // A builtin: the builtins table knows the real return types.
+                if (c->callee == "print") return false; // void
+                out = Parser::inferCallType(c->callee);
+                return true;
             }
-            if (arg->kind == NodeKind::Variable) {
-                auto* var = static_cast<VariableExprAST*>(arg);
-                if (const Symbol* sym = symTable.lookup(var->name)) return sym->type;
-            }
-            return exprFlintType(arg, nullptr, &symTable);
+            default:
+                return false; // shape not modelled: report it, do not guess
         }
     }
 
@@ -8714,16 +8826,19 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                     }
                 }
                 Type inferred;
+                bool known = false;
                 if (argIndex != SIZE_MAX && argIndex < call->args.size()) {
                     ExprAST* arg = call->args[argIndex].get();
-                    // M2 residue: a variable argument carries its declared
-                    // type; casts carry their target; a nested generic call
-                    // resolves its return with the same by-parameter rule.
-                    // inferGenericArgType covers all three and falls back to
-                    // exprFlintType (with the RIGHT symTable) otherwise.
-                    inferred = inferGenericArgType(arg);
+                    // M2c: the strict resolver. A variable argument carries
+                    // its declared type; casts carry their target; a nested
+                    // generic call resolves its return with the same
+                    // by-parameter rule; a user function contributes its
+                    // declared return type. When the shape is not one it
+                    // knows, it says so instead of answering i64.
+                    known = inferGenericArgType(arg, inferred);
                 }
-                if (inferred.kind == TypeKind::Void || inferred.kind == TypeKind::TypeParam) {
+                if (!known || inferred.kind == TypeKind::Void ||
+                    inferred.kind == TypeKind::TypeParam) {
                     // Un-inferrable. Defaulting to i64 here is how the old
                     // version produced a confidently wrong instantiation, so
                     // report it rather than guess.
