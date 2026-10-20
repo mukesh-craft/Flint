@@ -1657,6 +1657,28 @@ the user's loop compares against, and LLVM folds it.
   analysis over the loop (primes: `i*i <= limit` does not give LLVM
   `i <= limit+1`).
 
+### Phase 2 (continued 2026-10-20) — step 2A.0 LANDED: the type audit
+
+Flint infers types in **two** engines (the parser's `inferType` and the
+codegen's `exprFlintType` + declaration ladder) and nothing compared them.
+`flintc --type-audit` now compares them at every declaration: an
+**annotated** declaration is a contract (a disagreement is a bug), an
+**inferred** one is a guess (a disagreement is drift).
+
+Measured over the corpus (123 files): **0 contract violations**, **135
+inferred declarations with drift** — and the drift has one shape: the
+parse-time engine answers **i64** where the codegen engine knows str or
+f64. The parse-time engine is the weak one, and it is the one a future
+LSP or type checker would inherit. Gate: `tests/test_type_audit.sh`.
+
+**Next slice, designed (STATE.md §4.2):** a loop-range analysis that emits
+LLVM assumptions for the shapes it fully understands (`while i < n`,
+`while i <= n`, `while i*c <= n` with a non-negative induction variable
+incremented by a positive constant). It is the only remaining item that
+attacks a *measured* gap: `primes` improves 9 % while `sum_array` improves
+37 %, and the difference is that LLVM cannot derive `i <= limit + 1` from
+`i * i <= limit` — the missing fact is a RANGE fact, not a length fact.
+
 ### Phase 0 — Measurement (4–6 weeks) — **PARTLY DONE (2026-10-20)**
 - **Done**: the harnesses (`tools/bench_compare.sh` with 5 languages,
   `tools/bench_tooling.sh` for size/build/startup, `benchmarks/*.rs` Rust
