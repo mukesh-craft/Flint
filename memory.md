@@ -4378,3 +4378,12 @@ and a curated (not mirrored) registry.
     That is a RANGE-ANALYSIS limit (step 2C), not a length-fact limit.
   - The measurement baseline was re-taken: the old one would have read
     this improvement as a regression.
+
+- **The vectorization question, measured**: after the length fact reached
+  the array builtins, `sum_array`'s final IR has 0 bounds-check calls and
+  STILL 0 vector operations (C's has 16) -- the loop is unrolled 2x
+  instead. With the checks gone the blocker is LLVM's cost model and the
+  pointer's provenance, not what Flint emits. Numbers: safe 12.0 ms (1.44x
+  C), `--unsafe` 9.9 ms (1.19x C), C -O2 8.3 ms. Do NOT hand-write a
+  vectorizer (the roadmap rejects that); the next step is to see whether
+  LLVM's own vectorizer can be nudged, and otherwise to accept ~1.2x here.
