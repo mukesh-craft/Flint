@@ -323,6 +323,10 @@ static bool gProgramUsesPython = false;
 // the escape rules, the null checks, the div-by-zero trap, the AEGIS
 // backstop, or the one-error-per-program contract.
 static std::string gSafetyPosture = "safe";
+
+// Phase 2 / 2A.0 -- the type audit. Off by default; it prints the places
+// where the parser's inference and the codegen's inference disagree.
+static bool gTypeAudit = false;
 static bool gUnsafeWarned = false;
 
 // Stamp the artifact with its safety posture. The marker is referenced from
@@ -2033,6 +2037,12 @@ struct VarDeclAST : ExprAST {
     std::string varName;
     bool isMutable;
     Type varType;
+    // Phase 2 / 2A.0 -- was the type ANNOTATED (authoritative) or INFERRED
+    // (a guess)? An annotated declaration is a contract the compiler must
+    // enforce; an inferred one is the ad-hoc guess that the type-checker
+    // work (step 2A) will replace. The type audit compares the two
+    // inference engines and uses this flag to tell a bug from a guess.
+    bool typeWasAnnotated = false;
     std::unique_ptr<ExprAST> init;
     VarDeclAST(std::string vn, bool mut, Type t, std::unique_ptr<ExprAST> i)
         : ExprAST(NodeKind::VarDecl), varName(std::move(vn)), isMutable(mut), varType(t), init(std::move(i)) {}
@@ -3875,6 +3885,7 @@ private:
         match(TokenType::NEWLINE);
 
         auto decl = std::make_unique<VarDeclAST>(nameTok.lexeme, isMutable, varType, std::move(init));
+        decl->typeWasAnnotated = hasTypeAnnotation;
         decl->loc = nameTok.loc;
         return decl;
     }
@@ -5085,6 +5096,42 @@ public:
     // partial IR is never JIT-run/emitted/linked. emitFunction returns false
     // when the flag is set (checked at its end).
     bool cgHadError = false;
+    // A short, stable name for a type, for the audit report.
+    static std::string typeTag(const Type& t) {
+        switch (t.kind) {
+            case TypeKind::I64: return "i64";
+            case TypeKind::F64: return "f64";
+            case TypeKind::Str: return "str";
+            case TypeKind::Bool: return "bool";
+            case TypeKind::Void: return "void";
+            case TypeKind::Ptr: return "ptr";
+            case TypeKind::Array: return "array";
+            case TypeKind::Map: return "map";
+            case TypeKind::Struct: return "struct:" + t.structName;
+            case TypeKind::Enum: return "enum:" + t.structName;
+            case TypeKind::TypeParam: return "typeparam:" + t.structName;
+            case TypeKind::Func: return "fn";
+            default: return "?";
+        }
+    }
+
+    // Phase 2 / 2A.0 -- the TYPE AUDIT. Flint has two inference engines:
+    // the parser's (inferType) and the codegen's (exprFlintType and the
+    // declaration ladder). They can disagree, and nothing notices. This
+    // compares them at every declaration:
+    //   * an ANNOTATED declaration is a contract -- a disagreement is a
+    //     BUG (the program does not have the type it claims);
+    //   * an INFERRED declaration is a guess -- a disagreement is DRIFT,
+    //     which is what the type-checker work (step 2A) must remove.
+    struct TypeDrift {
+        std::string name;
+        int line = 0;
+        std::string parseType;
+        std::string codegenType;
+        bool annotated = false;
+    };
+    std::vector<TypeDrift> typeDrift;
+    bool auditTypes = false;   // set from the --type-audit flag
     // The source location of the statement/expression being emitted, so a
     // codegen diagnostic can say WHERE it happened. Parse errors have always
     // carried line/column; codegen errors did not, which left the user
@@ -7741,6 +7788,20 @@ public:
                 rt = Type::str();
             } else if (lty->isDoubleTy()) {
                 rt = Type::f64();
+            }
+        }
+        // Phase 2 / 2A.0: compare the two inference engines.
+        if (auditTypes) {
+            Type parseTy = resolveType(decl->varType);
+            std::string pt = typeTag(parseTy), ct = typeTag(rt);
+            if (pt != ct) {
+                TypeDrift d;
+                d.name = decl->varName;
+                d.line = decl->loc.line;
+                d.parseType = pt;
+                d.codegenType = ct;
+                d.annotated = decl->typeWasAnnotated;
+                typeDrift.push_back(d);
             }
         }
         llvm::AllocaInst* alloca = createEntryAlloca(lty, decl->varName);
@@ -13287,6 +13348,8 @@ int main(int argc, char* argv[]) {
             // a cached binary would skip the tests silently.)
             testModeFlag = true;
             runMode = false;
+        } else if (arg == "--type-audit") {
+            gTypeAudit = true;
         } else if (arg == "--print-size") {
             gPrintSize = true;
         } else if (arg.rfind("--print-size-json=", 0) == 0) {
@@ -13778,6 +13841,9 @@ int main(int argc, char* argv[]) {
 
     PROFILE_BEGIN("codegen");
     Codegen codegen(targetTripleSpec);
+    // Phase 2 / 2A.0: the type audit must be enabled BEFORE codegen
+    // runs -- it compares the two inference engines as it goes.
+    codegen.auditTypes = gTypeAudit;
     if (debugFlag) codegen.initDebugSource(inputPath);
     codegen.releaseMode = releaseMode;
     codegen.loopOpt = loopOpt;
@@ -13851,6 +13917,37 @@ int main(int argc, char* argv[]) {
         if (debugFlag) ol = llvm::OptimizationLevel::O0;
         if (!getenv("FLINT_NO_OPT")) runLLVMOptimizations(codegen.mod.get(), ol);
         PROFILE_END(); // llvm_opt
+    }
+    if (gTypeAudit) {
+        // The report: annotated declarations are contracts (a disagreement
+        // is a BUG), inferred ones are guesses (a disagreement is DRIFT).
+        long contracts = 0, drift = 0;
+        for (const auto& d : codegen.typeDrift) {
+            if (d.annotated) {
+                contracts++;
+                std::cerr << "type-audit: CONTRACT VIOLATED at line " << d.line
+                          << ": '" << d.name << "' is annotated "
+                          << d.parseType << " but compiled as " << d.codegenType
+                          << "\n";
+            } else {
+                drift++;
+            }
+        }
+        std::cerr << "type-audit: " << codegen.typeDrift.size()
+                  << " declaration(s) where the two inference engines"
+                     " disagree (" << contracts << " annotated, " << drift
+                  << " inferred)\n";
+        // Show the drift: a count alone is not actionable. The first few
+        // are enough to see the shape of the disagreement.
+        int shown = 0;
+        for (const auto& d : codegen.typeDrift) {
+            if (d.annotated) continue;
+            if (shown++ >= 5) break;
+            std::cerr << "type-audit:   line " << d.line << ": '" << d.name
+                      << "' parse=" << d.parseType
+                      << " codegen=" << d.codegenType << "\n";
+        }
+        if (contracts > 0) { std::cerr << "type-audit: FAILED\n"; return 1; }
     }
     if (checkBce) {
         long checksAfterOpt = countChecks(codegen.mod.get());
