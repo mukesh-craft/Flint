@@ -4323,3 +4323,38 @@ and a curated (not mirrored) registry.
   whose output depends on cache state is not a diagnostic: the flag now
   bypasses the cache and reports the same numbers every time. (Found by
   writing the unsafe gate, which compiled the same file twice.)
+
+# Addendum (2026-10-20, Phase 2 starts) — research, red team, and the first slice
+
+- **Phase 2 was REVISED before any code was written** (STATE.md §6.10 has
+  the full record). The first draft said "add a typed HIR/MIR"; the
+  research and a red-team pass found it too vague to start: Flint has no
+  type checker (types are guessed in ~6 places), the self-host pipeline
+  cannot express generics at all (0 `typeParams` in stage2) so it cannot
+  consume such an HIR, the LSP is in Rust while the compiler is in C++
+  (Rust's own answer was shared libraries + an `Interner` trait, after
+  four years of "unextractable" parser code), checks are CODE today and
+  must become DATA to be removable per profile, and a full SSA MIR is a
+  backend rewrite. The revised plan is staged: 2A a real type checker →
+  2A.1 facts → 2B checks as IR operations → 2C analyses → 2D regions.
+- **Slice 2A.1 landed (42b3a04): types carry facts.** An array value's
+  EXACT length becomes an SSA value on the binding: a constant for a
+  literal initializer, the `flint_array_alloc` argument otherwise. The
+  bounds check then compares against the same value the user's loop uses,
+  and LLVM folds it away — a literal array goes from 4 surviving checks
+  to 0, and a runtime array via `arr[i]` produces 0 bounds-check calls
+  in the final IR. Safety: the fact is used only where its value
+  DOMINATES (DominatorTree check), the R2 BCE-lite proof is implemented
+  for real (a literal index into a literal-length array), the fact is
+  cleared on assignment, and an out-of-range literal index still traps
+  (`tests/test_bounds_safety.sh`).
+- **What the slice does NOT do (measured):** the benchmark `sum_array`
+  uses the BUILTIN `flint_array_get(arr, i)`, whose check is emitted at
+  the call site against the loaded length, and the runtime's own check
+  still applies. Removing that needs RANGE analysis (step 2C) plus an
+  unchecked runtime variant. The 13 % still needs 2C.
+- **Dead ends recorded:** the `IndexExprAST::unchecked` flag existed for
+  years and was never set (a dead field claiming to implement BCE);
+  the `--check-bce` COUNT is confounded by LLVM cloning loops (the
+  "surviving" count can exceed the "emitted" one) — measure the final
+  IR and the runtime instead.

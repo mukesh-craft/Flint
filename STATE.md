@@ -269,12 +269,48 @@ research behind it in §6.11):
 | **2D** | **regions** (NLL-style, from the CFG) → escaping closures | deferred until 2C's escape analysis exists; they are the same machinery |
 | **2E** | **the pipeline consumes the same semantics** (D5) | only after the language features the HIR needs exist in the pipeline |
 
-**First slice actually started (2026-10-20):** step 2A.1's length fact —
-a literal array's length becomes part of its type, the bounds check uses
-the exact constant when the type carries it, and a literal out-of-range
-index still traps in safe mode. It is the smallest honest piece of "types
-carry facts", it is measurable (`--check-bce` counts), and it needs no
-rewrite.
+**First slice LANDED (2026-10-20, commit 42b3a04):** step 2A.1's length
+fact. A type may carry FACTS, not just a kind (k2's idea). The fact is
+the EXACT length of an array value, as an SSA value: a constant for a
+literal initializer, and the argument of the `flint_array_alloc` call
+otherwise (the runtime sets `len: n`).
+
+- **Win, measured**: the bounds check used to compare the index against
+  the length LOADED FROM THE SLICE while the loop bound was a different
+  value, so LLVM could not relate them and the check survived in every
+  loop (3 of 6 checks survive in `sum_array`). With the fact the check
+  compares against the same value the loop uses, and LLVM folds it: a
+  literal array goes from 4 surviving checks to 0, and a runtime array
+  accessed with `arr[i]` produces **0 bounds-check calls** in the final
+  IR.
+- **Safety**: a fact is used only when its value DOMINATES the use (a
+  DominatorTree check — a value from inside a loop is not available after
+  the loop, and using it would be invalid IR); the R2 BCE-lite proof is
+  implemented for real (a literal index into a literal-length array is
+  provably in bounds); a fact is CLEARED on assignment; and an
+  out-of-range literal index still TRAPS (gate
+  `tests/test_bounds_safety.sh`).
+- **What it does NOT do (measured, not guessed)**: the benchmark
+  `sum_array` uses the BUILTIN `flint_array_get(arr, i)`, whose check is
+  emitted at the call site against the loaded length, and the runtime's
+  own check still applies. Removing THAT needs **range analysis**
+  (proving `i < n` from the loop bound) — step 2C — plus an unchecked
+  runtime variant. The 13 % therefore still needs 2C; this slice is its
+  foundation, not the win.
+
+**Dead ends found while doing it (do not retry):**
+- The vestigial `IndexExprAST::unchecked` flag ("R2 BCE-lite: proven
+  in-bounds") was never set anywhere — a dead field that claimed to
+  implement bounds-check elimination. It is now actually used, but the
+  flag alone was never the missing piece: what was missing was a PROOF.
+- The `--check-bce` COUNT is confounded: LLVM clones loops, so the
+  "surviving checks" number can exceed the "emitted" number (negative
+  "elided"). Measure the real thing instead: the number of
+  `call void @flint_bounds_check` in the final IR, and the runtime.
+- A fact must not be used where its value does not dominate. Flint's
+  block scoping hides the obvious case (a binding declared in a loop is
+  not visible after it), but the general rule still needs the
+  DominatorTree check.
 
 ### 4.3 P1 — Range analysis → check elimination (roadmap Phase 3/5)
 
