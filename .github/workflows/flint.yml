@@ -59,6 +59,8 @@ jobs:
         run: bash tests/test_fmt.sh ./flintc
       - name: Error-catalog sync gate
         run: bash tests/test_errors.sh
+      - name: C++ diagnostic-catalog sync gate
+        run: bash tests/test_errors_cpp.sh
       - name: Docs-table sync gate (README counts match tree)
         run: bash tools/docs_check.sh .
       - name: Cache-salt gate (flags/imports bust cache)
