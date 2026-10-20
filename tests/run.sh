@@ -41,6 +41,8 @@ check tests/t_generic_infer.fl "2"
 check tests/t_generic_infer.fl "1.5"
 check tests/t_generic_infer.fl "7"
 check tests/t_generic_infer.fl "4"
+# M2c: a float arithmetic expression and a float field infer f64.
+check tests/t_generic_infer.fl "2.5"
 # M2b: explicit type arguments `f::<T>(...)`. New syntax, so the fixture
 # lives in tests_manual/ (the self-hosted parser does not implement it yet).
 check tests_manual/t_explicit_targs.fl "5"
@@ -86,5 +88,7 @@ check_fail tests_manual/t_explicit_targs_bad.fl "'idc' expects 1 type argument(s
 check_fail tests_manual/t_explicit_targs_nongen.fl "explicit type arguments are only allowed on a generic function"
 # M4 follow-up: a named function value is frame-bound, like a lambda.
 check_fail tests_manual/t_named_fn_escape.fl "cannot return a function value: it would escape its defining frame"
+# M2c: an argument whose type cannot be determined is reported by name.
+check_fail tests_manual/t_generic_no_infer.fl "cannot infer type parameter 'T' for 'idc'; the argument's type could not be determined"
 echo "smoke: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
