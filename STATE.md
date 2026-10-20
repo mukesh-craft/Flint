@@ -314,6 +314,27 @@ otherwise (the runtime sets `len: n`).
   The measurement baseline was re-taken (the old one would have read the
   improvement as a regression).
 
+**The vectorization question, measured (2026-10-20):** after the fact
+reached the builtins, `sum_array`'s final IR has **0 bounds-check calls**
+and **still 0 vector operations** (C's has 16). The loop is *unrolled 2x*
+instead (the exit condition becomes `2 * n`), and the accumulator is a
+clean phi. So the remaining gap is **not** the checks any more:
+
+| build | sum_array 10M | vs C (8.3 ms) | vector ops |
+|---|---|---|---|
+| safe (default) | 12.0 ms | 1.44x | 0 |
+| `--unsafe` | 9.9 ms | 1.19x | 0 |
+| C -O2 | 8.3 ms | 1.00x | 16 |
+
+`--unsafe` removes the overflow check and recovers 17 %, but the loop
+still does not vectorize: the vectorizer bails and the loop is unrolled
+instead. With the checks gone, the blocker is LLVM's cost model and the
+pointer's provenance (the data pointer comes from a runtime allocation),
+not anything Flint emits. **Do not chase this by hand-writing a
+vectorizer** (the roadmap rejects that): the honest next step is to see
+whether a small, targeted hint (or the loop's shape) makes LLVM's own
+vectorizer take it, and otherwise to accept ~1.2x on this workload.
+
 **Dead ends found while doing it (do not retry):**
 - The vestigial `IndexExprAST::unchecked` flag ("R2 BCE-lite: proven
   in-bounds") was never set anywhere — a dead field that claimed to
