@@ -48,6 +48,9 @@ check tests_manual/t_explicit_targs.fl "3"
 check tests_manual/t_explicit_targs.fl "7"
 check tests_manual/t_explicit_targs.fl "2.5"
 check tests_manual/t_explicit_targs.fl "42"
+# M4 follow-up: a named function used as a value (`let h = inc`).
+check tests_manual/t_named_fn_value.fl "6"
+check tests_manual/t_named_fn_value.fl "10"
 check tests/t_types.fl "HELLO"
 check tests/t_types.fl "42"
 # util + time under JIT: these load .o files whose atomics must resolve in
@@ -81,5 +84,7 @@ check_fail tests/t_pfor_removed.fl "'parallel for' was removed: it could not cap
 # M2b: explicit type arguments — wrong count, and a non-generic callee.
 check_fail tests_manual/t_explicit_targs_bad.fl "'idc' expects 1 type argument(s), got 2"
 check_fail tests_manual/t_explicit_targs_nongen.fl "explicit type arguments are only allowed on a generic function"
+# M4 follow-up: a named function value is frame-bound, like a lambda.
+check_fail tests_manual/t_named_fn_escape.fl "cannot return a function value: it would escape its defining frame"
 echo "smoke: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -1,0 +1,13 @@
+# M4 follow-up: a named function value may not escape its frame.
+#
+# The thunk's box lives in the defining frame, so returning it would hand
+# out a pointer to dead storage -- the same rule lambdas follow.
+
+fn inc(x: i64) -> i64 { return x + 1 }
+
+fn get() -> fn(i64) -> i64 {
+    h = inc
+    return h
+}
+
+fn main() { print(1) }
