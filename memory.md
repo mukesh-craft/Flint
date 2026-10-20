@@ -4303,3 +4303,23 @@ and a curated (not mirrored) registry.
 - **Codegen diagnostics now carry a location (26920a8):**
   `codegen: 9:12: cannot return a function value: ...`, matching the parse
   errors, which always had one.
+
+# Addendum (2026-10-20, later still) — `--unsafe` implemented, and a diagnostic that was lying
+
+- **`--unsafe` now does what the spec says (ea9e312).** It previously
+  disabled ONLY the overflow checks: bounds checks could never be turned off,
+  so a system programmer who had proven an index in range had no way to say
+  so. Now it removes the overflow AND the bounds checks — the two
+  *performance* checks — while ownership, borrow/lease, escape, null and
+  divide-by-zero rules still apply. It is manual and terminal-only (no
+  domain, profile, package or tool can enable it), VISIBLE (every unsafe
+  build prints what is disabled and what still applies), and AUDITABLE (the
+  artifact carries `flint:safety=unsafe` or `flint:safety=safe`, kept alive
+  through `--gc-sections` via `llvm.used`, so an unsafe binary identifies
+  itself later). New gate: `tests/test_unsafe_flag.sh` (6 checks).
+- **`--check-bce` was SILENT on a cache hit (ea9e312).** The module cache
+  stores the ALREADY-OPTIMIZED module, so on a cache hit the "checks
+  emitted" count was gone and the diagnostic printed nothing. A diagnostic
+  whose output depends on cache state is not a diagnostic: the flag now
+  bypasses the cache and reports the same numbers every time. (Found by
+  writing the unsafe gate, which compiled the same file twice.)

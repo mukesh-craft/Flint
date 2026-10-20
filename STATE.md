@@ -593,7 +593,28 @@ printed a second message about the compiler's internals on top of the
 user's real error. `emitStmt`/`emitExpr` now stop once an error has been
 reported.
 
-### 6.9 Decision log
+### 6.9 `--unsafe` is implemented (roadmap §10)
+
+The roadmap specified an escape hatch; the compiler had half of it (overflow
+checks only) and none of the guarantees. It is now:
+
+| requirement | implementation |
+|---|---|
+| manual, terminal-only | only the `--unsafe` command-line flag sets it; no domain, profile, package or tool can |
+| never automatic | asserted by `tests/test_unsafe_flag.sh` |
+| visible | every unsafe build prints what is disabled and what still applies |
+| auditable | the artifact carries `flint:safety=unsafe` (or `...=safe`), kept alive through `--gc-sections` via `llvm.used` |
+| deliberate and isolated | the two PERFORMANCE checks (overflow, bounds) are removed; ownership, borrow/lease, escape, null and divide-by-zero rules still apply |
+
+`--safe` and `--release` remain no-ops for compatibility and restore the
+default (safe) posture.
+
+**Also fixed here:** `--check-bce` was silent on a cache hit — the module
+cache stores the already-optimized module, so the "checks emitted" count was
+gone. A diagnostic that depends on cache state is not a diagnostic; the flag
+now bypasses the cache.
+
+### 6.10 Decision log
 
 | decision | rationale | rejected alternative |
 |---|---|---|
