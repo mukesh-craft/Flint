@@ -4358,3 +4358,23 @@ and a curated (not mirrored) registry.
   the `--check-bce` COUNT is confounded by LLVM cloning loops (the
   "surviving" count can exceed the "emitted" one) — measure the final
   IR and the runtime instead.
+
+# Addendum (2026-10-20, later) — the length fact reaches the array builtins
+
+- **The win (commit 2b45516)**: the length fact existed but never reached
+  the array ACCESSORS (the shared cores take values, not symbols). The AST
+  call site now looks the argument up and passes the fact along, so the
+  check compares the index against the same value the user's loop
+  compares against and LLVM folds it:
+  - sum_array 10M: **19.1 ms -> 12.0 ms (-37 %)**, the gap to C 1.89x ->
+    1.44x;
+  - primes 10M: 495 ms -> 451 ms (-9 %);
+  - bounds-check calls in sum_array's final IR: 3 -> 0.
+  - The safety direction is unchanged: an out-of-range access on a
+    runtime array still traps ("PANIC: index 5 out of bounds for length
+    3"), and the sum is exact (99999990000000).
+  - primes improves much less because its bound is not provable the same
+    way (`while i * i <= limit` does not give LLVM `i <= limit + 1`).
+    That is a RANGE-ANALYSIS limit (step 2C), not a length-fact limit.
+  - The measurement baseline was re-taken: the old one would have read
+    this improvement as a regression.
