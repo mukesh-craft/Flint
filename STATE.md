@@ -46,8 +46,8 @@ Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
 
 | workload | Flint | C | C++ | Rust | Python |
 |---|---|---|---|---|---|
-| sum_array 10M | 19.1 ms | 10.1 ms | 8.3 ms | 9.7 ms | 160.1 ms |
-| primes 10M | 495 ms | 220 ms | 192 ms | 207 ms | 2051 ms |
+| sum_array 10M | **12.0 ms** | 8.3 ms | 8.7 ms | 8.2 ms | 178.4 ms |
+| primes 10M | **451 ms** | 191 ms | 184 ms | 193 ms | 2046 ms |
 | fib(45) | 12.9 s | 9.6 s | 9.3 s | 8.9 s | 579 s |
 | pi 100M | 779 ms | 783 ms | 778 ms | 779 ms | 97.8 s |
 | hello-world, stripped | 4,536 B | 4,368 B | 4,416 B | 339,656 B | ~276 MB stdlib |
@@ -290,13 +290,29 @@ otherwise (the runtime sets `len: n`).
   provably in bounds); a fact is CLEARED on assignment; and an
   out-of-range literal index still TRAPS (gate
   `tests/test_bounds_safety.sh`).
-- **What it does NOT do (measured, not guessed)**: the benchmark
-  `sum_array` uses the BUILTIN `flint_array_get(arr, i)`, whose check is
-  emitted at the call site against the loaded length, and the runtime's
-  own check still applies. Removing THAT needs **range analysis**
-  (proving `i < n` from the loop bound) — step 2C — plus an unchecked
-  runtime variant. The 13 % therefore still needs 2C; this slice is its
-  foundation, not the win.
+- **The builtin form was then wired to the fact (commit 2b45516) — and
+  that is where the win came from.** The shared array cores take VALUES,
+  so the fact (which lives on the binding) never reached them; the AST
+  call site now looks the argument up and passes it along. Measured:
+
+  | workload | before | after | gap to C |
+  |---|---|---|---|
+  | sum_array 10M | 19.1 ms | **12.0 ms** (-37 %) | 1.89x -> **1.44x** |
+  | primes 10M | 495 ms | **451 ms** (-9 %) | see the note below |
+  | bounds-check calls in sum_array's final IR | 3 | **0** | - |
+
+  primes' relative gap looks worse only because the C baseline moved in
+  that run (220 -> 191 ms); its absolute number improved.
+
+- **What still does NOT work (measured, not guessed)**: primes improves
+  much less, because its bound is not provable the same way — the loop is
+  `while i * i <= limit`, and LLVM cannot derive `i <= limit + 1` from
+  `i * i <= limit`. That is a **range-analysis** limit (step 2C), not a
+  length-fact limit: the fact gives the compiler the length, but proving
+  the INDEX is below it needs a range analysis over the loop.
+
+  The measurement baseline was re-taken (the old one would have read the
+  improvement as a regression).
 
 **Dead ends found while doing it (do not retry):**
 - The vestigial `IndexExprAST::unchecked` flag ("R2 BCE-lite: proven
