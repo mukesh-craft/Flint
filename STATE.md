@@ -84,6 +84,8 @@ a single fixture diff.
 | 1 | **M2b — explicit type arguments `f::<T>(...)`** | **DONE** (commit 3d3d914). `::` is two COLON tokens, so the lexer is untouched; explicit args override inference and feed the same instantiation path. Fixture in tests_manual/ (the self-host parser does not implement the syntax). | `src/main.cpp` parser + `Codegen::emitCall` + `Parser::emitDirectCall` |
 | 2 | **`let h = inc` — named function as a value** | **DONE** (commit fd8cf09). A named function joins the lambda protocol through a generated THUNK with the same fn(env, args...) shape, so the call site needs no discriminator. Frame-bound like a lambda (escape rules apply). A generic function as a value is refused by name. | `src/main.cpp` `Codegen::namedFnThunk` / `namedFnValue` |
 | 3 | **M2c — delete the remaining silent i64 defaults** | **DONE** (commit 922d03a). The generic argument resolver is strict: an un-inferrable argument is reported by name ("cannot infer type parameter 'T' for 'idc'"). Float arithmetic and float fields infer f64; a call to a user function uses its declared return type. | `src/main.cpp` `Codegen::inferGenericArgType` |
+| 10 | **Measurement infrastructure (roadmap Phase 0)** | NOT STARTED. The benchmark harnesses exist (`tools/bench_compare.sh`, `tools/bench_tooling.sh`) but there is no CI job, no per-commit history, no size attribution output (`--print-size` is a PROPOSAL, not implemented) and no performance/size gates. Two invisible regressions in the 2026-10-20 assessment prove the cost. | `docs/LANGUAGE-ROADMAP.md` §21 |
+| 11 | **Typed HIR/MIR (roadmap Phase 2)** | NOT STARTED. The precondition for range analysis, escape analysis, capability types, a non-drifting LSP, and ending the D5 drift. The migration is incremental (AST stays until HIR is proven on a subset). | `docs/LANGUAGE-ROADMAP.md` §13 |
 | 4 | **B8 — type-level generic enums (`Option<T>`)** | OPEN by design. `Option.Some(i64)` is a fixed i64 payload; ROADMAP.md:466 overclaims. Needs a maintainer decision (it changes the type system + ABI), not a unilateral change. | memory.md:3628 |
 | 9 | **The self-host feature gap (D5)** | RECORDED, not closed. The C++ compiler now has `trait`, generics, `f::<T>(...)`, enum equality and named-function values; the self-hosted pipeline (stage2/stage3) has NONE of them. The differential gate is green because it does not cover them. D5 in COMPATIBILITY.md lists the gap and the policy. Porting them is a project of its own (11.7k lines of Flint). | `COMPATIBILITY.md` D5 |
 | 5 | **M2d — arrays as generic arguments** | **DONE** (the AST path already inferred `array(i64)`; the emit path now does too — commit 361d810). `idc([1, 2])` instantiates T = array(i64) and `z[1]` reads 2. (An earlier probe of mine was wrong: `.length` is not a field in this dialect.) | `src/main.cpp` `exprFlintType` + `Parser::emitDirectCall` inference |
@@ -146,6 +148,34 @@ Items 1, 2, 3, 5 and most of 6 are DONE (commits 3d3d914, fd8cf09,
    GPG key, so the first signed tag waits for a machine that has one.
 
 ---
+
+## 3b. THE ASSESSMENT (2026-10-20) — read `docs/LANGUAGE-ROADMAP.md`
+
+A 30-section, evidence-labelled assessment and roadmap now lives in
+`docs/LANGUAGE-ROADMAP.md` (claims tagged [M] measured / [P] published /
+[R] reported / [I] inference / [D] design / [S] speculation). Key facts it
+records, all measured on this device:
+
+- **Binary size is FIXED** (commit 46a007e): hello-world 743,520 B ->
+  8,048 B raw (4,536 B stripped, vs C's 4,368 B); 72 MB of `.bss`
+  reservation -> 24 B; dynamic deps 6 -> 1 (libc only). The cause was a
+  missing `-Wl,--gc-sections` in the link line.
+- **Performance baseline** (`tools/bench_compare.sh`): sum_array 19.1 ms
+  (C 10.1), primes 495 ms (C 220), fib(45) 12.9 s (C 9.6), pi 779 ms
+  (C 783 — parity). Build 144 ms (C 439, Rust 674); cold start 37 ms.
+- **The remaining ~1.6x integer-loop gap is NOT yet explained.** §4.5 of
+  the roadmap defines the experiment: emit the optimized IR of the hot loop
+  and diff it against C's. Until that is done, do not guess at the cause.
+- **Checks are 13% of the gap** (`--unsafe` measurement), and
+  `--check-bce` shows why: checks die when the bound is provable in the
+  same function, survive when the length is a separate loaded value.
+
+Reproduce any of it:
+```bash
+bash tools/bench_compare.sh          # Flint vs C/C++/Rust/Python
+bash tools/bench_tooling.sh          # size, build time, cold start
+./flintc --check-bce <file>.fl -o /tmp/x   # checks emitted vs elided
+```
 
 ## 4. KEY FILES / ANCHORS
 
