@@ -3928,7 +3928,7 @@ which needs the Rust array representation (M7).
 | Item | State |
 |---|---|
 | M0, M1 | done |
-| M2 | mostly done: param matching + f64 FCmp shipped; cast + nested-call args infer (3f062e4); explicit `f::<T>(...)` type args shipped (3d3d914); arrays as generic args work on the AST path and the emit path now infers them too (361d810). STILL OPEN: deleting the remaining silent i64 defaults |
+| M2 | **done** (param matching + f64 FCmp; cast + nested-call args infer — 3f062e4; explicit `f::<T>(...)` — 3d3d914; array args — 361d810; STRICT resolver, no silent i64 default, f64 arithmetic infers f64 — 922d03a). The resolver reports an un-inferrable argument by name. |
 | P0-NEW-1 path collapse | **done** (compare/call/generic cores shared, commit below) |
 | P0-NEW-2 enum payload width | **done** (per-variant field compare, commit below) |
 | P0-NEW-3 tensor index check | **done** (narrow stop-gap, commit below) |
@@ -4111,3 +4111,43 @@ does not pay for the ABI change.
   - the self-host pipeline has NO traits, NO generics, and no `::<` — so
     features added to the C++ compiler are not yet available to the
     self-hosted toolchain. That gap is the one that matters now.
+
+# Addendum (2026-10-20, later still) — M2c, the P4 error-code docs, and the
+  self-host feature gap
+
+- **M2c — the generic argument resolver is strict (922d03a).** The M2 spec
+  asked for "an un-inferrable parameter must be an error naming the
+  parameter". `Codegen::inferGenericArgType` is now a strict resolver: it
+  returns false when the argument's type cannot be determined, and the
+  inference loop reports the parameter by name ("cannot infer type parameter
+  'T' for 'idc'; the argument's type could not be determined") instead of
+  instantiating i64 and letting the program fail later with a message about
+  the instantiation. Two real silent-wrong answers fixed on the way:
+  a float arithmetic expression inferred i64 (`idc(1.5 + 2.5)` instantiated
+  idc.i64), and a call to a USER function inferred i64 (the builtins table
+  does not know user functions, so `idc(f())` instantiated idc.i64). The
+  fixture caught a regression during this work: an index argument
+  (`idc(arr[1])`) used to work only because the silent default happened to
+  be right; the resolver named it and the index case was added.
+- **P4 — the C++ compiler's diagnostics are catalogued (4214082).** The P4
+  ship list asked for error-code documentation. `docs/errors.md` catalogued
+  the SELF-HOST EMITTER's messages; the messages users actually see come
+  from `src/main.cpp` and had no catalog. `docs/errors-cpp.md` now lists all
+  135 of them as PATTERNS (literal text with `<...>` where a value is
+  interpolated — a catalog of literal fragments is useless to a user
+  searching for a message), with curated fix guidance by family.
+  `tools/errors_cpp.py` extracts them; `tests/test_errors_cpp.sh` keeps the
+  doc and the source in sync BOTH ways (a new diagnostic cannot ship
+  undocumented; a removed one cannot linger) and is wired into CI.
+  The rest of the P4 list: the semver freeze and the SBOM generator
+  (`tools/sbom.py`) already exist; signed tags need a GPG key, which this
+  device does not have — the procedure is documented in `docs/RELEASE.md`.
+- **D5 — the self-host feature gap is now recorded (COMPATIBILITY.md).**
+  The differential gate is green (11/11) but it cannot see what it does
+  not cover: the C++ compiler now accepts programs the self-hosted pipeline
+  cannot parse or emit at all — `trait`, generics, `f::<T>(...)`, enum
+  equality, a named function as a value. D5 lists them with the policy that
+  every feature added to the C++ compiler from now on either lands in the
+  self-host pipeline too or is listed there. Porting them is a project of
+  its own (stage2 is 4.1k lines, stage3 is 7.6k); it is a feature gap, not
+  a miscompile in either compiler.
