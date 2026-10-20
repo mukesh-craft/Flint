@@ -81,6 +81,37 @@ fn main() -> i64 {
 - Verdict: self-hosted is right. Disposition: FIX-REF. Differential:
   `cpp_may_differ`.
 
+## D5 — The self-hosted pipeline lacks the features the C++ compiler gained after 2026-10-15. OPEN (feature gap, not a miscompile).
+
+The two compilers do not disagree on the programs both can compile: the
+differential gate is green (11/11, 0 known-divergence). What the gate does
+NOT cover is the FEATURE GAP — the C++ compiler accepts programs the
+self-hosted pipeline cannot parse or emit at all. Those programs are not in
+the differential manifest, so the gate stays green while the gap is real.
+
+Features in the C++ compiler that the self-hosted pipeline does not have
+(as of commit 4214082):
+
+| Feature | C++ compiler | Self-hosted (stage2/stage3) |
+|---|---|---|
+| `trait` declarations and name+arity method dispatch (M3, `1219665`) | supported | absent — `trait` is not even in the parser |
+| Lambda-as-a-value with the env-box protocol (M4, `a6b89e6`) | supported | partial — the emitter has lambda shapes, the parser is behind |
+| Generic functions with by-parameter inference (M0-M2) | supported | absent — no `typeParams` in stage2 at all |
+| Explicit type arguments `f::<T>(...)` (M2b, `3d3d914`) | supported | absent — `::` is not lexed by the self-host parser |
+| Enum equality by per-variant payload compare (P0-NEW-2, `d1c58cf`) | supported | absent — no aggregate equality in stage3 |
+| A named function used as a value (`let h = inc`, `fd8cf09`) | supported | absent |
+
+- C++: compiles and runs these programs.
+- Self-hosted: rejects them (parse error), or would not emit them.
+- Verdict: the C++ compiler is right; the self-hosted pipeline is behind.
+- Disposition: PIN-LIMITATION for now, with the gap recorded here. Porting
+  the features to the Flint pipeline is a project of its own (stage2 is
+  4.1k lines, stage3 is 7.6k); it is NOT a correctness bug in either
+  compiler, and the differential gate correctly does not pretend otherwise.
+- Follow-up: every feature added to the C++ compiler from now on should
+  either land in the self-host pipeline too, or be listed in the table
+  above. The table is the checklist.
+
 ## Policy for new divergences
 
 1. Minimize repro, add row above + corpus file under `tests/differential/`.
