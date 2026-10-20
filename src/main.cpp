@@ -276,6 +276,26 @@ static bool objectNeedsPython(const std::string& objPath) {
     return false;
 }
 
+// Whether the object references ANY of the given symbol prefixes.
+//
+// Same technique as objectNeedsPython (read the ELF symbol table through
+// LLVM, no subprocess, no shell), generalized so the linker can decide
+// whether a program needs a native library at all. A program that never
+// touches matrices should not carry a libopenblas dependency, and one that
+// never opens a database should not carry libsqlite3.
+static bool objectNeedsSymbols(const std::string& objPath,
+                               const std::vector<std::string>& prefixes) {
+    auto parsed = llvm::object::ObjectFile::createObjectFile(objPath);
+    if (!parsed) return false;
+    llvm::object::ObjectFile* obj = parsed->getBinary();
+    for (const auto& sym : obj->symbols()) {
+        llvm::StringRef name = *sym.getName();
+        for (auto& p : prefixes)
+            if (name.starts_with(p)) return true;
+    }
+    return false;
+}
+
 // Whether the program being compiled uses the embedded-CPython bridge.
 //
 // Linking pyruntime.o (and, via python3-config, libpython) unconditionally
@@ -291,14 +311,35 @@ static bool gProgramUsesPython = false;
 static void markUsesPython() { gProgramUsesPython = true; }
 
 static bool spawnLinker(const std::string& objPath, const std::string& outputPath,
-                        const std::string& extraFlags = "") {
+                        const std::string& extraFlags = "", bool useBlas = true) {
     if (!isSafePath(objPath) || !isSafePath(outputPath)) {
         std::cerr << "linker: unsafe path rejected\n";
         return false;
     }
 
+    // The standard-library objects that may be linked in. Declared first:
+    // the native-library decisions below inspect their symbol tables.
+    const char* stdLibs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o",
+                             "flint_ai_opt.o", "flint_math.o", "flint_fmt.o",
+                             "flint_coll.o", "flint_nn.o", "flint_util.o",
+                             "flint_value.o", "flint_toml.o", "flint_yaml.o", "flint_time.o",
+                             "flint_serial.o", "flint_crypto.o", "flint_net.o",
+                             "flint_aegis.o", "flint_chan.o", "flint_std.o",
+                             "ffi_helper.o"};
+    struct stat st;
     // Build the argv array directly — no shell, no string interpolation.
     std::vector<std::string> args = {"clang", objPath, "runtime.o"};
+    // --as-needed makes the linker drop a DT_NEEDED entry for a library whose
+    // symbols the program never uses. Without it every binary carried
+    // libsqlite3, libcurl and libopenblas as hard runtime dependencies, so a
+    // hello-world would not start on a machine without them.
+    args.push_back("-Wl,--as-needed");
+    // Dead-code elimination at link time. The runtime objects are compiled
+    // with -ffunction-sections/-fdata-sections (see build.sh), so the linker
+    // can drop every module the program does not use. Without this flag a
+    // hello-world carried the whole standard library -- sqlite, http, crypto,
+    // png, the Rust stdlib -- 743 KB instead of 8 KB.
+    args.push_back("-Wl,--gc-sections");
     // libm is unconditional: the runtime's math builtins (flint_pow, and the
     // tensor/BLAS objects' pow) need it. It used to arrive by accident inside
     // `python3-config --ldflags`, so a machine without Python could not link
@@ -308,6 +349,13 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     // C libraries the Rust stdlib modules wrap. Absolute paths beat -l flags
     // here: Termux keeps them under $PREFIX/lib, which is not on the default
     // linker path for every invocation.
+    //
+    // They are added only when the program can actually reach them: the
+    // decision is made on the LINKED OBJECT SET, because the app object
+    // references flint_* wrappers, not the C symbols underneath. With
+    // --as-needed in effect, a library whose symbols are unused leaves no
+    // DT_NEEDED entry either way; deciding up front keeps the link line
+    // honest and keeps the dependency off a program that does not use it.
     struct stat libSt;
     auto addLib = [&](const char* rel, const char* flag) {
         char full[512];
@@ -318,18 +366,16 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
         if (stat(rel, &libSt) == 0) { args.push_back(rel); return; }
         (void)flag;
     };
-    addLib("libsqlite3.so", "-lsqlite3");
-    addLib("libcurl.so", "-lcurl");
+    bool needsSqlite = false, needsCurl = false;
+    for (auto* lib : stdLibs) {
+        if (stat(lib, &st) != 0) continue;
+        if (objectNeedsSymbols(lib, {"sqlite3_"})) needsSqlite = true;
+        if (objectNeedsSymbols(lib, {"curl_"})) needsCurl = true;
+    }
+    if (needsSqlite) addLib("libsqlite3.so", "-lsqlite3");
+    if (needsCurl) addLib("libcurl.so", "-lcurl");
 
     // Include standard library .o files if they exist
-    struct stat st;
-    const char* stdLibs[] = {"flint_tensor.o", "flint_blas.o", "flint_ai.o",
-                             "flint_ai_opt.o", "flint_math.o", "flint_fmt.o",
-                             "flint_coll.o", "flint_nn.o", "flint_util.o",
-                             "flint_value.o", "flint_toml.o", "flint_yaml.o", "flint_time.o",
-                             "flint_serial.o", "flint_crypto.o", "flint_net.o",
-                             "flint_aegis.o", "flint_chan.o", "flint_std.o",
-                             "ffi_helper.o"};
     for (auto* lib : stdLibs) {
         if (stat(lib, &st) == 0) args.push_back(lib);
     }
@@ -341,7 +387,31 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     // the link, hence the probe.
     if (const char* p = getenv("PREFIX")) {
         std::string blasLib = std::string(p) + "/lib/libopenblas.so";
-        if (stat(blasLib.c_str(), &st) == 0) args.push_back("-lopenblas");
+        // Only when the program uses the matrix/tensor path: an unrelated
+        // program should not acquire a BLAS runtime dependency.
+        // Only when the program reaches a matrix/tensor/AI entry point: an
+        // unrelated program should not acquire a BLAS runtime dependency.
+        // (--as-needed would also drop the unused entry, but deciding here
+        // keeps the dependency out of the link line itself.)
+        // The entry points that reach the BLAS-backed kernels: the tensor
+        // API is `flt_*` (flt_create_2d, flt_matmul, ...), the AI/NN
+        // wrappers call into it, and flint_blas.o is the object that
+        // references cblas_dgemm. Getting these names wrong silently
+        // demotes a matmul to the portable loop -- measured: n=200 took
+        // 14.4 s instead of ~0.1 s.
+        bool needsBlas = objectNeedsSymbols(objPath,
+            {"flt_", "flint_matmul", "flint_nn", "flint_ai", "flint_blas"});
+        if (useBlas && needsBlas && stat(blasLib.c_str(), &st) == 0) {
+            // --no-as-needed for THIS library: flint_blas.o references
+            // cblas_dgemm WEAKLY (so the runtime can probe for it and fall
+            // back to the portable loop), and --as-needed ignores weak
+            // undefined symbols -- it dropped libopenblas even for a
+            // program that wanted the fast path. Measured: n=200 matmul
+            // took 14.4 s with the library dropped and ~0.1 s with it.
+            args.push_back("-Wl,--no-as-needed");
+            args.push_back("-lopenblas");
+            args.push_back("-Wl,--as-needed");
+        }
     }
 
     // Include pyruntime.o only when this program actually uses Python, and
