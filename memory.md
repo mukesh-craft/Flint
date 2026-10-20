@@ -4208,3 +4208,63 @@ the companion to this ledger, `STATE.md` (pick-up guide) and
   assessment prove the gap. Phase 1 is the now-shipped link fix plus the
   IR comparison. Phase 2 is a typed HIR — the precondition for range
   analysis, escape analysis, capability types, and a non-drifting LSP.
+
+# Addendum (2026-10-20, deep-research pass) — the 2026 external landscape
+
+Sources consulted in the second research pass (all 2026 unless noted), for
+the comparison table and the sharpened plan. Claims from these are tagged
+[P] in `docs/LANGUAGE-ROADMAP.md`:
+
+- **Rust**: Polonius Alpha on nightly since 2026-08-04 (flow-sensitive
+  borrow checking; NLL "problem case #3" — conditional borrows — now
+  accepted; one known soundness issue remains; stabilization targeted for
+  late 2026). Rust for Linux is integral in the kernel (mainline drivers).
+- **Go**: 1.26 (Green Tea GC default, Swiss Tables maps, cgo −30 %, more
+  stack-allocated slice backing stores); 1.27 adds a portable, size-agnostic
+  `simd` package (AVX/AVX2/AVX-512, NEON, wasm) with emulated fallback
+  everywhere, explicitly designed to be readable by LLMs.
+- **Zig** 0.16: self-hosted x86 backend is the Debug default; incremental
+  compilation reached millisecond rebuilds by avoiding over-analysis and
+  making the dependency graph acyclic; still off by default (known bugs and
+  miscompiles).
+- **Swift** 6.2 (Approachable Concurrency: `Task.immediate`, isolated
+  `deinit`, WebAssembly, Android SDK preview); Swift 6 mode makes
+  data-race checking the default.
+- **TypeScript** 7 is the native Go port: 8-10x faster builds (vscode
+  89.11 s -> 8.74 s), type-checking "very nearly complete" (20,000 test
+  cases, 74 known gaps); TS 6.0 is the last JS-based release; `--strict`
+  becomes the default.
+- **Kotlin** K2 default (~40 % faster builds); **Java** JDK 25 LTS;
+  **C#** .NET 10 LTS with C# 14 (TIOBE language of the year).
+- **Domain-system precedents**: Reactant.jl (MLIR+XLA: 14.8-17.3 TF/s
+  GEMM, cuBLAS-level, but seconds to compile) vs JLIR (arXiv 2609.04585:
+  a Julia-native dialect IR, <1.5 ms transformation overhead, 87-96 % of
+  hand-written baselines, but 1.2 TF/s GEMM without tiling). MLIR's stated
+  drawback for dynamic languages: strong compile-time type requirements and
+  a low-level C++ extension model.
+- **Size attribution tooling**: Bloaty (compile-unit / symbol / section /
+  segment, with size diffs for CI), cargo-bloat (per crate), twiggy
+  (monomorphization), plus a pure-Rust equivalent that flags monomorphized
+  instantiations.
+- **C++26 safety**: core safety profiles (P3081R2) with "Pro.Bounds";
+  `std::span::at()` (P2821R5); `std::expected` in freestanding; saturation
+  arithmetic (P0543R3, shipped).
+- **LSP 3.18** (2026-04-06): inline completions, dynamic document
+  content, folding refresh, multi-range formatting, snippets in workspace
+  edits, code-action kind documentation, debug message kind. 3.17 (2022)
+  added inlay hints, semantic tokens, type hierarchies, the diagnostic PULL
+  model, notebook documents.
+- **Ecosystem size (2025-12/2026-01)**: npm 3.75 M, Go modules 2.16 M,
+  Maven 751 k, PyPI 706 k, PHP 431 k, crates.io 208 k. 9.8 trillion
+  downloads in 2025 (npm +65 % YoY, PyPI +51 % YoY).
+- **LSP vs grep for agents**: LSP cut tool-output tokens 31-34 % on a
+  149k-line TypeScript repo, with time roughly unchanged.
+
+Consequences already folded into the plan: SIMD via a portable stdlib layer
+(Go 1.27) rather than a Flint vectorizer; domains as a data table with a
+lightweight tier and one deep tier (Reactant vs JLIR); a fast compiler as
+the precondition for a good LSP (TypeScript 7); flow-sensitive region
+inference as the target for the ownership model (Polonius Alpha);
+`--print-size` shaped like Bloaty/cargo-bloat/twiggy; `--unsafe` framed as
+a C++26-style safety profile; the LSP's first features taken from LSP 3.17/3.18;
+and a curated (not mirrored) registry.
