@@ -25,6 +25,7 @@
 #include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/ExecutionEngine/Orc/LLJIT.h"
+#include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/ExecutionEngine/Orc/ThreadSafeModule.h"
 #include "llvm/ExecutionEngine/Orc/AbsoluteSymbols.h"
 #include "llvm/Passes/PassBuilder.h"
@@ -307,6 +308,37 @@ static bool objectNeedsSymbols(const std::string& objPath,
 // from several call sites, in two different compilation paths, and all of them
 // need the same answer. Compilation here is single-threaded.
 static bool gProgramUsesPython = false;
+
+// The safety posture of THIS build: "safe" (the default) or "unsafe" (the
+// explicit --unsafe escape hatch).
+//
+// --unsafe is a MANUAL, TERMINAL-ONLY opt-out. It is never enabled by a
+// domain declaration, an optimization profile, a package, or a tool -- only
+// by a person, on the command line. It is deliberately VISIBLE (a warning
+// at compile time) and AUDITABLE (the artifact carries a marker, so an
+// unsafe binary can be identified later, e.g. in a supply chain).
+//
+// What it does NOT change: the ownership rules, the borrow/lease checks,
+// the escape rules, the null checks, the div-by-zero trap, the AEGIS
+// backstop, or the one-error-per-program contract.
+static std::string gSafetyPosture = "safe";
+static bool gUnsafeWarned = false;
+
+// Stamp the artifact with its safety posture. The marker is referenced from
+// llvm.used so that --gc-sections cannot drop it: the whole point is that
+// an unsafe binary announces itself.
+static void stampSafetyPosture(llvm::Module* mod) {
+    if (!mod) return;
+    std::string text = "flint:safety=" + gSafetyPosture;
+    auto* c = llvm::ConstantDataArray::getString(mod->getContext(), text, true);
+    auto* g = new llvm::GlobalVariable(*mod, c->getType(), true,
+                                       llvm::GlobalValue::PrivateLinkage,
+                                       c, "__flint_safety_posture");
+    g->setSection(".rodata");
+    g->setAlignment(llvm::MaybeAlign(1));
+    // Keep it: unreferenced private globals are dropped by --gc-sections.
+    llvm::appendToUsed(*mod, {g});
+}
 
 static void markUsesPython() { gProgramUsesPython = true; }
 
@@ -684,6 +716,7 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
 }
 static bool emitModuleOutput(llvm::Module* mod, const std::string& outputPath,
     llvm::CodeGenOptLevel optLevel = llvm::CodeGenOptLevel::None) {
+    stampSafetyPosture(mod);
     bool emitObject = outputPath.size() >= 2 &&
                       outputPath.substr(outputPath.size() - 2) == ".o";
     if (!emitObject) {
@@ -953,6 +986,8 @@ static int runWithJIT(std::unique_ptr<llvm::Module> mod, std::unique_ptr<llvm::L
     using namespace llvm::orc;
 
     // Debug metadata never enters the JIT (see comment above this fn).
+    // The JIT artifact carries the same safety stamp as an AOT binary.
+    stampSafetyPosture(mod.get());
     if (mod->getModuleFlag("Debug Info Version")) {
         llvm::StripDebugInfo(*mod.get());
     }
@@ -8157,6 +8192,14 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
     // loop vectorization, so every array path must use this shape --
     // `a[i]` and `flint_array_get/set` included.
     void emitBoundsCheckInline(llvm::Value* idxVal, llvm::Value* len) {
+        // --unsafe removes the bounds check as well as the overflow check:
+        // a system programmer who has proven an index in range needs a way
+        // to say so. The check is the ONLY thing standing between a
+        // deliberate out-of-range access and a silent read of whatever is
+        // there, so the opt-out is explicit (a build flag, never a
+        // profile), visible (a warning), and auditable (the artifact is
+        // stamped "flint:safety=unsafe").
+        if (gSafetyPosture == "unsafe") return;
         auto* boundsFn = functionMap["flint_bounds_check"];
         if (!boundsFn) return;
         auto* curF = builder->GetInsertBlock()->getParent();
@@ -13009,6 +13052,16 @@ int main(int argc, char* argv[]) {
             break;
         } else if (arg == "--unsafe") {
             releaseMode = true;  // disable overflow checks
+            // The one escape hatch, and it is deliberately loud: a build
+            // that removes the checks says so, on every compile.
+            gSafetyPosture = "unsafe";
+            if (!gUnsafeWarned) {
+                gUnsafeWarned = true;
+                std::cerr << "warning: --unsafe disables the overflow AND "
+                             "bounds checks; this artifact is not memory-safe "
+                             "by construction (ownership, borrow, escape, null "
+                             "and divide-by-zero rules still apply)\n";
+            }
         } else if (arg == "--offline") {
             offlineMode = true;  // registry: cache only, fail if missing
         } else if (arg == "--fast") {
@@ -13018,6 +13071,7 @@ int main(int argc, char* argv[]) {
             // flag order never shifts positional input/output.
         } else if (arg == "--safe") {
             releaseMode = false;  // enable overflow checks (default)
+            gSafetyPosture = "safe";
         } else if (arg == "--release") {
             releaseMode = false;  // safe mode is default; --release is a no-op for compat
         } else if (arg == "--lib-path" && i + 1 < argc) {
@@ -13251,7 +13305,7 @@ int main(int argc, char* argv[]) {
     // And skip in --test mode: a cached binary would skip the tests silently.
     bool emitBinary = !emitLl && !emitObj && !runMode;
 
-    if (emitBinary && !testModeFlag && cache.hasBinary(sourceHash)) {
+    if (emitBinary && !testModeFlag && !checkBce && cache.hasBinary(sourceHash)) {
         if (cache.loadBinary(sourceHash, outputPath)) {
             if (getenv("FLINT_LOG_CACHE"))
                 std::cerr << "cache: hit binary (skipped lex/parse/codegen/link)\n";
@@ -13264,7 +13318,12 @@ int main(int argc, char* argv[]) {
     }
 
     PROFILE_BEGIN("cache_check");
-    if (!runMode && !testModeFlag && cache.has(sourceHash)) {
+    // --check-bce is a DIAGNOSTIC: it must report the same numbers every
+    // time. The module cache stores the ALREADY-OPTIMIZED module, so on a
+    // cache hit the "checks emitted" count is gone and the flag would
+    // print nothing (or, worse, a misleading number). A diagnostic that
+    // depends on cache state is not a diagnostic.
+    if (!runMode && !testModeFlag && !checkBce && cache.has(sourceHash)) {
         llvm::LLVMContext ctx;
         if (auto cachedMod = cache.load(sourceHash, ctx)) {
             PROFILE_END(); // cache_check
