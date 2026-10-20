@@ -5015,8 +5015,17 @@ public:
     // partial IR is never JIT-run/emitted/linked. emitFunction returns false
     // when the flag is set (checked at its end).
     bool cgHadError = false;
+    // The source location of the statement/expression being emitted, so a
+    // codegen diagnostic can say WHERE it happened. Parse errors have always
+    // carried line/column; codegen errors did not, which left the user
+    // hunting for the offending construct.
+    int cgCurLine = 0;
+    int cgCurCol = 0;
     llvm::Value* codegenError(const std::string& msg) {
-        std::cerr << "codegen: " << msg << "\n";
+        if (cgCurLine > 0)
+            std::cerr << "codegen: " << cgCurLine << ":" << cgCurCol << ": " << msg << "\n";
+        else
+            std::cerr << "codegen: " << msg << "\n";
         cgHadError = true;
         return nullptr;
     }
@@ -6839,6 +6848,7 @@ public:
         // about their program. The parse side already had this contract
         // (M6); this closes the codegen side.
         if (cgHadError) return;
+        if (node && node->loc.line > 0) { cgCurLine = node->loc.line; cgCurCol = node->loc.col; }
         // --debug: statement-level line attribution. IRBuilder stamps this
         // DLLocation onto every instruction it inserts until the next
         // statement changes it, so instructions map to Flint source lines.
@@ -6871,6 +6881,7 @@ public:
         // One error per program: after the first codegen error, emit nothing
         // further (see emitStmt for why).
         if (cgHadError) return nullptr;
+        if (node && node->loc.line > 0) { cgCurLine = node->loc.line; cgCurCol = node->loc.col; }
         // --debug: block-tail statements reach here via emitBlockExpr's
         // emitExpr path (bypassing emitStmt), so the line stamp lives here
         // too. Multi-line expressions map to their own lines, which is
