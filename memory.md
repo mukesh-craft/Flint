@@ -4185,6 +4185,22 @@ the companion to this ledger, `STATE.md` (pick-up guide) and
   loaded value (sum_array: 3 of 6 survive). The fix is to make the length
   and the loop bound the SAME SSA value (the "reslicing" technique), which
   needs no new IR.
+- **The performance gap is now MEASURED, not guessed** (IR comparison of
+  the optimized modules, `flintc --emit-llvm` vs `clang -O2 -S -emit-llvm`
+  on sum_array): C 52 instructions in main vs Flint 49 (Flint is
+  SMALLER), but C has 16 vector operations and Flint 0, and C has 2 icmp
+  vs Flint 4. So the gap is NOT code bloat: C auto-vectorizes the integer
+  reduction while Flint cannot, because C's out-of-bounds and signed
+  overflow are UB (assumed away) whereas Flint's are defined traps, and
+  because the array length is a runtime value unrelated to the loop bound.
+  The f64 benchmark is at parity exactly because clang will not
+  reassociate an FP reduction either -- the gap appears precisely where
+  C's UB buys it more. Consequence: the fix is ANALYSIS (range analysis to
+  drop the overflow check; same-value bounds so the bounds check folds),
+  after which LLVM's own vectorizer can vectorize -- Flint does not need a
+  vectorizer of its own. This also disproved one of the roadmap's own
+  proposals ("inline the array accessors"): the IR shows the accessor's
+  fast path is ALREADY inlined.
 - **The roadmap's order** (measure -> recover -> unify -> safety -> type
   system -> optimization -> size -> tooling -> ecosystem -> domains):
   Phase 0 is measurement infrastructure (CI benchmarks + size attribution

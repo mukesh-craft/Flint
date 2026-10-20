@@ -163,9 +163,15 @@ records, all measured on this device:
 - **Performance baseline** (`tools/bench_compare.sh`): sum_array 19.1 ms
   (C 10.1), primes 495 ms (C 220), fib(45) 12.9 s (C 9.6), pi 779 ms
   (C 783 — parity). Build 144 ms (C 439, Rust 674); cold start 37 ms.
-- **The remaining ~1.6x integer-loop gap is NOT yet explained.** §4.5 of
-  the roadmap defines the experiment: emit the optimized IR of the hot loop
-  and diff it against C's. Until that is done, do not guess at the cause.
+- **The integer-loop gap is MEASURED** (optimized-IR comparison,
+  §4.4 of the roadmap): C vectorizes the integer reduction (16 vector
+  ops) and Flint does not (0), because C's UB (out-of-bounds, signed
+  overflow) is assumed away while Flint's are defined traps, and because
+  the array length is a runtime value unrelated to the loop bound. Flint's
+  optimized `main` is SMALLER than C's (49 vs 52 instructions) -- so it is
+  not a codegen-bloat problem. The fix is range analysis + same-value
+  bounds, after which LLVM's own vectorizer can vectorize. Do not build a
+  vectorizer.
 - **Checks are 13% of the gap** (`--unsafe` measurement), and
   `--check-bce` shows why: checks die when the bound is provable in the
   same function, survive when the length is a separate loaded value.
