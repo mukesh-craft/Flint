@@ -81,14 +81,29 @@ a single fixture diff.
 
 | # | Item | Status | Where |
 |---|---|---|---|
-| 1 | **M2b — explicit type arguments `f::<T>(...)`** | OPEN. `::` is not lexed; `idc::<f64>(2.5)` → "expected ')' after arguments". Spec: memory.md:3687-3691 ("add `f::<T>(...)` explicit type arguments"). Token-contract risk: `lexdiff`/`parse_gate` must stay green (contextual detection, no lexer keyword — the M3 precedent). | `src/main.cpp` parseType/parsePrimary path |
-| 2 | **`let h = inc` — named function as a value** | OPEN. Refuses with advice: "function 'inc' cannot be used as a value here; bind a lambda or pass it in a direct call". M4 shipped lambda-as-value; named-fn adapters do not exist. | `src/main.cpp` emitExpr/emitVarDecl (M4 section, memory.md:3957) |
+| 1 | **M2b — explicit type arguments `f::<T>(...)`** | **DONE** (commit 3d3d914). `::` is two COLON tokens, so the lexer is untouched; explicit args override inference and feed the same instantiation path. Fixture in tests_manual/ (the self-host parser does not implement the syntax). | `src/main.cpp` parser + `Codegen::emitCall` + `Parser::emitDirectCall` |
+| 2 | **`let h = inc` — named function as a value** | **DONE** (commit fd8cf09). A named function joins the lambda protocol through a generated THUNK with the same fn(env, args...) shape, so the call site needs no discriminator. Frame-bound like a lambda (escape rules apply). A generic function as a value is refused by name. | `src/main.cpp` `Codegen::namedFnThunk` / `namedFnValue` |
 | 3 | **M2c — delete the remaining silent i64 defaults** | PARTIAL. The generic inference no longer defaults for cast/call args. Still silent: `exprFlintType` default arm, unknown-variable fallback, binary-without-`+` fallback. Turning them into errors risks the self-host fixed point — only do it with the full gate set green. | `src/main.cpp` exprFlintType |
 | 4 | **B8 — type-level generic enums (`Option<T>`)** | OPEN by design. `Option.Some(i64)` is a fixed i64 payload; ROADMAP.md:466 overclaims. Needs a maintainer decision (it changes the type system + ABI), not a unilateral change. | memory.md:3628 |
-| 5 | **M2d — arrays as generic arguments** | OPEN. `idc([1, 2])` cannot be used (`.length` on a non-struct). Inference would need `T = Array(i64)`; probe first whether generic instantiation over an array type works end-to-end before enabling inference. | `src/main.cpp` exprFlintType `case NodeKind::Array` |
+| 5 | **M2d — arrays as generic arguments** | **DONE** (the AST path already inferred `array(i64)`; the emit path now does too — commit 361d810). `idc([1, 2])` instantiates T = array(i64) and `z[1]` reads 2. (An earlier probe of mine was wrong: `.length` is not a field in this dialect.) | `src/main.cpp` `exprFlintType` + `Parser::emitDirectCall` inference |
 | 6 | **P4 ship list** | OPEN: signed release tags (repo has 0 tags), SBOM, error-code docs, semver freeze. `v1_gate_check.sh` exists and reports 12/12 **after** `bash tests/test_selfhost.sh` once (self-host binaries must exist). | memory.md:1604, 1624 |
 | 7 | **Environment-bound (cannot finish on this device)** | QBE backend needs an external `qbe` binary (path unverified, exit 127); Windows/macOS real runs + CI never executed from here; WASM objects are valid but there is no WASI execution; nightly/coverage-guided fuzz runs are not wired to any CI runner (the corpus + `tests/test_fuzz_corpus.sh` exist and pass). | memory.md:946, 1602 |
 | 8 | **M7 `[T]` containers** | DEFERRED by maintainer decision (2026-10-19). Needs the Rust `{length, elem_size, ptr}` representation (§4) plus an explicit ABI decision. Do NOT start without that decision. | memory.md:3711, 3934 |
+
+**New finding (2026-10-20): the C++ "single-pass emit path" is UNREACHABLE.**
+`Parser::emitXxx` is entered only from `Codegen::emitFunction` for a function
+with no AST body, and in a normal compile every function has one. Measured
+with the `FLINT_TRACE_EMITPATH=1` probe (added in commit 361d810): 0 hits over
+all 137 corpus `.fl` files. Consequences:
+- Fixes applied to that path are harmless but not load-bearing. The ledger
+  doctrine "every fix must land in both C++ paths" overstates the risk.
+- The REAL second implementation is the SELF-HOST Flint pipeline
+  (`stage2/flint_parse.fl` + `stage3/flint_emit.fl`) — an independent
+  implementation the differential gate compares against. It has NO traits,
+  NO generics, and no `::<` syntax, so recent C++ features are not yet
+  available to the self-hosted toolchain. That gap is the one that matters.
+- Measurement command: `FLINT_TRACE_EMITPATH=1 ./flintc <file>.fl` prints
+  `[emit-path] function <name>` if the path is ever entered.
 
 **Closed since the audit (do not re-open):**
 - N1 (payload-enum `match` in a non-`main` function hung the compiler) — FIXED
@@ -107,28 +122,30 @@ a single fixture diff.
   itself is unchanged (documented, not a bug).
 
 ### Recommended order
-1 → 2 → 3 → 5 → 6 → (4 and 7 need decisions/other machines) → 8 only after a
-maintainer ABI decision.
+3 (M2c silent defaults) → 6 (P4 ship list) → (4 and 7 need decisions/other
+machines) → 8 only after a maintainer ABI decision. Items 1, 2 and 5 are
+DONE (commits 3d3d914, fd8cf09, 361d810).
 
 ---
 
 ## 3. NEXT (concrete)
 
-1. **M2b explicit type arguments** (`f::<T>(...)`):
-   - Syntax decision: `::` must be lexed or contextually detected. The M3
-     precedent (`trait`) is CONTEXTUAL parsing with NO lexer keyword — follow
-     it, so `lexdiff`/`parse_gate` stay byte-identical.
-   - Semantics: explicit type args override inference; they must feed the
-     SAME instantiation path (`mangle` + `specialize` + `genericCache`) so
-     `f::<f64>(2.5)` and `f(2.5)` agree.
-   - Gate: `tests/t_generic_infer.fl` gains an explicit-type-arg case; all
-     gates green; error message names the parameter when the explicit type
-     contradicts the argument.
-2. **`let h = inc` named-fn-as-value**: a named function used as a value needs
-   an adapter: a thunk `{fnptr, ...}` like the lambda env box, so `h(3)` is an
-   indirect call through the same path lambdas use. Reuse M4's box protocol
-   (`src/main.cpp` `emitLambdaDef` / `emitCall` fn-typed branch).
-3. Then the M2c/M2d residue and the P4 ship list.
+1. **M2c — delete the remaining silent i64 defaults.** The generic inference no
+   longer defaults for cast/call/array arguments, but `exprFlintType`'s
+   default arm, the unknown-variable fallback and the binary-without-`+`
+   fallback still answer i64 where the truth is unknown. Turning them into
+   errors must keep the self-host fixed point green (131 cases) — the
+   fixpoint gate is the oracle. Change ONE fallback at a time and run the
+   full gate set after each.
+2. **P4 ship list**: signed release tags (the repo has 0 tags), an SBOM, the
+   error-code documentation, and a semver freeze. `v1_gate_check.sh` exists
+   and reports 12/12 — but only after `bash tests/test_selfhost.sh` has
+   built the self-host binaries (they live in tmp and get cleaned).
+3. **The self-host pipeline gap** (see the finding above): the C++ compiler
+   now has traits, generic cast/call inference, `::<` and named-function
+   values; `stage2/flint_parse.fl` + `stage3/flint_emit.fl` have none of
+   them. Either port the features to the Flint pipeline or state the gap in
+   COMPATIBILITY.md as a known divergence.
 
 ---
 
