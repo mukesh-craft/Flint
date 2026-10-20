@@ -3928,7 +3928,7 @@ which needs the Rust array representation (M7).
 | Item | State |
 |---|---|
 | M0, M1 | done |
-| M2 | partially done: param matching + f64 FCmp shipped; cast + nested-call args now infer (commit 3f062e4); STILL OPEN: explicit `f::<T>(...)` type args, deleting the remaining silent i64 defaults, arrays as generic arguments |
+| M2 | mostly done: param matching + f64 FCmp shipped; cast + nested-call args infer (3f062e4); explicit `f::<T>(...)` type args shipped (3d3d914); arrays as generic args work on the AST path and the emit path now infers them too (361d810). STILL OPEN: deleting the remaining silent i64 defaults |
 | P0-NEW-1 path collapse | **done** (compare/call/generic cores shared, commit below) |
 | P0-NEW-2 enum payload width | **done** (per-variant field compare, commit below) |
 | P0-NEW-3 tensor index check | **done** (narrow stop-gap, commit below) |
@@ -4074,3 +4074,40 @@ does not pay for the ABI change.
   "1 passed, 10 failed" with `self binaries` — that is a missing artifact,
   not a divergence. `test_no_hang.sh` (88 checks) is the gate that proves no
   corpus file hangs the compiler.
+
+# Addendum (2026-10-20, later) — M2b, the named-function value, and a finding
+  about the "two emit paths"
+
+- **M2b explicit type arguments (3d3d914).** `f::<T1, T2>(...)` states the
+  type arguments instead of inferring them. `::` is two COLON tokens to the
+  lexer, so no lexer change was needed and the token contract is untouched
+  (lexdiff 131 unchanged); nothing in the language used `::` before. Explicit
+  arguments override inference and feed the same instantiation path
+  (mangle + specialize + genericCache). Errors: wrong count, a non-generic
+  callee, a non-concrete type argument. Both C++ paths changed (AST and the
+  single-pass Parser). The fixture lives in tests_manual/ because the
+  self-hosted parser (stage2/flint_parse.fl) does not implement the syntax —
+  the same situation as the `trait` keyword.
+- **A named function can be a value (fd8cf09).** `let h = inc` now works.
+  A named function has no captures, so it joins the existing lambda protocol
+  through a THUNK: a generated wrapper with the same fn(env, args...) shape
+  that ignores its env argument and forwards to the real function. The call
+  site needs no discriminator, and the fn-value call path is unchanged. The
+  box lives in the current frame, so the escape rules apply (it cannot be
+  returned or stored in a global). A generic function as a value is refused
+  by name.
+- **FINDING — the C++ "single-pass emit path" is UNREACHABLE (361d810).**
+  The doctrine in this file (and in STATE.md) says every fix must land in
+  both C++ paths, because "comparison emission, call emission and generic
+  inference each exist TWICE". They DO exist twice, but the second copy
+  (Parser::emitXxx) is entered only from `Codegen::emitFunction` for a
+  function with no AST body — and in a normal compile every function has
+  one. Measured with the FLINT_TRACE_EMITPATH probe added in 361d810: over
+  all 137 corpus .fl files, ZERO hits. So:
+  - fixes applied to that path are harmless but not load-bearing;
+  - the REAL second implementation is the SELF-HOST Flint pipeline
+    (stage2/flint_parse.fl + stage3/flint_emit.fl), which the differential
+    gate compares against and which is a genuine independent oracle;
+  - the self-host pipeline has NO traits, NO generics, and no `::<` — so
+    features added to the C++ compiler are not yet available to the
+    self-hosted toolchain. That gap is the one that matters now.
