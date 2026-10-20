@@ -355,6 +355,49 @@ is the one a future LSP or checker would inherit. Gate:
 `tests/test_type_audit.sh` (fails on a contract violation, reports the
 drift).
 
+**The NEXT slice, designed (so it is not re-derived): a loop-range
+analysis that feeds LLVM assumptions.**
+
+Why this is the next one: it is the only remaining item that attacks a
+MEASURED gap. `primes` improves 9 % while `sum_array` improves 37 %,
+and the difference is entirely the bound:
+
+- `sum_array`: `while i < n` and the array's length IS `n` -> the check
+  compares the index against the loop's own bound -> LLVM folds it.
+- `primes`: `while i * i <= limit` and the array's length is `limit + 1`
+  -> LLVM cannot derive `i <= limit + 1` from `i * i <= limit`, because
+  `i * i` may overflow in its reasoning. **The missing fact is
+  `0 <= i <= limit`** (for `i >= 0`, `i <= i * i`), and it is a RANGE
+  fact, not a length fact.
+
+Design (bounded, and the soundness conditions are the whole point):
+
+1. Recognise the loop shape: `while (COND) { BODY }` where COND is
+   `i < n`, `i <= n`, or `i * c <= n` (`c` a positive CONSTANT), `i` a
+   local integer variable, and `n` an expression.
+2. Establish the loop's induction variable and its range by checking
+   the PRECONDITION: `i` is initialised to a non-negative constant
+   before the loop; in the body `i` is only ever updated by
+   `i = i + k` with `k` a POSITIVE constant; and `i` is not captured
+   by anything that could change it (no address-of, no closure capture,
+   no other assignment).
+3. Inside the body, the range `[0, n]` (or `[0, n/c]`) holds. Emit it
+   as an LLVM assumption (`llvm.assume(i >= 0 && i <= n)`) so the
+   OPTIMIZER can use it: the bounds check folds, and the vectorizer gets
+   the trip-count range it needs.
+4. If ANY of the preconditions cannot be established, emit nothing.
+   **An unsound assumption is a miscompilation, which is worse than a slow
+   program.** The range analysis is therefore opt-in by construction:
+   it only fires on shapes it fully understands.
+5. Gate it the way the other safety properties are gated: a program whose
+   index is out of range must still trap (the assumption is about the
+   LOOP's own range, not about the array's length — the array's length
+   fact is separate and already tested).
+
+**Explicitly NOT in this slice:** general range analysis, symbolic
+execution, or anything that would need a fixpoint. The loop-range shape
+above is the whole scope.
+
 **Dead ends found while doing it (do not retry):**
 - The vestigial `IndexExprAST::unchecked` flag ("R2 BCE-lite: proven
   in-bounds") was never set anywhere — a dead field that claimed to
