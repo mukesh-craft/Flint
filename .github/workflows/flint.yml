@@ -53,6 +53,10 @@ jobs:
         run: bash tests/test_merge.sh ./flintc
       - name: Pipeline driver gate
         run: bash tests/test_driver.sh ./flintc
+      - name: Measurement gate (advisory: benchmarks + size report)
+        continue-on-error: true
+        run: |
+          bash tools/bench_gate.sh --json bench-current.json ||             echo "measurement gate reported a delta (advisory on CI; see tools/bench_gate.sh)"
       - name: Declaration-order tracker gate
         run: python3 tests/test_decl_order.py stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl driver/flintc.fl tools/merge_sexp.fl
       - name: Formatter gate (check + idempotency + parse-stability)
@@ -61,6 +65,8 @@ jobs:
         run: bash tests/test_errors.sh
       - name: C++ diagnostic-catalog sync gate
         run: bash tests/test_errors_cpp.sh
+      - name: Size-attribution gate (the compiler's own --print-size)
+        run: bash tests/test_print_size.sh ./flintc
       - name: Docs-table sync gate (README counts match tree)
         run: bash tools/docs_check.sh .
       - name: Cache-salt gate (flags/imports bust cache)

@@ -74,9 +74,8 @@ Regenerate: `python3 tools/errors_cpp.py --format md` (or
 - `cannot assign to immutable ' <...> '`
 - `cannot assign to immutable global ' <...> '`
 - `cannot bind a function value to a non-fn type`
-- `cannot bind a lambda value to a non-fn type`
 - `cannot bind function ' <...> ': declared signature differs from the function's signature`
-- `cannot bind lambda ' <...> ': declared signature differs from the lambda's fn type`
+- `cannot bind function value ' <...> ': declared signature differs from the value's fn type`
 - `cannot borrow moved variable ' <...> '`
 - `cannot call lambda ' <...> ' from a different function`
 - `cannot capture ' <...> '`
@@ -183,4 +182,4 @@ Regenerate: `python3 tools/errors_cpp.py --format md` (or
 - `variable ' <...> ' already declared`
 - `variable ' <...> ' not declared`
 
-Total: 135 diagnostics.
+Total: 134 diagnostics.

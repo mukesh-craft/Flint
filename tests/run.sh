@@ -53,6 +53,9 @@ check tests_manual/t_explicit_targs.fl "42"
 # M4 follow-up: a named function used as a value (`let h = inc`).
 check tests_manual/t_named_fn_value.fl "6"
 check tests_manual/t_named_fn_value.fl "10"
+# Copying a function VALUE into another binding keeps its fn type.
+check tests_manual/t_fn_value_copy.fl "6"
+check tests_manual/t_fn_value_copy.fl "10"
 check tests/t_types.fl "HELLO"
 check tests/t_types.fl "42"
 # util + time under JIT: these load .o files whose atomics must resolve in
