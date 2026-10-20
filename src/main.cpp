@@ -310,6 +310,236 @@ static bool gProgramUsesPython = false;
 
 static void markUsesPython() { gProgramUsesPython = true; }
 
+// ---------------------------------------------------------------------------
+// SIZE ATTRIBUTION (Phase 0 measurement infrastructure)
+//
+// "How big is this artifact, and what is in it?" answered by the compiler
+// itself, so the size consequence of a change is visible where the change
+// is made. Precedent: Bloaty (per compile-unit / symbol / section), cargo-
+// bloat (per crate), twiggy (monomorphization).
+//
+// The categories come from the ARTIFACT, not from a model: ELF sections,
+// symbol classes, dynamic dependencies, and the object set that was linked.
+// Nothing here guesses.
+//
+// NOTE on the two axes: "file bytes" (what the linker wrote) and
+// "attributed bytes" (what the symbols add up to) OVERLAP -- a function's
+// bytes are inside a section. They are reported separately on purpose, the
+// way Bloaty reports file size and VM size separately.
+struct SizeReport {
+    uint64_t fileBytes = 0;
+    uint64_t sectionBytes = 0;
+    uint64_t headerBytes = 0;   // ELF headers, symbol tables, relocations
+    uint64_t bssBytes = 0;      // reserved at startup, not stored in the file
+    uint64_t rustBytes = 0;     // Rust stdlib symbols (_R...)
+    uint64_t cruntimeBytes = 0; // C runtime symbols (flint_...)
+    uint64_t appBytes = 0;      // everything else (the program itself)
+    std::vector<std::pair<std::string, uint64_t>> sections;
+    std::vector<std::string> needed;   // DT_NEEDED entries
+    std::vector<std::string> objects;  // object files that were linked
+};
+
+// The objects the last link pulled in, recorded by spawnLinker.
+static std::vector<std::string> gLastLinkObjects;
+
+// Reads the artifact and fills the report.
+//
+// Sections come from the portable ObjectFile API; the symbol table and the
+// dynamic dependencies are parsed from the ELF bytes directly (this LLVM's
+// generic SymbolRef has no size, and its ELF accessor needs the file's class
+// resolved before it can be used). Everything is read from the artifact, so
+// the numbers cannot drift from what was actually produced.
+static bool readSizeReport(const std::string& path, SizeReport& out) {
+    uint64_t fileSize = 0;
+    if (llvm::sys::fs::file_size(path, fileSize)) return false;
+    out.fileBytes = fileSize;
+
+    auto parsed = llvm::object::ObjectFile::createObjectFile(path);
+    if (!parsed) return false;
+    llvm::object::ObjectFile* obj = parsed->getBinary();
+
+    for (const auto& sec : obj->sections()) {
+        uint64_t sz = sec.getSize();
+        auto nm = sec.getName();
+        std::string name = nm ? nm->str() : std::string();
+        if (name.empty()) continue;   // the ELF null section (index 0)
+        out.sections.push_back({name, sz});
+        out.sectionBytes += sz;
+        if (name == ".bss") out.bssBytes = sz;
+    }
+    if (out.fileBytes > out.sectionBytes)
+        out.headerBytes = out.fileBytes - out.sectionBytes;
+
+    // The raw bytes, for the symbol table and the dynamic section.
+    auto mb = llvm::MemoryBuffer::getFile(path);
+    if (!mb) return true;   // sections alone are still a useful report
+    llvm::StringRef bytes = mb.get()->getBuffer();
+    bool isElf = bytes.size() > 6 && bytes[0] == 0x7F && bytes[1] == 'E' &&
+                 bytes[2] == 'L' && bytes[3] == 'F';
+    if (!isElf) return true;
+    bool is64 = bytes[4] == 2;   // EI_CLASS: 1 = 32-bit, 2 = 64-bit
+
+    // Section contents by name, for .symtab / .strtab / .dynamic / .dynstr.
+    std::unordered_map<std::string, llvm::StringRef> contents;
+    for (const auto& sec : obj->sections()) {
+        auto nm = sec.getName();
+        if (!nm) continue;
+        auto c = sec.getContents();
+        if (c) contents[std::string(*nm)] = *c;
+    }
+
+    // Symbol attribution from .symtab.
+    auto symtab = contents.find(".symtab");
+    auto strtab = contents.find(".strtab");
+    if (symtab != contents.end() && strtab != contents.end()) {
+        llvm::StringRef st = symtab->second;
+        llvm::StringRef strs = strtab->second;
+        const size_t entSize = is64 ? 24 : 16;
+        const size_t hdrSize = is64 ? 24 : 16;
+        if (st.size() >= hdrSize) {
+            size_t n = (st.size() - hdrSize) / entSize;
+            for (size_t i = 0; i < n; i++) {
+                llvm::StringRef e = st.substr(hdrSize + i * entSize, entSize);
+                uint64_t nameOff = 0, size = 0;
+                if (is64) {
+                    uint32_t no = 0;
+                    std::memcpy(&no, e.data(), 4);
+                    std::memcpy(&size, e.data() + 16, 8);
+                    nameOff = no;
+                } else {
+                    uint32_t no = 0;
+                    std::memcpy(&no, e.data(), 4);
+                    std::memcpy(&size, e.data() + 8, 4);
+                    nameOff = no;
+                }
+                if (!size || nameOff >= strs.size()) continue;
+                llvm::StringRef name = strs.substr(nameOff).split('\0').first;
+                if (name.empty()) continue;
+                if (name.starts_with("_R")) out.rustBytes += size;
+                else if (name.starts_with("flint_")) out.cruntimeBytes += size;
+                else out.appBytes += size;
+            }
+        }
+    }
+
+    // Dynamic dependencies from .dynamic + .dynstr.
+    auto dyn = contents.find(".dynamic");
+    auto dynstr = contents.find(".dynstr");
+    if (dyn != contents.end() && dynstr != contents.end()) {
+        llvm::StringRef d = dyn->second;
+        llvm::StringRef ds = dynstr->second;
+        const size_t entSize = is64 ? 16 : 8;
+        size_t n = d.size() / entSize;
+        for (size_t i = 0; i < n; i++) {
+            llvm::StringRef e = d.substr(i * entSize, entSize);
+            uint64_t tag = 0, val = 0;
+            if (is64) {
+                int64_t t = 0, v = 0;
+                std::memcpy(&t, e.data(), 8);
+                std::memcpy(&v, e.data() + 8, 8);
+                tag = (uint64_t)t; val = (uint64_t)v;
+            } else {
+                uint32_t t = 0, v = 0;
+                std::memcpy(&t, e.data(), 4);
+                std::memcpy(&v, e.data() + 4, 4);
+                tag = t; val = v;
+            }
+            if (tag == 0) break;            // DT_NULL
+            if (tag == 1) {                 // DT_NEEDED
+                if (val < ds.size())
+                    out.needed.push_back(ds.substr(val).split('\0').first.str());
+            }
+        }
+    }
+    return true;
+}
+
+static void printSizeReport(const SizeReport& r, const std::string& path) {
+    auto kb = [](uint64_t v) { return v / 1024.0; };
+    std::cout << "size: " << path << "\n";
+    std::cout << "  file bytes:      " << r.fileBytes
+              << " (" << std::fixed << std::setprecision(1) << kb(r.fileBytes) << " KB)\n";
+    std::cout << "  section bytes:   " << r.sectionBytes << "\n";
+    std::cout << "  header/metadata: " << r.headerBytes << "\n";
+    std::cout << "  .bss reserved:   " << r.bssBytes << " (not in the file)\n";
+    std::cout << "  attributed (symbols, overlaps sections):\n";
+    std::cout << "    Rust stdlib:    " << r.rustBytes << "\n";
+    std::cout << "    C runtime:     " << r.cruntimeBytes << "\n";
+    std::cout << "    application:   " << r.appBytes << "\n";
+    std::cout << "  sections:";
+    for (auto& sec : r.sections)
+        std::cout << " " << sec.first << "=" << sec.second;
+    std::cout << "\n";
+    std::cout << "  dynamic deps:";
+    if (r.needed.empty()) std::cout << " (none)";
+    for (auto& d : r.needed) std::cout << " " << d;
+    std::cout << "\n";
+    std::cout << "  objects offered to the linker (unused ones are dropped by"
+                 " --gc-sections):";
+    for (auto& o : r.objects) std::cout << " " << o;
+    std::cout << "\n";
+}
+
+static void writeSizeReportJson(const SizeReport& r, const std::string& path) {
+    std::error_code ec;
+    llvm::raw_fd_ostream os(path, ec);
+    if (ec) { std::cerr << "cannot write size report: " << ec.message() << "\n"; return; }
+    auto esc = [](const std::string& s) {
+        std::string o;
+        for (char c : s) {
+            if (c == '"' || c == '\\') { o += '\\'; o += c; }
+            else if (c == '\n') o += "\\n";
+            else o += c;
+        }
+        return o;
+    };
+    os << "{\n";
+    os << "  \"file_bytes\": " << r.fileBytes << ",\n";
+    os << "  \"section_bytes\": " << r.sectionBytes << ",\n";
+    os << "  \"header_bytes\": " << r.headerBytes << ",\n";
+    os << "  \"bss_bytes\": " << r.bssBytes << ",\n";
+    os << "  \"attributed\": {\"rust\": " << r.rustBytes
+       << ", \"c_runtime\": " << r.cruntimeBytes
+       << ", \"application\": " << r.appBytes << "},\n";
+    os << "  \"sections\": {";
+    bool first = true;
+    for (auto& sec : r.sections) {
+        if (!first) os << ",";
+        first = false;
+        os << "\"" << esc(sec.first) << "\": " << sec.second;
+    }
+    os << "},\n";
+    os << "  \"needed\": [";
+    for (size_t i = 0; i < r.needed.size(); i++) {
+        if (i) os << ",";
+        os << "\"" << esc(r.needed[i]) << "\"";
+    }
+    os << "],\n";
+    os << "  \"objects_offered\": [";
+    for (size_t i = 0; i < r.objects.size(); i++) {
+        if (i) os << ",";
+        os << "\"" << esc(r.objects[i]) << "\"";
+    }
+    os << "]\n}\n";
+}
+
+// --print-size / --print-size-json=<path>: report the artifact's size
+// attribution after the link. Off by default; never implied by anything.
+static bool gPrintSize = false;
+static std::string gPrintSizeJsonPath;
+
+static void maybeReportSize(const std::string& outputPath) {
+    if (!gPrintSize && gPrintSizeJsonPath.empty()) return;
+    SizeReport rep;
+    if (!readSizeReport(outputPath, rep)) {
+        std::cerr << "size: cannot read " << outputPath << "\n";
+        return;
+    }
+    rep.objects = gLastLinkObjects;
+    if (gPrintSize) printSizeReport(rep, outputPath);
+    if (!gPrintSizeJsonPath.empty()) writeSizeReportJson(rep, gPrintSizeJsonPath);
+}
+
 static bool spawnLinker(const std::string& objPath, const std::string& outputPath,
                         const std::string& extraFlags = "", bool useBlas = true) {
     if (!isSafePath(objPath) || !isSafePath(outputPath)) {
@@ -376,8 +606,10 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     if (needsCurl) addLib("libcurl.so", "-lcurl");
 
     // Include standard library .o files if they exist
+    gLastLinkObjects.clear();
+    gLastLinkObjects.push_back("runtime.o");
     for (auto* lib : stdLibs) {
-        if (stat(lib, &st) == 0) args.push_back(lib);
+        if (stat(lib, &st) == 0) { args.push_back(lib); gLastLinkObjects.push_back(lib); }
     }
 
     // OpenBLAS, when it is installed. flint_blas.o references cblas_dgemm
@@ -2197,6 +2429,25 @@ struct Symbol {
     // the callee from field 0 and passes the box itself as the first arg.
     llvm::Value* lambdaEnv = nullptr;
     llvm::StructType* lambdaBoxTy = nullptr;
+
+    // ONE predicate for "is this binding a function VALUE?", used by every
+    // site that asks: binding a value, storing one in a global, returning
+    // one, and calling one.
+    //
+    // The three sites that used to answer this question each spelled it
+    // differently -- one required isLambda AND a fn type, another required
+    // NOT isLambda AND a fn type, a third accepted either -- and the
+    // divergence was not theoretical: copying a NAMED function's value into
+    // another binding (g = h) lost the fn type and the program then failed
+    // with "undefined function 'g'".
+    //
+    // A lambda binding is a function value; so is any binding whose type
+    // is a fn type (that covers the named-function values added after M4).
+    static bool isFunctionValue(const Symbol* sym) {
+        if (!sym) return false;
+        if (sym->isLambda) return true;
+        return sym->type.kind == TypeKind::Func;
+    }
 };
 
 class SymbolTable {
@@ -6754,8 +7005,7 @@ public:
                     if (a->rhs->kind == NodeKind::Variable) {
                         auto* vn = static_cast<VariableExprAST*>(a->rhs.get());
                         auto* srcSym = symTable.lookup(vn->name);
-                        if (srcSym && (srcSym->isLambda ||
-                            (!srcSym->isLambda && srcSym->type.kind == TypeKind::Func)))
+                        if (Symbol::isFunctionValue(srcSym))
                             return codegenError("cannot store a function value into global '" + a->varName + "': it would escape its defining frame");
                     }
                     auto* val = emitExpr(a->rhs.get());
@@ -7349,16 +7599,16 @@ public:
                     lty = llvmType(rt, *ctx, mod.get());
                 }
             }
-            if (cs && cs->isLambda && cs->type.kind == TypeKind::Func) {
+            if (Symbol::isFunctionValue(cs)) {
                 Type ann = resolveType(decl->varType);
                 if (ann.kind == TypeKind::Func) {
                     if (!(ann == cs->type)) {
-                        codegenError("cannot bind lambda '" + vn->name +
-                            "': declared signature differs from the lambda's fn type");
+                        codegenError("cannot bind function value '" + vn->name +
+                            "': declared signature differs from the value's fn type");
                         return;
                     }
                 } else if (ann.kind != TypeKind::I64 && ann.kind != TypeKind::Void) {
-                    codegenError("cannot bind a lambda value to a non-fn type");
+                    codegenError("cannot bind a function value to a non-fn type");
                     return;
                 }
                 rt = cs->type;
@@ -7472,7 +7722,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 auto gvit = globalSymTable.find(vn->name);
                 if (gvit != globalSymTable.end()) gs = &gvit->second;
                 const Symbol* cs = srcSym ? srcSym : gs;
-                if (cs && (cs->isLambda || (!cs->isLambda && cs->type.kind == TypeKind::Func))) {
+                if (Symbol::isFunctionValue(cs)) {
                     codegenError("cannot return a function value: it would escape its defining frame");
                     return;
                 }
@@ -12780,6 +13030,10 @@ int main(int argc, char* argv[]) {
             // a cached binary would skip the tests silently.)
             testModeFlag = true;
             runMode = false;
+        } else if (arg == "--print-size") {
+            gPrintSize = true;
+        } else if (arg.rfind("--print-size-json=", 0) == 0) {
+            gPrintSizeJsonPath = arg.substr(std::strlen("--print-size-json="));
         } else if (arg == "--check-bce") {
             checkBce = true; // diagnostic only: report check counts, change nothing
         } else if (arg == "--loop-opt") {
@@ -12841,6 +13095,8 @@ int main(int argc, char* argv[]) {
             << "  --safe, --release        Explicit safety posture (no-ops, compat)\n\n"
             << "DIAGNOSTICS AND MODES\n"
             << "  --check-bce              Report bounds-check counts (changes nothing)\n"
+            << "  --print-size             Report the artifact's size attribution after linking\n"
+            << "  --print-size-json=PATH   Write the same attribution as JSON to PATH\n"
             << "  --test                   Run test_ functions after JIT compile\n"
             << "  --dump-tokens <path>     Write the stable token dump and exit\n"
             << "  --run                    Explicit JIT run (the default)\n"
@@ -12992,6 +13248,7 @@ int main(int argc, char* argv[]) {
                 PROFILE_END(); // codegen_output
                 PROFILE_BEGIN("link");
                 if (!spawnLinker(objectPath, outputPath, linkFlags)) return 1;
+                maybeReportSize(outputPath);
                 PROFILE_END(); // link
                 cache.saveBinary(sourceHash, outputPath);
                 unlink(objectPath.c_str());
@@ -13189,6 +13446,7 @@ int main(int argc, char* argv[]) {
                     std::cerr << "linking failed\n";
                     return 1;
                 }
+                maybeReportSize(outputPath);
                 PROFILE_END(); // link
                 unlink(objectPath.c_str());
             }
@@ -13432,6 +13690,7 @@ int main(int argc, char* argv[]) {
                 std::cerr << "linking failed\n";
                 return 1;
             }
+            maybeReportSize(outputPath);
             PROFILE_END(); // link
             cache.saveBinary(sourceHash, outputPath);
             unlink(objectPath.c_str());

@@ -184,34 +184,44 @@ wrong. The ledgers are only useful while they are corrected in place.
 Ordered by engineering value. "Verify" is the command that shows the item is
 still open; "done" is the observable state that closes it.
 
-### 4.1 P0 — Measurement infrastructure (roadmap Phase 0)
+### 4.1 P0 — Measurement infrastructure (roadmap Phase 0) — PARTLY DONE
 
-**What**: the benchmark harnesses exist (`tools/bench_compare.sh`,
-`tools/bench_tooling.sh`, `benchmarks/*.rs`) but nothing runs them
-automatically, nothing keeps history, and the compiler cannot report its
-own size attribution.
+**Done (2026-10-20)**:
+- `flintc --print-size` — the compiler reports its own artifact's size
+  attribution: file bytes, section bytes, header/metadata bytes, `.bss`
+  reserved, per-class symbol attribution (Rust stdlib / C runtime /
+  application), the section list, the dynamic dependency list, and the
+  objects offered to the linker. `--print-size-json=PATH` writes the same
+  data as JSON. Every number is read from the artifact, so it cannot drift
+  from what was produced.
+- `tests/test_print_size.sh` — a gate that checks the report is TRUE: the
+  reported size must equal the file on disk, sections must fit inside the
+  file, the dependency list must mention libc, and the JSON must parse and
+  agree with the text form.
+- `tools/bench_gate.sh` — the measurement gate: runs the workloads, writes
+  a per-commit summary, and fails when runtime > +3 %, binary > +5 % or
+  compile time > +10 % against a baseline. Baselines are **per machine**
+  (absolute timings are machine-specific — a published suite measured a 41 %
+  run-to-run spread on one laptop and 15 % on another while its *verdicts*
+  reproduced), so a baseline from another machine is refused rather than
+  silently compared.
+- CI: the size gate runs as a required step; the measurement job is
+  **advisory** until a per-runner baseline exists.
 
-**Why**: two invisible regressions (the 743 KB binary; the BLAS matmul
-falling back to the portable loop, 5× slower, still *correct*) both passed a
-fully green test suite. Nothing else in this file is safe to plan against
-until this exists.
+**Still open**:
+- A *history* (the JSON per commit is produced, but nothing accumulates or
+  charts it yet) and a dashboard page.
+- The runtime dashboard should cover more than two workloads (the roadmap
+  §21 list: allocation, strings, collections, concurrency, networking, and
+  one realistic application).
+- `--print-size` should also report the **monomorphization** share
+  (twiggy's `monos` idea): how many bytes are duplicated generic
+  instantiations. That is the one contributor in the size analysis that is
+  currently unmeasurable.
+- The gate thresholds are advisory on CI until a per-runner baseline is
+  committed.
 
-**Do**:
-1. `flintc --print-size` → a machine-readable size attribution (see §6.3
-   for the shape, and the precedent: Bloaty / cargo-bloat / twiggy
-   attribute per symbol, per section, per compile unit, and flag
-   monomorphized instantiations).
-2. A CI job that runs the two harnesses and publishes per-commit JSON:
-   runtime per workload, stripped size, section sizes, `.bss`, dependency
-   list, compile time, and `--check-bce` counts.
-3. Thresholds that fail the build: runtime > +3 %, binary > +5 %, compile
-   time > +10 %, safety checks increased.
-
-**Done when**: a commit that changes runtime or size shows up in the
-dashboard, and a deliberately bad change *fails* the gate.
-
-**Verify it is still open**: `ls tools/bench_*.sh` (present),
-`./flintc --help | grep print-size` (absent).
+**Verify**: `bash tests/test_print_size.sh` and `bash tools/bench_gate.sh`.
 
 ### 4.2 P0 — Typed HIR/MIR (roadmap Phase 2)
 
@@ -530,7 +540,27 @@ the domain for completion and hints; **diagnostics never change**.
 - **Domain-aware specialization without weakening guarantees** — only
   credible if §6.5's separation holds.
 
-### 6.7 Decision log
+### 6.7 A defect the code-quality pass found (and the rule it revealed)
+
+`g = h; g(5)` — copying a *named function's* value into another binding —
+failed with **"undefined function 'g'"**. The value was bound with a pointer
+type instead of a fn type, so the call site could not recognise it.
+
+Root cause: **three sites answered "is this binding a function value?" with
+three different rules** — one required `isLambda && fnType`, another required
+`!isLambda && fnType`, a third accepted either. The binding site used the
+first, so named-function values (added after M4) were never recognised.
+
+Fix: one predicate, `Symbol::isFunctionValue(sym)`, used by every site that
+asks the question (binding, storing in a global, returning, calling). The
+regression fixture is `tests_manual/t_fn_value_copy.fl`.
+
+This is the *same* failure shape as the P0-NEW-1 drift (two copies of one
+rule) and as the three wrong ledger claims (§3.1): **a rule that is written
+down more than once is a rule that will disagree with itself.** The fix is
+not to write the rule correctly three times; it is to write it once.
+
+### 6.8 Decision log
 
 | decision | rationale | rejected alternative |
 |---|---|---|
@@ -541,6 +571,7 @@ the domain for completion and hints; **diagnostics never change**.
 | Domains are a data table, not code paths | keeps "adding a domain" from forking the compiler | a dialect framework (MLIR-style) |
 | No second ownership system | leases are the user-facing model | borrow checker + leases |
 | Measure before optimizing; the 743 KB binary proved it | two regressions passed a green suite | optimize the latest compiler blindly |
+| One predicate for "is this a function value?" (`Symbol::isFunctionValue`) | three sites spelled it differently and a copy of a function value lost its type | keep the three ad-hoc rules |
 
 ### 6.8 Known dead ends (do not retry)
 
