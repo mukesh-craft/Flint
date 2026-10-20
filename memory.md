@@ -4151,3 +4151,44 @@ does not pay for the ABI change.
   self-host pipeline too or is listed there. Porting them is a project of
   its own (stage2 is 4.1k lines, stage3 is 7.6k); it is a feature gap, not
   a miscompile in either compiler.
+
+# Addendum (2026-10-20, assessment) — a measured language/compiler roadmap
+
+`docs/LANGUAGE-ROADMAP.md` (30 sections) is the engineering assessment and
+roadmap. Every claim in it is labelled by kind: [M] measured, [P]
+published, [R] reported, [I] inference, [D] design, [S] speculation. It is
+the companion to this ledger, `STATE.md` (pick-up guide) and
+`COMPATIBILITY.md` (divergence log).
+
+- **The binary-size regression was found, root-caused and fixed (46a007e).**
+  A hello-world linked to 743,520 B (565,600 B stripped) — 130x C — and
+  reserved 72 MB of `.bss` in every process, because the link line had no
+  `-Wl,--gc-sections` (the runtime objects were already compiled with
+  `-ffunction-sections`, so the capability existed) and linked sqlite3,
+  curl and openblas unconditionally. After the fix: 8,048 B raw / 4,536 B
+  stripped (C: 4,368 B), `.bss` 24 B, and ONE dynamic dependency (libc).
+  Two traps found on the way: the compiler CACHES THE LINKED BINARY by
+  source hash, so a stale artifact can survive a source fix; and
+  `--as-needed` ignores WEAK undefined symbols, which silently demoted the
+  BLAS matmul to the portable loop (n=200: 14.4 s instead of 2.9 s) — a
+  5x regression no test caught, because the results were still correct.
+- **Measured performance baseline** (this device, `tools/bench_compare.sh`):
+  sum_array 10M 19.1 ms (C 10.1), primes 10M 495 ms (C 220), fib(45) 12.9 s
+  (C 9.6), pi 100M 779 ms (C 783 — parity). Build 144 ms (C 439, Rust
+  674); cold start 37 ms (C 33). `--unsafe` removes 13% of sum_array and
+  2.5% of primes, so checks are at most 13% of the integer-loop gap; the
+  remaining ~1.6x is NOT yet explained, and §4.5 of the roadmap defines
+  the experiment (compare optimized IR against C's) that will explain it.
+- **Where the safety cost actually is** (`--check-bce`): checks die when
+  the bound is provable in the same function (100% eliminated for a
+  constant-trip-count loop) and survive when the array length is a separate
+  loaded value (sum_array: 3 of 6 survive). The fix is to make the length
+  and the loop bound the SAME SSA value (the "reslicing" technique), which
+  needs no new IR.
+- **The roadmap's order** (measure -> recover -> unify -> safety -> type
+  system -> optimization -> size -> tooling -> ecosystem -> domains):
+  Phase 0 is measurement infrastructure (CI benchmarks + size attribution
+  + the safety dashboard) because two invisible regressions in this
+  assessment prove the gap. Phase 1 is the now-shipped link fix plus the
+  IR comparison. Phase 2 is a typed HIR — the precondition for range
+  analysis, escape analysis, capability types, and a non-drifting LSP.
