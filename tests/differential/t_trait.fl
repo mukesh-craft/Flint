@@ -1,0 +1,26 @@
+# 2E.4: the trait form in the pipeline.
+#
+# A trait carries SIGNATURES only; the implementation is an ordinary
+# function with the same name, and the call site resolves by name +
+# arity (the C++ compiler's M3 rule). The C++ compiler is the oracle.
+#
+# KNOWN LIMITATION (the pipeline's function table has one entry per
+# name, so two implementations of the same method name cannot coexist
+# here; the C++ compiler allows them and filters on the receiver's
+# type). This fixture therefore uses one implementation per method.
+
+struct Circle { r: i64 }
+
+trait Shape {
+    fn area(self) -> i64
+}
+
+fn area(c: Circle) -> i64 {
+    return c.r * c.r * 3
+}
+
+fn main() {
+    c = Circle { r: 2 }
+    print(c.area())
+    0
+}

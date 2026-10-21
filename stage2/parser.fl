@@ -2510,39 +2510,132 @@ fn p_top(out) -> i64 {
 fn p_top_ident(out) -> i64 {
     name = p_text()
     p_next()
-    if p_kind() == 50 {
-        # name( ... — paren-depth scan decides def vs call.
-        if p_scan_paren_def() == 1 {
-            e = p_fn_nokey(name)
+    if name == "trait" {
+        # A TRAIT declaration: `trait Name { fn m(self) -> T ... }`.
+        # `trait` is a contextual keyword (an identifier to the lexer),
+        # exactly as in the C++ compiler.
+        if p_kind() == 1 {
+            e = p_trait_decl()
             p_emit_top(out, e)
         } else {
-            # Rewind to the ident; parse as an expression statement.
             flint_vec_set(PC, 0, p_pos() - 1)
-            e = p_expr()
-            if p_is_err(e) == 1 {
+            e2 = p_expr()
+            if p_is_err(e2) == 1 {
                 0
             } else {
-                p_emit(out, "(expr " + e + ") ")
+                p_emit(out, "(expr " + e2 + ") ")
                 1
             }
         }
     } else {
-        if p_kind() == 1 {
-            # name IDENT — flat scan decides bare def vs error cascade.
-            if p_scan_flat_def() == 1 {
-                e = p_fn_bare(name)
+        if p_kind() == 50 {
+            # name( ... — paren-depth scan decides def vs call.
+            if p_scan_paren_def() == 1 {
+                e = p_fn_nokey(name)
                 p_emit_top(out, e)
             } else {
-                # Not a def: rewind and parse as statements (C++ parses
-                # on and reports; progress is guaranteed).
+                # Rewind to the ident; parse as an expression statement.
+                flint_vec_set(PC, 0, p_pos() - 1)
+                e = p_expr()
+                if p_is_err(e) == 1 {
+                    0
+                } else {
+                    p_emit(out, "(expr " + e + ") ")
+                    1
+                }
+            }
+        } else {
+            if p_kind() == 1 {
+                # name IDENT — flat scan decides bare def vs error cascade.
+                if p_scan_flat_def() == 1 {
+                    e = p_fn_bare(name)
+                    p_emit_top(out, e)
+                } else {
+                    # Not a def: rewind and parse as statements (C++ parses
+                    # on and reports; progress is guaranteed).
+                    flint_vec_set(PC, 0, p_pos() - 1)
+                    p_stmt(out, 1)
+                }
+            } else {
+                # All other IDENT-led forms (decls, assigns, calls, vars).
                 flint_vec_set(PC, 0, p_pos() - 1)
                 p_stmt(out, 1)
             }
-        } else {
-            # All other IDENT-led forms (decls, assigns, calls, vars).
-            flint_vec_set(PC, 0, p_pos() - 1)
-            p_stmt(out, 1)
         }
+    }
+}
+# A TRAIT declaration. The members are SIGNATURES only (no bodies), which
+# is the C++ compiler's M3 rule: the trait declares the method NAMES and
+# their arity, and the implementations are ordinary functions that the
+# call site resolves by name + arity. The parameter and return types are
+# parsed (so a malformed signature is an error) and then dropped -- the
+# C++ compiler drops them too (`if (match(TokenType::COLON)) parseType();`
+# -- signatures only).
+#
+# Emits: (trait Name ( (m1 1) (m2 2) ))
+fn p_trait_decl() -> str {
+    # The current token is the trait NAME: the `trait` keyword was
+    # consumed by the caller.
+    if p_kind() == 1 {
+        tname = p_text()
+        p_next()
+        if p_accept(52) == 0 {
+            p_note_err()
+            return ""
+        }
+        mut methods: str = ""
+        mut go: i64 = 1
+        while go == 1 {
+            if p_kind() == 53 {
+                go = 0
+            } else {
+                if p_kind() == 0 {
+                    go = 0
+                } else {
+                    if p_kind() == 14 {
+                        p_next()
+                        if p_kind() == 1 {
+                            mname = p_text()
+                            p_next()
+                            if p_accept(50) == 0 {
+                                p_note_err()
+                                return ""
+                            }
+                            # The parameter list and the return type are
+                            # KEPT in the S-expression: the pretty-printer
+                            # has to reproduce the source's token stream
+                            # exactly (the fixpoint gate compares it), and
+                            # a dropped type would change the tokens.
+                            params = p_params()
+                            if p_accept(51) == 0 {
+                                p_note_err()
+                                return ""
+                            }
+                            mut ret: str = "-"
+                            if p_accept(64) == 1 {
+                                ret = p_type_token()
+                            }
+                            methods = methods + " (" + mname + " (" + params + ") " + ret + ")"
+                        } else {
+                            p_note_err()
+                            p_next()
+                        }
+                    } else {
+                        p_note_err()
+                        p_next()
+                    }
+                }
+            }
+        }
+        if p_accept(53) == 0 {
+            p_note_err()
+            return ""
+        }
+        "(trait " + tname + " (" + methods + "))"
+    } else {
+        p_note_err()
+        p_next()
+        ""
     }
 }
 # ---- pretty-printer base (S-expr cursor + atoms + dispatch) ----
@@ -3386,6 +3479,59 @@ fn pp_read_tparams(src: str) -> str {
     }
 }
 # (params...) RET BODY — shared by fn and fn-decl.
+# (trait NAME ( (m (params) ret) ... )) -> the source text. The trait's
+# method signatures are printed back verbatim (name, parameters, return
+# type), so the token stream round-trips exactly.
+fn pp_trait_text(src: str) -> str {
+    PPPREC = 100
+    nm = pp_word(src)
+    pp_skip(src)
+    if pp_peek(src) != 40 {
+        return "trait " + nm
+    }
+    pp_adv(src)
+    sb = flint_sb_new()
+    flint_sb_append(sb, "trait " + nm + " {")
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        if pp_peek(src) == 41 {
+            go = 0
+        } else {
+            if pp_peek(src) == 40 {
+                pp_adv(src)
+                pp_skip(src)
+                mn = pp_word(src)
+                pp_skip(src)
+                ps = pp_params_text(src)
+                pp_skip(src)
+                ret = pp_word(src)
+                # the method group's closing paren
+                pp_skip(src)
+                if pp_peek(src) == 41 {
+                    pp_adv(src)
+                }
+                mut h: str = "fn " + mn + " (" + ps + ")"
+                if ret != "-" {
+                    h = h + " -> " + ret
+                }
+                flint_sb_append(sb, "\n " + h)
+            } else {
+                go = 0
+            }
+        }
+    }
+    # the methods group's closing paren: the cursor must end on the
+    # form's own closing paren, which the caller consumes.
+    pp_skip(src)
+    if pp_peek(src) == 41 {
+        pp_adv(src)
+    }
+    flint_sb_append(sb, "\n}")
+    r = flint_sb_build(sb)
+    flint_sb_free(sb)
+    r
+}
 fn pp_fn_text(nm: str, tp: str, src: str) -> str {
     PPPREC = 100
     ps = pp_params_text(src)
@@ -3763,17 +3909,21 @@ fn pp_tagged7(src: str, tag: str) -> str {
                                             PPPREC = 100
                                             pp_tagged6(src, "fn")
                                         } else {
-                                            if tag == "expr" {
-                                                e = pp_node(src)
-                                                PPPREC = 100
-                                                e
+                                            if tag == "trait" {
+                                                pp_trait_text(src)
                                             } else {
-                                                if tag == "prog" {
+                                                if tag == "expr" {
+                                                    e = pp_node(src)
                                                     PPPREC = 100
-                                                    pp_seq(src)
+                                                    e
                                                 } else {
-                                                    PERR = PERR + 1
-                                                    ""
+                                                    if tag == "prog" {
+                                                        PPPREC = 100
+                                                        pp_seq(src)
+                                                    } else {
+                                                        PERR = PERR + 1
+                                                        ""
+                                                    }
                                                 }
                                             }
                                         }

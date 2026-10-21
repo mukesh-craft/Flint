@@ -203,6 +203,13 @@ EARGCODE = flint_vec_new()
 mut EARGTEXT: str = ""
 # The inferred type argument codes of one template call.
 ECODES = flint_vec_new()
+# The trait method names. A trait declares SIGNATURES only: the method
+# names and their arity. The implementations are ordinary functions, and
+# a call site resolves by NAME + ARITY (the C++ compiler's M3 rule).
+# ETRMETH: method name -> 1.
+ETRMETH = map {
+    "": 0
+}
 # The type environment of the instance being emitted: the type code a
 # type parameter is bound to (0 = not bound).
 fn e_env_find(name: str) -> i64 {
@@ -3393,11 +3400,93 @@ fn e_method() -> str {
         if bc == 6 {
             e_method_map(b, mn)
         } else {
-            EERR = EERR + 1
-            print("emit error: methods need str/map in G7")
-            print(mn)
-            ""
+            e_method_trait(b, bc, mn)
         }
+    }
+}
+# A method call on a user type: the M3 trait resolution. The trait
+# declares the method NAMES (and their arity); the implementations are
+# ordinary functions whose FIRST parameter is the receiver, and the call
+# site picks the implementation by NAME + ARITY -- the C++ compiler's
+# rule (src/main.cpp: resolveUfcsImpl), so the two frontends agree.
+# The pipeline has one function per name, so the arity is the filter
+# (the C++ compiler also filters on the receiver's type; with a single
+# candidate the arity decides).
+fn e_method_trait(b: str, bc: i64, mn: str) -> str {
+    idx = e_sig_lookup(mn)
+    if idx == -1 {
+        if ETRMETH.has(mn) == 1 {
+            EERR = EERR + 1
+            print("emit error: no type in scope implements")
+            print(mn)
+        } else {
+            EERR = EERR + 1
+            print("emit error: unknown method")
+            print(mn)
+        }
+        ETYPE = 0
+        return ""
+    }
+    n = flint_vec_get(EFNN, idx)
+    base = flint_vec_get(EFNPB, idx)
+    varg = flint_vec_get(EFNVAR, idx)
+    ret = flint_vec_get(EFNRET, idx)
+    fixed = n - varg
+    # the arguments
+    mut argv: str = ""
+    mut nargs: i64 = 0
+    mut go: i64 = 1
+    while go == 1 {
+        e_skip()
+        if e_peek() == 41 {
+            go = 0
+        } else {
+            if e_peek() == -1 {
+                EERR = EERR + 1
+                print("emit error: call needs a closing paren")
+                print(mn)
+                ETYPE = 0
+                return ""
+            } else {
+                a = e_expr()
+                ac = ETYPE
+                if nargs > 0 {
+                    argv = argv + ", "
+                }
+                argv = argv + e_llvm_typecode(ac) + " " + a
+                nargs = nargs + 1
+            }
+        }
+    }
+    # the receiver is the first argument, so the implementation takes one
+    # more parameter than the call has arguments
+    if fixed != nargs + 1 {
+        EERR = EERR + 1
+        print("emit error: no type in scope implements")
+        print(mn)
+        ETYPE = 0
+        return ""
+    }
+    want0 = flint_vec_get(EFPTYPE, base)
+    esv = EERR
+    cv = e_conv(b, bc, want0)
+    if EERR != esv {
+        EERR = EERR + 1
+        print("emit error: method receiver type mismatch")
+        print(mn)
+        ETYPE = 0
+        return ""
+    }
+    argstr = e_llvm_typecode(want0) + " " + cv + argv
+    if ret == 0 {
+        e_emit("  call void " + e_sym(mn) + "(" + argstr + ")\n")
+        ETYPE = 0
+        ""
+    } else {
+        t = e_fresh()
+        e_emit("  " + t + " = call " + e_llvm_typecode(ret) + " " + e_sym(mn) + "(" + argstr + ")\n")
+        ETYPE = ret
+        t
     }
 }
 # One string arg of expected code; "" with EERR on mismatch.
@@ -7360,11 +7449,17 @@ fn e_form() -> i64 {
                                     e_word()
                                     r = 1
                                 } else {
-                                    EERR = EERR + 1
-                                    print("emit error: bad top-level form")
-                                    print(tag)
-                                    e_skip_balanced_fn()
-                                    r = 0
+                                    if tag == "trait" {
+                                        # A trait declares signatures only: no IR.
+                                        e_skip_type_decl()
+                                        r = 1
+                                    } else {
+                                        EERR = EERR + 1
+                                        print("emit error: bad top-level form")
+                                        print(tag)
+                                        e_skip_balanced_fn()
+                                        r = 0
+                                    }
                                 }
                             }
                         }
@@ -8153,6 +8248,58 @@ fn e_scan_extern() -> i64 {
     1
 }
 # Scan one top-level form (no output). Returns 1 ok, 0 error.
+# Scan `(trait NAME ( (m arity) ... ))`: record the method names. The
+# trait itself emits no code -- it only declares which method names
+# exist, so that a call to an unimplemented one can say so.
+fn e_scan_trait() -> i64 {
+    e_skip()
+    e_word()
+    e_skip()
+    e_skip()
+    if e_peek() == 40 {
+        e_adv()
+        mut go: i64 = 1
+        while go == 1 {
+            e_skip()
+            if e_peek() == 41 {
+                go = 0
+            } else {
+                if e_peek() == 40 {
+                    e_adv()
+                    mn = e_word()
+                    # the parameter list and the return type are kept in
+                    # the form (the pretty-printer needs them); the
+                    # resolution only uses the method NAME.
+                    e_skip()
+                    e_skip_balanced_fn()
+                    e_skip()
+                    e_word()
+                    e_skip()
+                    if e_peek() == 41 {
+                        e_adv()
+                    } else {
+                        EERR = EERR + 1
+                        print("emit error: trait method needs a closing paren")
+                        return 0
+                    }
+                    ETRMETH.set(mn, 1)
+                } else {
+                    EERR = EERR + 1
+                    print("emit error: trait method needs a name")
+                    return 0
+                }
+            }
+        }
+    }
+    e_skip()
+    if e_peek() == 41 {
+        e_adv()
+        1
+    } else {
+        EERR = EERR + 1
+        0
+    }
+}
 fn e_scan_form() -> i64 {
     e_skip()
     if e_peek() == 40 {
@@ -8182,11 +8329,15 @@ fn e_scan_form() -> i64 {
                                     e_word()
                                     r = 1
                                 } else {
-                                    EERR = EERR + 1
-                                    print("emit error: bad top-level form")
-                                    print(tag)
-                                    e_skip_balanced_fn()
-                                    r = 0
+                                    if tag == "trait" {
+                                        r = e_scan_trait()
+                                    } else {
+                                        EERR = EERR + 1
+                                        print("emit error: bad top-level form")
+                                        print(tag)
+                                        e_skip_balanced_fn()
+                                        r = 0
+                                    }
                                 }
                             }
                         }

@@ -84,7 +84,7 @@ fn main() -> i64 {
 ## D5 — The self-hosted pipeline lacks the features the C++ compiler gained after 2026-10-15. OPEN (feature gap, not a miscompile).
 
 The two compilers do not disagree on the programs both can compile: the
-differential gate is green (12/12, 0 known-divergence). What the gate does
+differential gate is green (13/13, 0 known-divergence). What the gate does
 NOT cover is the FEATURE GAP — the C++ compiler accepts programs the
 self-hosted pipeline cannot parse or emit at all. Those programs are not in
 the differential manifest, so the gate stays green while the gap is real.
@@ -94,7 +94,7 @@ Features in the C++ compiler that the self-hosted pipeline does not have
 
 | Feature | C++ compiler | Self-hosted (stage2/stage3) |
 |---|---|---|
-| `trait` declarations and name+arity method dispatch (M3, `1219665`) | supported | absent — `trait` is not even in the parser |
+| `trait` declarations and name+arity method dispatch (M3, `1219665`) | supported | **supported** (2E.3/2E.4) — the trait declares signatures only, and the call site resolves by name + arity; one limitation: the pipeline's function table holds one entry per name, so two implementations of one method name cannot coexist |
 | Lambda-as-a-value with the env-box protocol (M4, `a6b89e6`) | supported | partial — the emitter has lambda shapes, the parser is behind |
 | Generic functions with by-parameter inference (M0-M2) | supported | **supported** (2E.2) — the emitter monomorphizes, with the C++ compiler's own mangled instance names (`idc.i64`, `@"idc.s:Inner"`); the differential gate now covers a generic program |
 | Explicit type arguments `f::<T>(...)` (M2b, `3d3d914`) | supported | absent — `::` is not lexed by the self-host parser |

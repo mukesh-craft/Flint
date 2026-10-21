@@ -4517,3 +4517,26 @@ and a curated (not mirrored) registry.
   been MORE permissive than the C++ compiler. The pipeline is the second
   implementation, so "the C++ compiler accepts/rejects this" is the
   specification; a divergence in either direction is a defect.
+- **Step 2E.3/2E.4 — the trait form and its resolution.** The pipeline
+  now compiles trait programs (the C++ compiler is the oracle; the
+  differential gate is 13/13 with `tests/differential/t_trait.fl`).
+  A trait carries SIGNATURES only — the parameter and return types are
+  parsed and then dropped, exactly as the C++ does (`if (match(COLON))
+  parseType();` — signatures only) — and the parser emits
+  `(trait NAME ( (method arity) ... ))`. `trait` is a contextual keyword
+  (an identifier to the lexer), the same as in the C++ compiler. In the
+  emitter a trait emits no IR; it only records the method names, so a
+  call to an unimplemented one can say "no type in scope implements
+  'm'". A method call on a user type resolves by NAME + ARITY: the
+  implementation's first parameter is the receiver, so the
+  implementation must take exactly one more parameter than the call has
+  arguments, and the receiver is converted to that parameter's type.
+  LIMITATION (recorded): the pipeline's function table holds ONE entry
+  per name, so two implementations of the same method name cannot
+  coexist (the C++ keeps a multimap and filters on the receiver's
+  type). The fix is a table change, not an algorithm change.
+- **The lesson of 2E.3: a contextual keyword is not a keyword.** The
+  parser's first attempt failed in a confusing way — the trait text was
+  mis-parsed as a top-level `fn-decl`, and the error pointed at the
+  `{`. The cause was a token consumed twice (the name), not the
+  grammar. The diagnostic that helped: printing the branch taken.
