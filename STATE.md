@@ -111,13 +111,13 @@ and `/usr/bin/env` does not exist on Termux.
 
 ```bash
 T=/data/data/com.termux/files/usr/tmp/opencode
-bash tests/run.sh                  # smoke (48)
-bash tests/test_lexdiff.sh         # 131  — token contract
-bash tests/test_parse_gate.sh      # 132  — parser contract
-bash tests/test_fixpoint.sh        # 132  — self-host byte-identical
-bash tests/test_errors.sh          # 128/128 — stage3 emitter catalog
-bash tests/test_errors_cpp.sh      # 135/135 — C++ compiler catalog
-bash tests/test_differential.sh    # 11/11  — C++ vs self-host pipeline
+bash tests/run.sh                  # smoke (56)
+bash tests/test_lexdiff.sh         # 133  — token contract
+bash tests/test_parse_gate.sh      # 134  — parser contract
+bash tests/test_fixpoint.sh        # 134  — self-host byte-identical
+bash tests/test_errors.sh          # 139/139 — stage3 emitter catalog
+bash tests/test_errors_cpp.sh      # 134/134 — C++ compiler catalog
+bash tests/test_differential.sh    # 13/13  — C++ vs self-host pipeline
 bash tests/test_generics.sh        # 7
 bash tests/test_no_hang.sh         # 88
 bash tests/test_ai.sh tests/test_rust_stdlib.sh tests/test_rust_ffi.sh \
@@ -126,6 +126,33 @@ bash tests/test_ai.sh tests/test_rust_stdlib.sh tests/test_rust_ffi.sh \
     tests/test_cache.sh tests/test_fuzz_corpus.sh tests/test_aegis.sh
 bash tools/docs_check.sh           # README counts vs tree
 ```
+
+**The whole suite, counted (2026-10-21, 36 gates, all green):**
+
+| gate | count | | gate | count |
+|---|---|---|---|---|
+| smoke | 56 | | print-size | 11 |
+| parse-golden | 2 | | one-error | 6 |
+| parse-gate | 134 | | unsafe-flag | 6 |
+| fixpoint | 134 | | bounds-safety | 5 |
+| lexdiff | 133 | | type-audit | 125 files, 0 violations |
+| differential | 13 | | sanitizers | 10 |
+| generics | 7 | | merge | 6 |
+| no-hang | 88 | | driver | 6 |
+| ai-stdlib | 26 | | emit | 3 |
+| rust-stdlib | 20 | | emit-stage3 (the ladder) | 21 |
+| rust-ffi | 8 | | tutorial | 8 |
+| rust-oracle | 2 | | opt-identity | 11 |
+| aegis | 16 | | dwarf | 16 |
+| https | 4 | | python | 4 |
+| target | 9 | | lsp | 5 |
+
+= **764 assertions** across the 36 gates, plus the two diagnostic
+catalogs (139 emitter + 134 C++ messages, both in sync ✓), the
+type-audit over 125 files ✓ and the three bootstrap phases
+(`tests/test_selfhost.sh A/B/C` — Phase C byte-identical ✓). The v1
+battery (`bash tests/v1_gate_check.sh ./flintc --full`) runs 19 of them
+as one command ✓: 19 passed, 0 failed ✓.
 
 Run long gate sequences **detached** with a results file, because a tool
 timeout kills the group mid-run and you lose the whole sequence:
