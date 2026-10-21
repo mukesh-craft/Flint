@@ -14,8 +14,11 @@ head, _ = doc.split('## Complete message list', 1)
 old = re.findall(r'^- `((?:emit error|codegen)[^`]*)`$',
                  doc.split('## Complete message list', 1)[1], re.M)
 # The lambda family stays first (curated grouping); the rest is sorted.
+# A message that the emitter no longer prints is DROPPED: the catalog
+# must mirror the emitter exactly, in both directions.
 family = old[:11]
-block = "\n".join("- `%s`" % m for m in family + sorted(set(old[11:]) | set(emitted)))
+rest = (set(old[11:]) & set(emitted)) | set(emitted)
+block = "\n".join("- `%s`" % m for m in family + sorted(rest))
 open('docs/errors.md', 'w').write(
     head + '## Complete message list\n\n' + block
     + "\n\nTotal: %d messages.\n" % len(emitted))
