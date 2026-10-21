@@ -4399,3 +4399,22 @@ and a curated (not mirrored) registry.
   where the codegen engine knows str or f64. The parse-time engine is the
   weak one, and it is the one a future LSP or type checker would inherit.
   Gate: `tests/test_type_audit.sh`.
+
+- **Step 2A — ONE inference engine, and three real bugs (`f0441df`).** The
+  two engines (the parser's `inferType` and the codegen's) are now ONE by
+  construction: the compiler derives each builtin's Flint type at
+  REGISTRATION and the parser reads that map, so a builtin's type cannot
+  drift; the parser also learned the shapes it was missing (a call to a
+  user function, a field access, float arithmetic); a declaration PRE-PASS
+  records the file's signatures so a forward reference resolves.
+  **Drift over the corpus (123 files): 178 -> 21, contracts 0.** The 21
+  left are forward references to functions whose return type is INFERRED
+  (single-pass parsing cannot know those).
+  **Three valid programs that failed to compile with an internal LLVM
+  error are now fixed**: a forward reference with an implicit return, the
+  same with an explicit return, and `fn f() { return "hi" }` (a return
+  type inferred from a RETURN STATEMENT — there was no path for it at
+  all). Fixture: `tests_manual/t_return_inference.fl`.
+  **The audit was silent on a cache hit** (the cached module skips
+  codegen, so no audit data) — the same trap as `--check-bce`; both now
+  bypass the cache.

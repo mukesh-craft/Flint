@@ -661,7 +661,7 @@ What exists and how to run it (file lists and line counts verified
 | Suite | Files | Lines | Run |
 |-------|-------|-------|-----|
 | `tests/` smoke tests | 5 `.fl` (`t_hello` 8, `t_arith` 26, `t_flow` 48, `t_funcs` 15, `t_types` 23) | 120 | `bash tests/run.sh ./flintc` |
-| `tests/` runners | `run.sh` 100, `run_tutorial.sh` 18, `test_registry.sh` 43 | 161 | `bash tests/test_registry.sh` |
+| `tests/` runners | `run.sh` 104, `run_tutorial.sh` 18, `test_registry.sh` 43 | 165 | `bash tests/test_registry.sh` |
 | diagnostic catalogs | `docs/errors-cpp.md` (135 C++ compiler diagnostics) + `docs/errors.md` (self-host emitter) | — | `bash tests/test_errors_cpp.sh` · `bash tests/test_errors.sh` |
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | loop above |
 | `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) + 2 Rust oracle mirrors | 386 | `clang -O2` / `g++` / `python3` / `rustc` |

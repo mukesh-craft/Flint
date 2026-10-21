@@ -43,9 +43,9 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); **2A one inference engine + three bug fixes** (`f0441df`) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **2A: make ONE inference engine authoritative** — complete the parser's `inferType` with the cases the codegen's engine already has (Call, FieldAccess, Cast, Index), so the type audit's drift goes to zero |
+| next action | **2C: the loop-range analysis** (designed in §4.2) — recognise `while i < n` / `i <= n` / `i*c <= n` with a non-negative induction variable, and emit the range as an LLVM assumption so the bounds check folds and the vectorizer gets the trip-count range. Soundness conditions are spelled out in §4.2; an unsound assumption is a miscompilation, so emit NOTHING unless every precondition holds |
 | then | 2C the loop-range analysis (designed in §4.2); 2B one place that emits safety checks; 2D capture-less closures may escape (a static box); 2E the pipeline convergence (document, do not attempt) |
 | build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
 | gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
@@ -421,6 +421,39 @@ Design (bounded, and the soundness conditions are the whole point):
 execution, or anything that would need a fixpoint. The loop-range shape
 above is the whole scope.
 
+**Step 2A — ONE inference engine, and the three bugs it exposed
+(landed 2026-10-20, commit f0441df).**
+
+The two engines are now ONE by construction: the compiler derives each
+builtin's Flint type at REGISTRATION (`flintTypeOfLlvm` → `gBuiltinTypes`)
+and the parser's inference reads that map, so a builtin's type cannot
+drift. The parser also learned the shapes it was missing (a call to a user
+function, a field access, float arithmetic), and a declaration PRE-PASS
+records the file's signatures so a forward reference resolves.
+
+**Drift measured over the corpus (123 files): 178 → 21 declarations, 0
+contract violations.** The 21 that remain are forward references to
+functions whose return type is INFERRED (not annotated) — single-pass
+parsing cannot know those, and guessing would be the silent wrongness this
+work removes.
+
+**Three real bugs, all found by the audit, all fixed** — each was a VALID
+program that failed to compile with an internal LLVM error ("Function
+return type does not match operand type of return inst!"):
+
+1. `fn user() { s = later()\n s }` with `later` declared later — the
+   body's variable types were DISCARDED by the block scope restore before
+   the return type was inferred, so `user()` was inferred as returning
+   i64. Fix: the block's types are kept as a snapshot (`lastBlockTypes`)
+   when the scope restores.
+2. The same with an explicit `return s`.
+3. `fn f() { return "hi" }` — a return type inferred from a RETURN
+   STATEMENT had no path at all: the type stayed void and the codegen
+   emitted `ret ptr` from a void function. Fix: infer it from the
+   body's return statement.
+
+Fixture: `tests_manual/t_return_inference.fl` (four shapes).
+
 **Dead ends found while doing it (do not retry):**
 - The vestigial `IndexExprAST::unchecked` flag ("R2 BCE-lite: proven
   in-bounds") was never set anywhere — a dead field that claimed to
@@ -430,6 +463,10 @@ above is the whole scope.
   "surviving checks" number can exceed the "emitted" number (negative
   "elided"). Measure the real thing instead: the number of
   `call void @flint_bounds_check` in the final IR, and the runtime.
+- The type audit was SILENT on a cache hit (the cached module skips
+  codegen, so no audit data was collected) — the same trap as
+  `--check-bce`. Both now bypass the cache: a diagnostic that depends on
+  cache state is not a diagnostic.
 - A fact must not be used where its value does not dominate. Flint's
   block scoping hides the obvious case (a binding declared in a loop is
   not visible after it), but the general rule still needs the

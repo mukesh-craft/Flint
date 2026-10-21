@@ -1,0 +1,42 @@
+# Return-type inference across the three shapes that used to produce
+# invalid IR ("Function return type does not match operand type of return
+# inst!") and refused to compile a VALID program.
+#
+# The type audit (Phase 2 / 2A.0) exposed these: the parser and the codegen
+# had two inference engines, and the parse-time one could not see
+#   * a function declared LATER in the file (a forward reference),
+#   * a body's own variable types (the block scope restore discarded them
+#     before the return type was inferred),
+#   * a return statement's expression (there was no path for it at all).
+
+# 1. A forward reference: `later` is declared after `user`.
+fn user_forward() {
+    s = later()
+    s
+}
+
+# 2. The same, with an explicit return.
+fn user_return() {
+    s = later()
+    return s
+}
+
+# 3. The return type inferred from a RETURN STATEMENT (no trailing
+#    expression, no annotation).
+fn user_return_stmt() {
+    return later()
+}
+
+fn later() -> str { return "hello" }
+
+# 4. A plain string return -- the most ordinary shape there is.
+fn plain() {
+    return "hi"
+}
+
+fn main() {
+    print(user_forward())
+    print(user_return())
+    print(user_return_stmt())
+    print(plain())
+}
