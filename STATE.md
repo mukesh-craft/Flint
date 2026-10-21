@@ -43,9 +43,9 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution** (the pipeline now compiles trait programs) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **2E.3 the trait form in stage2** (the parser needs a signature-only member form, and the trait text must not be mis-parsed as a function named `trait`), then **2E.4 the trait resolution in stage3** (by name + arity, like the C++ compiler), then the C++ query mode. The optimizer / LSP surface review is DONE (§4.7.1) and its first three items are cheap: compile the pipeline's IR with `-O2` in the gates and measure; give the LSP the nine missing builtins (`print` among them) and the codegen diagnostic position. |
+| next action | **the C++ query mode** (the last 2E item: the pipeline should consume the C++ compiler's answers instead of re-deriving them ✓ — see `docs/PIPELINE-GENERICS.md` §5), and then the three cheap items the optimizer / LSP review found (§4.7.1): compile the pipeline's IR with `-O2` in the gates and measure; give the LSP the nine missing builtins (`print` among them) and the codegen diagnostic position. The trait form and its resolution are DONE (2E.3/2E.4 ✓); the explicit `::<T>` call syntax is still a stage2 gap ✓. |
 | then | the escape analysis for closures that DO capture (2D.2), and the region work (2D.3) |
 | build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
 | gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
@@ -854,6 +854,48 @@ reference implementation.
 `.i64` (the pipeline has no bool code) ✓; the explicit `::<T>` call
 syntax is still a stage2 gap ✓ (the *declaration* form works ✓).
 
+#### 4.9.3 The trait form and its resolution (2E.3 + 2E.4)
+
+**Landed.** The pipeline now compiles a trait program, with the same
+output as the C++ compiler (`tests/differential/t_trait.fl` ✓ — the
+differential gate is 13/13 ✓).
+
+**The trait, as the C++ compiler defines it (M3):** a trait carries
+SIGNATURES only; an implementation is an ordinary function with the same
+name; the call site resolves by NAME + ARITY — exactly one → call it;
+none → "no type in scope implements 'm'"; several → "ambiguous". The
+parameter and return types of a signature are parsed and then DROPPED
+(the C++ does the same: `if (match(TokenType::COLON)) parseType();` —
+signatures only).
+
+**stage2 (the parser).** `trait` is a contextual keyword (an identifier
+to the lexer ✓ — the same as the C++ ✓). The new form is
+
+```
+(trait NAME ( (method1 arity) (method2 arity) ))
+```
+
+The parser reads the members as `fn NAME ( params ) [-> Type]` ✓,
+counts the parameters ✓, and drops the types ✓.
+
+**stage3 (the emitter).** A trait emits no IR ✓ — it only records the
+method names (`ETRMETH` ✓) so that a call to an unimplemented one can
+say so ✓. A method call on a user type (`(method BASE NAME args…)` ✓)
+resolves by name + arity ✓: the implementation's first parameter is the
+receiver ✓, so the implementation must take exactly one more parameter
+than the call has arguments ✓, and the receiver is converted to that
+parameter's type ✓.
+
+**The one limitation (recorded, not hidden):** the pipeline's function
+table holds ONE entry per name ✓, so two implementations of the same
+method name cannot coexist ✓ — the C++ compiler keeps a multimap and
+filters the candidates on the receiver's type ✓. A program with two
+implementations of one method name compiles in the C++ and is refused by
+the pipeline ✓ (the pipeline's diagnostic is "no type in scope
+implements" ✓, the C++'s is the ambiguity error ✓). Making the
+pipeline's table a multimap is the fix ✓ — it is a table change, not an
+algorithm change ✓.
+
 ### 4.10 P3 — Items that need a decision or a different machine
 
 | item | why it is blocked |
@@ -1163,7 +1205,71 @@ typed HIR/MIR"):
 | Measure before optimizing; the 743 KB binary proved it | two regressions passed a green suite | optimize the latest compiler blindly |
 | One predicate for "is this a function value?" (`Symbol::isFunctionValue`) | three sites spelled it differently and a copy of a function value lost its type | keep the three ad-hoc rules |
 
-### 6.8 Known dead ends (do not retry)
+### 6.12 Three ideas from Zig, mapped onto Flint (2026-10-21)
+
+Notes brought in from outside; each is mapped onto what Flint actually
+does today, with the code that decides it. They are recorded here
+because two of the three touch decisions this project has already made
+(§4.4, §6.5, §6.11) — a note that contradicts a decision is worth
+catching *before* it becomes a plan.
+
+**1. Explicit allocation** (Zig removes automatic memory management;
+every allocation needs an explicit allocator).
+
+- Flint today: **implicit** allocation with no GC — `flint_vec_new`,
+  `flint_map_new` and `flint_array_alloc` (`runtime/rust/src/array.rs:213`)
+  are called by the runtime and by the emitter's generated code; the
+  leaks are documented as "a separate story, not memory safety" (the
+  sanitizers gate's own comment ✓).
+- What explicit allocation would cost here: the runtime's C ABI, the
+  Rust stdlib, every emitter-generated call site and the FFI boundary
+  all change ✓ — and the language's implicit-ownership surface changes
+  with them ✓.
+- **Verdict: not now, and not as a replacement.** It is an ABI-level
+  change, and §6.6's "leases + a runtime backstop" is the deliberate
+  alternative ✓. The *additive* version — an explicit-allocator escape
+  hatch (a runtime entry that takes an allocator) — is compatible with
+  the current model ✓ and is the only form worth considering ✓.
+
+**2. Alias tracking** (Zig tracks the *sequence* of data updates instead
+of banning multiple references).
+
+- Flint today: the Rust-like model — a move plus a borrow count
+  (`Symbol::moved`, `Symbol::borrowCount`, `src/main.cpp:2463-2464` ✓),
+  on top of the leases ✓.
+- The project's own rule: **"no second ownership system"** (§4.4 ✓,
+  §6.11 ✓) — Flint's leases are the user-visible model ✓, and adding a
+  borrow checker on top of them would create two competing systems ✓.
+- **Verdict: this is a *replacement* question, not an addition** — Zig's
+  model is not a second system only if it *replaces* the lease model ✓.
+  That is a whole-program analysis question, so it belongs with the
+  region work (2D.3 ✓) and not with a feature list ✓. The honest
+  statement: this is the one place where Flint's model is *weaker* than
+  Zig's (Zig's programs are not "banned" from aliasing ✓, they are
+  *checked* ✓) — and the price of Zig's model is an analysis that must
+  be right ✓.
+
+**3. Experimental dialects** (Zig: a variant of the language with
+different rules).
+
+- Flint today: the **domains** (§6.5 ✓) — a file-level `@domain(ai)`
+  declaration, a *policy* table, explicitly **never semantics** ✓ and
+  **diagnostics never change** ✓.
+- The difference matters: Zig's dialects change the *semantics* ✓; a
+  Flint domain changes which lints/errors are on ✓ — closer to a lint
+  profile ✓ than to a dialect ✓.
+- **Verdict: the idea is already here under a different name** ✓. If a
+  semantics-changing dialect is wanted, §6.5's "never semantics" line is
+  exactly the line to cross deliberately ✓ — and the decision log's
+  "domains are a data table, not code paths" (§6.11 ✓) is the guard
+  that keeps it from forking the compiler ✓.
+
+**The one-line summary:** two of the three are already Flint's shape
+(the domains, the implicit-ownership-with-a-runtime-backstop), and the
+third (alias tracking) is a *replacement* decision that belongs to the
+region work, not to a feature list ✓.
+
+
 
 - **Byte-wise / element-wise enum payload comparison** — garbage bytes past
   a variant's payload make identical values compare unequal. Solved instead

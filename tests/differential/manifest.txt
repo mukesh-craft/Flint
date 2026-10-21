@@ -15,3 +15,6 @@ overflow_cast.fl 134 - same
 # 2E: the pipeline must monomorphize exactly like the C++ compiler --
 # same output, and the same mangled instance names.
 t_generic.fl 0 t_generic.txt same
+# 2E.4: a trait declares signatures only; the call site resolves the
+# method by name + arity, exactly like the C++ compiler.
+t_trait.fl 0 t_trait.txt same

@@ -106,10 +106,11 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: match needs an enum in G5`
 - `emit error: match needs arms`
 - `emit error: method arg mismatch`
-- `emit error: methods need str/map in G7`
+- `emit error: method receiver type mismatch`
 - `emit error: missing arg, no default calling`
 - `emit error: missing arg, no default calling lambda`
 - `emit error: mixed-type binop needs conversion`
+- `emit error: no type in scope implements`
 - `emit error: node needs a later group`
 - `emit error: non-exhaustive match`
 - `emit error: not a struct`
@@ -148,11 +149,14 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: too many args calling lambda`
 - `emit error: too many args calling runtime`
 - `emit error: too many payload args`
+- `emit error: trait method needs a closing paren`
+- `emit error: trait method needs a name`
 - `emit error: undefined variable`
 - `emit error: unknown enum`
 - `emit error: unknown field`
 - `emit error: unknown function`
 - `emit error: unknown map method`
+- `emit error: unknown method`
 - `emit error: unknown name in global init`
 - `emit error: unknown str method`
 - `emit error: unknown struct`
@@ -168,4 +172,4 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: void initializer`
 - `emit error: void variadic arg`
 
-Total: 135 messages.
+Total: 139 messages.

@@ -12,8 +12,24 @@ be re-derived. The measurements below are from this device. What landed:
   verified symbol for symbol against the C++ IR, and the differential gate
   now covers a generic program (`tests/differential/t_generic.fl`).
 
-What is still open: the trait form in stage2, the trait resolution in
-stage3, and the C++ query mode.
+What is still open: the C++ query mode (§5), and the explicit `::<T>`
+call syntax (a stage2 gap: the *declaration* form works ✓).
+
+**The traits landed too (2E.3/2E.4):** the parser reads
+`trait Name { fn m(self) -> T ... }` into
+`(trait NAME ( (m (params) ret) ... ))` ✓ — the parameter list and the
+return type are KEPT, because the pretty-printer has to reproduce the
+source's token stream exactly (the fixpoint gate compares it ✓) ✓. A
+trait emits no IR; it only records the method names, so a call to an
+unimplemented one can say "no type in scope implements 'm'" ✓. A method
+call on a user type resolves by NAME + ARITY: the implementation's first
+parameter is the receiver ✓, so the implementation must take exactly one
+more parameter than the call has arguments ✓.
+
+**The one limitation:** the pipeline's function table holds ONE entry per
+name ✓, so two implementations of the same method name cannot coexist ✓
+— the C++ compiler keeps a multimap and filters the candidates on the
+receiver's type ✓. The fix is a table change, not an algorithm change ✓.
 
 ## 1. What works today (measured)
 
@@ -137,9 +153,8 @@ towards (see `COMPATIBILITY.md` D5 and the Phase 2 work in `STATE.md`).
 1. **DONE (2E.2): stage3 monomorphization** — with the C++ mangling names
    matching, so the differential gate compares the two frontends symbol for
    symbol.
-2. stage2: the trait form + method signatures (a parser feature; the
-   smallest piece, and it makes the S-expression contract explicit).
-3. stage3: trait resolution.
+2. **DONE (2E.3): stage2 the trait form + method signatures.**
+3. **DONE (2E.4): stage3 trait resolution** (by name + arity).
 4. The query mode (above), so the two frontends stop re-deriving types.
 
 ### 6.1 What the monomorphizer learned (worth keeping)
