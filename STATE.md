@@ -1422,406 +1422,62 @@ catalog · `46a007e` binary-size fix · `c69d421` assessment ·
 
 ---
 
-## 11. The plan from the 2026-10-21 research pass (every idea, one place)
+## 11. The plan from the 2026-10-21 research pass — POINTER
 
-This section takes the four idea-clusters that came out of the research
-(C→Flint transpilation, Rust-like diagnostics, the "Flint Twist" selling
-points, and the positioning question) and turns each into work items
-that are grounded in **what the repository actually has today**. Nothing
-here is aspirational: every "has" line is a file or a measurement, every
-"needs" line is a gap with a named owner in the phase list.
+**The full text is in `memory.md`** ("The 2026-10-21 research pass +
+peer-comparison plan", at the end of the file) ✓.
 
-### 11.0 The positioning answer (the question the research asked)
+The four idea-clusters from the research, and what each needs from Flint:
 
-> *Is Flint a high-performance systems language (like C/Rust) or a fast,
-> productive application language (like Go/TypeScript)?*
+| cluster | the plan in one line |
+|---|---|
+| **C/C++ → Flint transpiler** | Clang LibTooling for the front (never a hand-written C++ parser) → pointer classification → ownership inference → idiomatic Flint source, so LLVM's O2 does the "peak optimization" ✓. The shippable subset is **C, not C++**, and it must **refuse** what it cannot prove ✓. It needs the `[T]` containers as its safe target and an `unsafe {}` block ✓. |
+| **Rust-like diagnostics** | the gap is exactly a single `line:col` and a free string ✓. The work: a Span on every AST node, a structured Diagnostic (code, severity, title, labels, suggestion), codes derived from the existing 273-message catalogue, a renderer, Levenshtein suggestions, error poisoning ✓. **Cheap** (the positions and the catalogue exist ✓) and **high-leverage** (the CLI, the LSP and the transpiler consume the same structure ✓). |
+| **the four "Flint Twist" selling points** | instant ignition → the incremental story ✓; embedded/edge → the `[T]` containers, a freestanding build, the arena story in the core language ✓; data-streaming → async and the capability model BEFORE any stream syntax ✓; interop → native `.c` import and FFI contract checking ✓ (the lease model ends at the FFI boundary ✓). |
+| **the two positioning questions** | *positioning*: a **systems language with an application-language workflow** ✓. *memory safety*: **leases + a runtime backstop** — not ARC (it would erode the 1.44× gap to C), not a GC (it would put a pause-latency and a footprint floor under the embedded story) ✓. |
 
-**Both, in that order — a systems language with an application-language
-workflow.** The evidence is the whole point:
+**The order (§11.6):** diagnostics (spans + codes) → the incremental story
+→ native `.c` import → the `[T]` containers → a freestanding build → the
+renderer/suggestions/poisoning → `unsafe {}` + the C subset transpiler →
+async + capabilities → the pointer/ownership passes.
 
-- it is a systems language by *measurement*: sum_array 10M is 12.0 ms
-  against C's 8.3 ms (1.44×) with **0 bounds-check calls** in the final
-  IR (§28), a stripped hello of **4,536 B** against C's 4,368 B, and a
-  deterministic memory model (leases + a runtime backstop);
-- it has an application-language *workflow*: one binary, no build file,
-  `./flintc main.fl` compiles **and runs** through the ORC JIT
-  (`src/main.cpp:13791`), and the compile takes ~95 ms
-  (`tools/bench_baseline.json`).
-
-A systems language that needed a build system would lose the "instant
-ignition" identity; an application language that could not be measured
-against C would lose the credibility. The compromise to protect: **the
-safety machinery may never cost more than the measurement says it does**
-(§6.2: the checks are 13 % of the integer-loop gap at most).
-
-### 11.1 The memory-safety answer (the other question the research asked)
-
-> *What strategy does the language use — a borrow checker, ARC, or a GC?*
-
-**Leases + a runtime backstop** — the Rust-like answer, deliberately
-neither ARC nor a GC:
-
-- **not ARC**: ARC's cost is a refcount on every pointer, and Flint's
-  measured 1.44× gap to C is a *runtime-performance* claim that ARC
-  would erode everywhere;
-- **not a GC**: a GC would put a pause-latency and a footprint floor
-  under the embedded/edge story (§11.3) and under the 4,536 B hello;
-- **leases**: the ownership is *visible in the source* (`moved`,
-  `borrowCount` — `src/main.cpp:2463-2464`), so the compiler can prove
-  the use-after-free away at compile time, and the runtime backstop
-  catches what the source does not express (FFI, the runtime's own
-  structures).
-
-This is the decision the whole safety story rests on, and §6.11 records
-it as "leases + regions, not Rust's borrow checker" — **one** ownership
-model, never two.
-
-### 11.2 The C/C++ → Flint transpiler (the c2rust-shaped project)
-
-**The shape:** `[C/C++ source] → (Clang LibTooling) → [Clang AST] →
-(translation engine: pointer classification + ownership inference) →
-[Flint source] → (flintc) → [LLVM IR] → [optimized binary]`.
-
-**The parts, and what each one needs from Flint first:**
-
-| part | what it needs from Flint | Flint's state |
-|---|---|---|
-| parse C/C++ | nothing — use Clang LibTooling (or Tree-sitter) | n/a — **do not write a C++ parser** ✓ |
-| classify pointers | a target type model: safe reference, bounded array, raw | **needs** the `[T]` container work (M7, deferred) — a transpiler without a bounded array type has nothing safe to map an array onto |
-| infer ownership | the lease model, expressed as an analysis the transpiler can *emit* | leases exist ✓; the *region* work (2D.3) is what would make the inference decidable |
-| escape hatch | an `unsafe` region in the source | `--unsafe` (a build flag ✓) exists; `unsafe {}` blocks are a *decision* (the decision log ✓) — the transpiler needs the **block** form |
-| "peak optimization" | clean LLVM IR + idiomatic output | the compiler already emits LLVM IR ✓ and runs LLVM O2 in-process (`src/main.cpp:14517`) ✓ — so the *optimization* half is free once the *source* is idiomatic ✓ |
-| idiomatic loops | iterators that let the length fact remove the bounds checks | the length fact exists (2A.1 ✓) — the transpiler must emit `for i in 0..len(a)`-shaped loops, not `for i in 0..n` with a manual check ✓ |
-
-**The order (this is a Phase 8 project, not a Phase 2 one):**
-
-1. **the target type model** — the `[T]` containers (M7) and the
-   nullable story (a `?T` or a result type) — without them the
-   transpiler has no safe target ✓;
-2. **an `unsafe {}` block in the source** (a small language change ✓)
-   so the transpiler can say "I could not prove this" instead of
-   failing ✓;
-3. **a Clang LibTooling front-end** that emits Flint source for the
-   *easy* subset (plain functions, structs, loops, no pointers) — a
-   **subset transpiler that refuses what it cannot prove** ✓, the same
-   posture as the compiler's own "one error per input" contract ✓;
-4. **the pointer/ownership passes** on top;
-5. **a differential gate**: the transpiled program and the original must
-   agree on the same corpus — the differential gate already exists ✓
-   (`tests/test_differential.sh`) and is the right oracle ✓.
-
-**The honest scope note:** a full C++ → Flint transpiler is a
-multi-year project (c2rust is a research effort ✓). The *valuable,
-shippable* subset is: **C** (not C++), no templates, no operator
-overloading, no exceptions — and a transpiler that **refuses** the rest
-loudly ✓. A tool that quietly mistranslates is worse than no tool ✓
-(this project's own rule, §3.1 ✓).
-
-### 11.3 The four "Flint Twist" selling points, made concrete
-
-**1. Instant ignition (instant compilation, zero config).**
-*Has:* one binary, no build file ✓, compile-and-run via the ORC JIT ✓
-(`src/main.cpp:13791`), ~95 ms for the benchmark program ✓, and a
-`--fast` path ✓.
-*Needs:* (a) the **incremental** story — the compiler caches whole
-modules by source hash ✓ and has no per-file invalidation ✓ (§3.4
-weakness 3 ✓); (b) a *measured* cold-start budget kept in CI ✓
-(`tools/bench_gate.sh` ✓ — the compile time is already a gate ✓ ✓);
-(c) the JIT path and the AOT path must produce the **same** behaviour
-✓ — the differential gate compares the AOT pipeline today ✓, and the
-JIT is the untested twin ✗.
-
-**2. Embedded & edge (micro-footprint, no GC).**
-*Has:* 4,536 B stripped hello ✓, 24 B of `.bss` ✓, one dependency (libc)
-✓, a deterministic memory model ✓, and an arena allocator in the AI
-runtime ✓ (`runtime/flint_ai.c:71`).
-*Needs:* (a) the `[T]` containers (M7 ✓ — deferred by maintainer
-decision ✓, and this is the strongest argument to revisit it ✓);
-(b) a **no-stdlib / freestanding** build target ✓ (the runtime is
-currently mandatory ✓); (c) the arena story must reach the *core*
-language, not only the AI runtime ✓; (d) the cross-platform score (58
-✓) — "runs on the bare metal" is a claim that needs a target ✓.
-
-**3. Data-streaming & event-driven.**
-*Has:* threads and channels ✓ (§28's concurrency 42 ✓).
-*Needs:* (a) **async/await in the type system** (the type system is 55
-✓ — no async, no associated types, no `dyn` ✓) — this is the single
-biggest language gap for this pitch ✓; (b) the **capability model**
-(the concurrency score is 42 ✓ — "no static race freedom" ✓) — a
-first-class `Send`/`Sync`-equivalent ✓ (§4.5 ✓); (c) a *stream*
-syntax is a *syntax* question, and syntax without the type system behind
-it is a trap ✓ — the order is (a) then (b) then (c) ✓.
-
-**4. Flawless interoperability (the "glue" for legacy code).**
-*Has:* `extern "C" { ... }` blocks ✓ (`src/main.cpp:3164` ✓), the
-runtime's C ABI ✓, the Rust stdlib linking in ✓, and the differential
-gate's `-lsqlite3 -lcurl` link line ✓ (a real FFI surface ✓).
-*Needs:* (a) **native `.c`/`.cpp` import** — the user drops a C file in
-and Flint compiles and links it ✓ (today the C file must be compiled
-separately ✓ and the build.sh links it ✓ — the *user* has to do that
-✗); (b) a **Python FFI** story ✓ (the runtime has `flint_py_*` ✓); (c)
-the FFI **contract** checking (the memory safety is 78 ✓ and the gap
-is named in §28: "FFI contracts unchecked" ✓) — an FFI boundary is
-where the lease model ends ✓, so it needs its own gate ✓.
-
-### 11.4 The diagnostics overhaul (Rust-like errors)
-
-**The target:** `error[E0032]: mismatched types` with a source snippet,
-a caret, a label and a `help:` — not `codegen: 42:20: <sentence>`.
-
-**The gap today, exactly:**
-
-| piece | Flint today | the target |
-|---|---|---|
-| positions | a single `line:col` (`cgCurLine/cgCurCol`, `src/main.cpp:5369`) ✓ | a **span** (start *and* end, with a file id) |
-| structure | a string message ✓ | a `Diagnostic` with a code, a severity, a title, labels, a suggestion |
-| labels | none ✓ | several labelled spans (the primary + the secondary) |
-| codes | none ✓ — 139 emitter + 134 C++ messages, all free text ✓ | stable codes (`E0032`) so docs and tools can link to them |
-| suggestions | none ✓ | "did you mean …?" (Levenshtein) + a `help:` with a fix |
-| cascades | the compiler reports several errors ✓ | **poisoning**: one root error, the rest suppressed |
-| rendering | a bare line ✓ | a snippet with carets and a `|` gutter |
-
-**The work, in order (each step is small and gate-able):**
-
-1. **a `Span` in the AST** — the C++ compiler has *one* `SourceLoc`-ish
-   hit today ✓; the AST nodes need start+end ✓. The pipeline's parser
-   already tracks line/col per token ✓ (`stage1/lexer.fl` keeps
-   `TLINE`/`TCOL` ✓), so the *self-host* side has a head start ✓.
-2. **a structured diagnostic type + a code per message** — the 273
-   catalogued messages become the codes ✓ (`docs/errors.md` is already
-   the catalogue ✓, and `tools/errors_cpp.py` generates it ✓ → the code
-   can be *derived* from the catalogue ✓).
-3. **the renderer** — LLVM's own diagnostic printer is available to the
-   C++ compiler ✓ (clang's `DiagnosticBuilder` ✓); the *pipeline*
-   (Flint) needs its own text renderer ✓ (the emitter prints to stdout
-   ✓ — a small renderer in the pipeline's idiom ✓, ~150 lines ✓).
-4. **the suggestions** — Levenshtein over the visible names (the
-   compiler already has the scope tables ✓ — `PDECL`/`PTOP` in the
-   pipeline ✓, `symTable` in the C++ ✓).
-5. **the poisoning** — the "one error per input" contract ✓ already
-   exists for the *pipeline* ✓; generalizing it to "one *root* error
-   per input" is the C++ compiler's missing half ✓.
-
-**Why this is high-leverage and cheap:** the compiler already has the
-positions and the catalogue ✓; what is missing is the *structure* and
-the *renderer* ✓. The LSP (tooling 42 ✓) consumes exactly this data ✓ —
-one diagnostic structure serves the CLI, the LSP and the docs ✓.
-
-### 11.5 What the pieces share (why this is one plan, not four)
-
-- the **structured diagnostics** (§11.4) are the *interface* the LSP
-  needs ✓ (the LSP currently scrapes stderr text ✓ — `lsp/src/diagnostics.rs:75-107`
-  ✓ — and it loses the codegen positions ✓ because the text has no
-  structure ✓);
-- the **transpiler** (§11.2) needs the same structured diagnostics to
-  say "I could not prove this pointer safe" ✓, in the same format ✓;
-- the **type model** the transpiler targets (`[T]`, nullable) is the
-  same type model the diagnostics have to explain ✓ (§11.4 step 1 ✓);
-- the **C interop** story (§11.3.4) is the *other half* of the
-  transpiler: import the C you cannot translate ✓, translate the C you
-  can ✓.
-
-### 11.6 The order, and the honest priority
-
-```
-NOW   §11.4 step 1+2   spans + structured diagnostics + codes   (cheap, unblocks the LSP)
-NEXT  §11.3.1         the incremental story (keeps the instant identity honest)
-      §11.3.4a        native .c import (the cheapest "glue" win)
-      §11.2 step 1    the [T] containers (M7 revisited — the transpiler's target)
-      §11.3.2         a freestanding/no-stdlib build (the edge story)
-LATER §11.4 step 3-5  the renderer, the suggestions, the poisoning
-      §11.2 step 2-3  unsafe{} blocks, then the C subset transpiler
-      §11.3.3         async + capabilities (the type system's turn)
-      §11.2 step 4-5  the pointer/ownership passes + the differential gate
-```
-
-**What is explicitly NOT in this plan** (and why): a vectorizer (the
-roadmap rejects it ✓ — LLVM does it ✓), a second ownership system ✓
-(§6.11 ✓), a semantics-changing dialect framework ✓ (§6.11 ✓), and
-hand-written C++ parsing ✓ (Clang exists ✓).
+**What is NOT in the plan** (and why): a vectorizer ✓ (LLVM does it), a
+second ownership system ✓, a semantics-changing dialect framework ✓, a
+hand-written C++ parser ✓.
 
 ---
 
-## 12. The peer-comparison plan (how Flint goes from 6.1/10 upward)
+## 12. The peer-comparison plan — POINTER
 
-§11 planned the *work*. This section plans the *score*: the peer
-comparison (the same 10 categories, the same weighting as §28) says
-Flint is **6.1/10** — at the Zig/TypeScript/Python level, and **below
-C++ (6.6)**, despite beating C++ on safety (78 vs 15) and binary size
-(92 vs 70) and losing to it on runtime (70 vs 100), ecosystem (90 vs
-12) and DX (55 vs 66).
+**The full text is in `memory.md`** (the same addendum) ✓.
 
-**The baseline, as measured (2026-10-21; the peer scores are an
-assessment, Flint's are measurements):**
+Flint is **6.1/10** (the same 10 categories and weighting as §28): Rust
+8.6, Swift 7.6, Go 7.3, Kotlin 6.9, C++ 6.6, Zig 6.1, TypeScript 6.1,
+Python 6.0. Flint beats C++ on memory safety (78 vs 15) and binary size
+(92 vs 70) and loses on runtime (70 vs 100), ecosystem (12 vs 90) and DX
+(66 vs 55) — so it is **below** C++ overall, at the Zig/TS/Python level.
 
-| language (version) | runtime | mem-safety | types | maturity | ecosystem | concurrency | bin-size | DX | LSP | **weighted** |
-|---|---|---|---|---|---|---|---|---|---|---|
-| Rust 1.99.1 | 85 | 95 | 90 | 90 | 95 | 88 | 35 | 85 | 90 | **8.6** |
-| Swift 6.3 | 75 | 80 | 85 | 85 | 70 | 85 | 45 | 75 | 75 | **7.6** |
-| Go 1.27.3 | 70 | 55 | 60 | 85 | 85 | 75 | 60 | 90 | 80 | **7.3** |
-| Kotlin 2.4 | 55 | 75 | 70 | 80 | 85 | 60 | 40 | 80 | 60 | **6.9** |
-| C++ (clang 21) | 100 | 15 | 65 | 90 | 90 | 25 | 70 | 55 | 75 | **6.6** |
-| Zig 0.17.0 | 90 | 70 | 65 | 45 | 35 | 40 | 80 | 55 | 45 | **6.1** |
-| TypeScript | 30 | 55 | 55 | 85 | 95 | 40 | 30 | 85 | 90 | **6.1** |
-| Python | 25 | 60 | 50 | 85 | 95 | 40 | 30 | 90 | 70 | **6.0** |
-| **Flint** | 70 | 78 | 55 | 76 | 12 | 42 | 92 | 66 | 42 | **6.1** |
+**The one sentence:** Flint's *language* is competitive; Flint's
+*adoption* is not — and the two multipliers (ecosystem 10 %, tooling
+6 %) are what hold the total at 6.1.
 
-**The one sentence:** Flint's *language* is competitive (it beats C++ on
-safety, ties it on binary size, and is within 1.44× on integer loops);
-Flint's *adoption* is not (ecosystem 12, tooling 42), and the two
-multipliers — 10 % and 6 % of the weight — are exactly what holds the
-total at 6.1.
+**The arithmetic that decides the order** (§12.1): a point of ecosystem
+score is worth **+4.8**, the capability model **+3.3**, the type system
+**+3.0**, diagnostics + LSP **+3.8**, the regions **+2.1**, the range
+analysis **+2.3**. The biggest line is the one that **cannot** be worked
+on directly — the ecosystem is the *output* of what other people do with
+the language ✓.
 
-### 12.1 The arithmetic: where a point of work actually pays
+**The adoption ladder** (§12.2): type system + capability model →
+diagnostics + a compiler-backed LSP → package manager + registry → the
+ecosystem score moves ✓. It is the §28 weighting's own logic: a package
+manager without a sound compiler and a fast compiler just distributes
+bugs ✓.
 
-The weighting (runtime 15, memory safety 15, type system 12, maturity
-12, ecosystem 10, concurrency 10, binary size 8, DX 8, LSP 6,
-cross-platform 4) turns each category into a **price per point of
-score**:
+**The targets** (§12.5): **6.6** (the diagnostics + the LSP's cheap
+items) = C++ today ✓; **7.3** (the type system + the capability model) =
+Go today ✓; **8.0** (the compiler-backed LSP + the runtime work + the
+cross-platform runs) ✓; **8.6+** (the package manager, the registry) =
+Rust today ✓ — and that last row is not engineerable by us alone ✓.
 
-| category | now | realistic target | points of score | what it costs |
-|---|---|---|---|---|
-| **ecosystem** | 12 | 60 | **+4.8** | a package manager, a registry, a resolver, a lockfile — §4.6 — but it *follows* the rest (§28: "a package manager without a sound compiler and a fast compiler just distributes bugs") |
-| **concurrency safety** | 42 | 75 | **+3.3** | the capability model (Send/Sync-equivalent) — §4.5 — plus async in the type system |
-| **type system** | 55 | 80 | **+3.0** | async, associated types, `dyn`, nullable types, operator overloading — §4.8 |
-| **memory safety** | 78 | 92 | **+2.1** | the precise regions and the FFI contracts — §4.4 |
-| **LSP/tooling** | 42 | 80 | **+2.3** | the compiler-backed LSP, rename, refactor, incremental analysis — §4.7 |
-| **runtime performance** | 70 | 85 | **+2.3** | the range analysis that removes the last checks — §4.3 (the 1.44× gap) |
-| **developer experience** | 66 | 85 | **+1.5** | the naming inconsistencies, the docs, the error messages — §11.4 |
-| **compiler maturity** | 76 | 90 | **+1.7** | the two-frontends drift (D5 — now much smaller ✓), the untested platforms |
-| **cross-platform** | 58 | 80 | **+0.9** | the untested Windows/macOS runs, the freestanding target — §11.3.2 |
-| **binary size** | 92 | 96 | **+0.3** | the 72 MB of arenas in library-heavy programs — §6.3 |
-
-**Read the table twice.** The biggest single line is the ecosystem
-(+4.8) and it is the one that *cannot be worked on directly* — it is
-the sum of what other people do with the language ✓. The three
-highest-value *engineerable* lines are the **capability model**
-(+3.3), the **type system** (+3.0) and the **diagnostics/LSP**
-(+2.3 + +1.5 = +3.8 together ✓) — and all three are the same work seen
-from three sides ✓ (§11.4 ✓, §11.5 ✓).
-
-### 12.2 The adoption ladder (the order that is not arbitrary)
-
-```
-  type system + capability model  ──►  can a team write safe concurrent code?
-        │                                    (concurrency 42, types 55)
-        ▼
-  diagnostics + compiler-backed LSP ──►  can a team SEE the code they write?
-        │                                    (LSP 42, DX 66)
-        ▼
-  package manager + registry        ──►  can a team share what they wrote?
-        │                                    (ecosystem 12)
-        ▼
-  ecosystem score moves              ──►  6.1 -> 7.x
-```
-
-The ladder is not a preference — it is the §28 weighting's own logic
-("ecosystem follows the rest") ✓. A package manager that ships a
-language with a line-scanning LSP and no static race freedom would
-distribute the *problems* ✓.
-
-### 12.3 The per-category plan (what moves each number)
-
-**Runtime performance 70 → 85 (§4.3, §6.2).**
-The remaining gap is *integer-specific* (the f64 loop is at C parity
-✓) and the remaining checks need **range analysis** — `primes`'s
-`i*i <= limit` does not give LLVM `i <= limit+1` ✓. The 2C slice
-(`llvm.assume`, with its soundness conditions) exists ✓; the next piece
-is the analysis over the loop's induction variable ✓. *Falsifier:*
-`sum_array` must not regress from 12.0 ms ✓ (the bench gate ✓).
-
-**Memory safety 78 → 92 (§4.4).**
-The named gaps: no precise regions ✓, closures that capture cannot
-escape ✓ (2D.2 ✓), FFI contracts unchecked ✓. The FFI one is the
-cheapest and the most valuable — it is where the lease model *ends* ✓,
-so it needs its own gate (the same shape as `tests/test_bounds_safety.sh`
-✓). *Falsifier:* the safety gates must stay green ✓.
-
-**Type system 55 → 80 (§4.8).**
-async/await ✓, associated types ✓, `dyn` ✓, nullable types ✓,
-operator overloading ✓. The rule that keeps this honest: **each
-feature must come with the semantics the pipeline can also implement**
-✓ (the monomorphizer and the trait resolution just proved the
-discipline ✓ — the C++ compiler is the oracle ✓ and the differential
-gate is the check ✓). The *ordering* rule from §11.3.3: the type system
-before any stream syntax ✓.
-
-**Compiler maturity 76 → 90.**
-D5 shrank this session (the pipeline now compiles generics and traits
-✓, with the C++ compiler's own symbol names ✓) ✓. What is left: the
-remaining frontends' drift (`::<T>` ✓, the fn-value surface ✓, the
-enum equality ✓), the **JIT path** (never compared against the AOT
-path ✓ — a real hole ✓), and the C++ query mode (§11 ✓) that would
-make the drift *impossible* rather than *detected* ✓.
-
-**Concurrency safety 42 → 75 (§4.5).**
-Threads and channels exist ✓; what does not exist is **static race
-freedom** ✓. The plan: a capability model (a `Send`/`Sync` equivalent
-✓) on top of the lease model ✓, then async ✓, then the runtime's
-channel implementation checked against it ✓. *This is the single
-highest-value engineerable line in the table (+3.3) ✓.*
-
-**LSP/tooling 42 → 80 (§4.7, §11.4).**
-The three cheap items the review found ✓: the nine missing builtins
-(`print` among them ✓), the codegen diagnostic positions ✓, the import
-diagnostic (a false all-clear ✓). Then the real fix: **serve the LSP
-from the compiler's own semantic model** ✓ — which needs the structured
-diagnostics (§11.4 ✓) and the type checker (2A ✓). The
-TypeScript-7 precedent applies: make the *checker* fast, not the
-server ✓.
-
-**Developer experience 66 → 85.**
-The one-error-per-input contract already exists ✓ (and the pipeline
-extends it ✓); the diagnostics overhaul (§11.4 ✓) is the biggest item
-✓; then the `flt_` naming inconsistencies ✓, the docs ✓, and the
-tutorial ✓.
-
-**Ecosystem 12 → 60 (§4.6).**
-Not engineerable directly ✓ — it is the *output* of the ladder ✓. The
-engineering is the *infrastructure*: a package manager, a registry, a
-resolver, a lockfile, signing, an audit trail ✓ (§4.6 ✓) and the
-"binary registry" that already exists ✓. The first milestone is
-**not** a package manager — it is a *binary registry that works* ✓
-(the repository already has one ✓) and the documentation of the
-publishing contract ✓.
-
-**Cross-platform 58 → 80.**
-The honest state: Linux/Android verified here ✓, Windows/macOS
-*claimed but never executed from this device* ✓. The plan: run the
-gate battery on the other two platforms in CI ✓ (the workflows exist ✓
-— they have never run here ✓), and the freestanding/no-stdlib target
-(§11.3.2 ✓) for the embedded claim ✓.
-
-**Binary size 92 → 96.**
-Already excellent ✓ (4,536 B ✓). The remaining 72 MB of arenas in
-library-heavy programs ✓ (§6.3 ✓) and the monolithic `flint_std.o` ✓ —
-per-subsystem stdlib objects ✓, profile-driven arenas ✓ (Phase 6 ✓).
-
-### 12.4 The strengths to protect (three things that are genuinely rare)
-
-1. **The self-hosting pipeline with a byte-identical fixed point.**
-   Rust, Swift and Go do not self-host ✓; Zig's self-hosted backend is
-   still in development ✓. *Protect it:* every pipeline change must
-   keep Phase C byte-identical ✓ (the gate ✓) — and the pipeline must
-   not gain a dependency the C++ compiler does not have ✓.
-2. **The binary size.** 4,536 B stripped hello against C's 4,368 B and
-   Rust's 339,656 B (measured on this device ✓). *Protect it:* the
-   ecosystem work must not add a runtime dependency ✓, and the
-   transpiler (§11.2 ✓) must not pull in a GC ✓.
-3. **The deterministic memory model with a runtime backstop.** *Protect
-   it:* the capability model (§4.5 ✓) must not become a second
-   ownership system (§6.11 ✓).
-
-### 12.5 The targets (what "better" means, in numbers)
-
-| milestone | the score | what has to be true |
-|---|---|---|
-| **today** | 6.1 | — |
-| **the first honest move** | **6.6** (= C++ today) | the diagnostics + the LSP's cheap items (+0.6) |
-| **the language catches up** | **7.3** (= Go today) | the type system + the capability model (+1.3) |
-| **a credible language** | **8.0** | the compiler-backed LSP + the runtime work + the cross-platform runs (+0.7) |
-| **the ecosystem moves** | **8.6+** (= Rust today) | the package manager, the registry, the resolver — the *output* of everything above ✓ |
-
-**The honest caveat, once:** the last row is not engineerable by us
-alone ✓ — it needs people writing Flint programs ✓. Every row before it
-is ✓.
+---
