@@ -1,8 +1,19 @@
 # The self-host pipeline: generics and traits
 
-**Status (2026-10-20): MEASURED, NOT IMPLEMENTED.** This note is the
-specification for the remaining work, written down so it does not have to be
-re-derived. The measurements below are from this device.
+**Status (2026-10-21): the monomorphizer is IMPLEMENTED; the traits are
+not.** This note is the specification, written down so it does not have to
+be re-derived. The measurements below are from this device. What landed:
+
+- **2E.1** the pipeline files were renamed to their stage roles
+  (`stage1/lexer.fl`, `stage2/parser.fl`, `stage3/emitter.fl`).
+- **2E.2** the monomorphizer: the pipeline compiles generic functions and
+  produces the **C++ compiler's own mangled instance names**
+  (`idc.i64`, `idc.f64`, `idc.str`, `@"idc.s:Inner"`, `pair.f64.str`) —
+  verified symbol for symbol against the C++ IR, and the differential gate
+  now covers a generic program (`tests/differential/t_generic.fl`).
+
+What is still open: the trait form in stage2, the trait resolution in
+stage3, and the C++ query mode.
 
 ## 1. What works today (measured)
 
@@ -65,11 +76,14 @@ Steps, in order:
      types bound to `T`, `U` by the parameters that mention them (the
      by-parameter rule the C++ compiler uses ✓ — the same rule, so both
      frontends agree).
-3. **Instantiate.** Copy the template's S-expression, substituting the
-   type parameters by the concrete types in: the return type, the
-   parameter types, and any type annotation inside the body (`as` casts).
-   The substitution is textual over balanced groups, which the emitter's
-   group helpers already support ✓.
+3. **Instantiate.** Copy the template's S-expression and bind each type
+   parameter to its concrete type in a **type environment** that the
+   emitter's type resolution consults (`e_ann_code`, and the named-type
+   lookup). The environment, NOT a textual substitution: a textual pass
+   over the body would also rewrite a string literal or a variable that
+   happens to be spelled `T`. (This was the one design change from the
+   first draft of this note — the implementation is the structural
+   version of the same idea.)
 4. **Name the instance** `<name>.<type>` — the C++ compiler's mangling
    style (`idc.arr`) ✓, so the two frontends produce the same symbol
    names and the differential gate can compare them directly ✓.
@@ -120,13 +134,28 @@ towards (see `COMPATIBILITY.md` D5 and the Phase 2 work in `STATE.md`).
 
 ## 6. Order of work
 
-1. stage2: the trait form + method signatures (a parser feature; the
-   smallest piece, and it makes the S-expression contract explicit).
-2. stage3: monomorphization (the big one) — with the C++ mangling names
+1. **DONE (2E.2): stage3 monomorphization** — with the C++ mangling names
    matching, so the differential gate compares the two frontends symbol for
    symbol.
+2. stage2: the trait form + method signatures (a parser feature; the
+   smallest piece, and it makes the S-expression contract explicit).
 3. stage3: trait resolution.
 4. The query mode (above), so the two frontends stop re-deriving types.
+
+### 6.1 What the monomorphizer learned (worth keeping)
+
+- **A generic call must pass every argument.** The C++ compiler does not
+  fill a generic's default arguments ("'f' expects 2 argument(s), got 1"),
+  so the pipeline refuses it too. The pipeline being MORE permissive than
+  the reference implementation is a divergence, not an improvement.
+- **A type parameter that no parameter mentions cannot be inferred** — an
+  error, never a guess (`fn countdown<T>(n: i64)` is rejected by both
+  frontends).
+- **The instance is registered before its body is emitted**, so a generic
+  that calls itself terminates.
+- **`bool` has no type code in the pipeline** (it is i64 in this
+  codegen), so a bool instantiation mangles as `.i64` where the C++
+  compiler says `.bool`: the same behaviour, a different symbol name.
 
 Each step is gated by the same suites as the C++ compiler
 (`tests/test_differential.sh` is the oracle: the two frontends must produce

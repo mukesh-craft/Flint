@@ -84,19 +84,19 @@ fn main() -> i64 {
 ## D5 — The self-hosted pipeline lacks the features the C++ compiler gained after 2026-10-15. OPEN (feature gap, not a miscompile).
 
 The two compilers do not disagree on the programs both can compile: the
-differential gate is green (11/11, 0 known-divergence). What the gate does
+differential gate is green (12/12, 0 known-divergence). What the gate does
 NOT cover is the FEATURE GAP — the C++ compiler accepts programs the
 self-hosted pipeline cannot parse or emit at all. Those programs are not in
 the differential manifest, so the gate stays green while the gap is real.
 
 Features in the C++ compiler that the self-hosted pipeline does not have
-(as of commit 4214082):
+(as of commit 4214082; the generic row was closed in 2E.2):
 
 | Feature | C++ compiler | Self-hosted (stage2/stage3) |
 |---|---|---|
 | `trait` declarations and name+arity method dispatch (M3, `1219665`) | supported | absent — `trait` is not even in the parser |
 | Lambda-as-a-value with the env-box protocol (M4, `a6b89e6`) | supported | partial — the emitter has lambda shapes, the parser is behind |
-| Generic functions with by-parameter inference (M0-M2) | supported | absent — no `typeParams` in stage2 at all |
+| Generic functions with by-parameter inference (M0-M2) | supported | **supported** (2E.2) — the emitter monomorphizes, with the C++ compiler's own mangled instance names (`idc.i64`, `@"idc.s:Inner"`); the differential gate now covers a generic program |
 | Explicit type arguments `f::<T>(...)` (M2b, `3d3d914`) | supported | absent — `::` is not lexed by the self-host parser |
 | Enum equality by per-variant payload compare (P0-NEW-2, `d1c58cf`) | supported | absent — no aggregate equality in stage3 |
 | A named function used as a value (`let h = inc`, `fd8cf09`) | supported | absent |
@@ -106,8 +106,11 @@ Features in the C++ compiler that the self-hosted pipeline does not have
 - Verdict: the C++ compiler is right; the self-hosted pipeline is behind.
 - Disposition: PIN-LIMITATION for now, with the gap recorded here. Porting
   the features to the Flint pipeline is a project of its own (stage2 is
-  4.1k lines, stage3 is 7.6k); it is NOT a correctness bug in either
+  4.1k lines, stage3 is 8.3k); it is NOT a correctness bug in either
   compiler, and the differential gate correctly does not pretend otherwise.
+  The first feature to be ported was generics (2E.2): the emitter
+  monomorphizes, and the instance names are the C++ compiler's own, so
+  the two frontends agree symbol for symbol.
 - Follow-up: every feature added to the C++ compiler from now on should
   either land in the self-host pipeline too, or be listed in the table
   above. The table is the checklist.

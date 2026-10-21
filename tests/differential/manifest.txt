@@ -12,3 +12,6 @@ loop_cast.fl 0 - same
 sci_notation.fl 0 - same
 map_key_type.fl 0 - same
 overflow_cast.fl 134 - same
+# 2E: the pipeline must monomorphize exactly like the C++ compiler --
+# same output, and the same mangled instance names.
+t_generic.fl 0 t_generic.txt same
