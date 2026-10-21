@@ -327,6 +327,7 @@ static std::string gSafetyPosture = "safe";
 // Phase 2 / 2A.0 -- the type audit. Off by default; it prints the places
 // where the parser's inference and the codegen's inference disagree.
 static bool gTypeAudit = false;
+
 static bool gUnsafeWarned = false;
 
 // Stamp the artifact with its safety posture. The marker is referenced from
@@ -1478,6 +1479,12 @@ struct Type {
     bool isCompound() const { return kind == TypeKind::Array || kind == TypeKind::Ref; }
 };
 
+// Phase 2 / 2A -- the Flint type of every registered builtin, filled as the
+// builtins are registered (initBuiltins). The parser's inference reads this
+// map, so the two inference engines cannot disagree about a builtin's type:
+// there is ONE registry, and both read it.
+static std::unordered_map<std::string, Type> gBuiltinTypes;
+
 struct StructFieldDef {
     std::string name;
     Type type;
@@ -2627,7 +2634,26 @@ public:
     // Written as explicit per-name entries, NOT prefix matching: families mix
     // return kinds (flint_vec_get -> i64 but flint_vec_new -> ptr), so a
     // `flint_vec_` prefix test types every vec call as a pointer.
-    static Type inferCallType(const std::string& callee) {
+    // The type of a call's result.
+    //
+    // Phase 2 / 2A: the compiler's OWN registry is consulted first, so a
+    // builtin's type is whatever the compiler registered it as. The
+    // hand-written lists below used to be the only source, and they had
+    // drifted from the registry -- the type audit measured 178 declarations
+    // where the parser and the codegen disagreed, always "the parser says
+    // i64" (a call to flint_regex_replace, flint_str_*, ...). One registry
+    // removes the class, not just the instances.
+    Type inferCallType(const std::string& callee) {
+        auto bit = gBuiltinTypes.find(callee);
+        if (bit != gBuiltinTypes.end()) return bit->second;
+        // A USER function: its declared return type, from the pre-pass (so a
+        // forward reference resolves) or from the signatures seen so far.
+        auto rit = fnReturnTypes.find(callee);
+        if (rit != fnReturnTypes.end()) return rit->second;
+        return inferCallTypeFallback(callee);
+    }
+
+    static Type inferCallTypeFallback(const std::string& callee) {
         // Void builtins first: several share a prefix with a value-returning
         // family (flint_map_free vs flint_map_new).
         static const std::unordered_set<std::string> kVoid = {
@@ -2768,8 +2794,79 @@ public:
         prog.traits.push_back(td);
     }
 
+    // Phase 2 / 2A: a DECLARATION PRE-PASS.
+    //
+    // A function's body may call a function declared LATER in the file.
+    // Without a pre-pass the parser cannot know that call's return type and
+    // infers i64 -- which made
+    //
+    //     fn user() { s = later()
+    //                  s }
+    //     fn later() -> str { return "hello" }
+    //
+    // infer `user()` as returning i64, and the compiler then emitted invalid
+    // IR ("Function return type does not match operand type of return
+    // inst!") and refused to build a program that is perfectly valid. The
+    // type audit is what exposed it.
+    //
+    // The pre-pass records the return types it can see. It deliberately
+    // handles only the ANNOTATED forms (i64/f64/str/bool/void and a known
+    // struct or enum name): a function whose return type is INFERRED from
+    // its body cannot be known before the body is parsed, and guessing
+    // would be exactly the silent wrongness this work removes.
+    void prescanSignatures() {
+        // The lexer is LAZY (it tokenizes on demand), so the whole file is
+        // tokenized first -- otherwise the pre-pass would see an empty
+        // stream and find nothing.
+        while (lexer.ensure(lexer.getTokens().size()).type != TokenType::END_OF_FILE) {}
+        const auto& toks = lexer.getTokens();
+        size_t i = 0;
+        while (i < toks.size()) {
+            const Token& t = toks[i];
+            bool isFn = (t.type == TokenType::KW_FN || t.type == TokenType::KW_DEF);
+            if (!isFn) { i++; continue; }
+            // name
+            if (i + 1 >= toks.size() || toks[i + 1].type != TokenType::IDENTIFIER) { i++; continue; }
+            std::string name = toks[i + 1].lexeme;
+            // scan the parameter list for the "->" that precedes the body
+            size_t j = i + 2;
+            int depth = 0;
+            while (j < toks.size()) {
+                TokenType tt = toks[j].type;
+                if (tt == TokenType::LPAREN) depth++;
+                else if (tt == TokenType::RPAREN) depth--;
+                else if (depth == 0 && tt == TokenType::LBRACE) break;      // body: no annotation
+                else if (depth == 0 && tt == TokenType::ARROW) {
+                    // the return type, read from the tokens (no parseType:
+                    // it would report errors for shapes this pass does not model)
+                    if (j + 1 < toks.size()) {
+                        const Token& rt = toks[j + 1];
+                        Type r;
+                        bool known = true;
+                        if (rt.type == TokenType::KW_I64) r = Type::i64();
+                        else if (rt.type == TokenType::KW_F64) r = Type::f64();
+                        else if (rt.type == TokenType::KW_STR) r = Type::str();
+                        else if (rt.type == TokenType::KW_BOOL) r = Type::boolean();
+                        else if (rt.type == TokenType::IDENTIFIER) {
+                            if (structRegistry.count(rt.lexeme)) r = Type::struct_(rt.lexeme);
+                            else if (enumRegistry.count(rt.lexeme)) r = Type::enum_(rt.lexeme);
+                            else known = false;
+                        } else known = false;
+                        if (known) fnReturnTypes[name] = r;
+                    }
+                    break;
+                }
+                j++;
+            }
+            i = j;
+        }
+    }
+
     std::unique_ptr<ProgramAST> parseProgram() {
         auto prog = std::make_unique<ProgramAST>();
+        // Phase 2 / 2A: the signatures first, so a forward reference
+        // resolves (see prescanSignatures).
+        prescanSignatures();
         while (!isAtEnd()) {
             if (check(TokenType::KW_EXTERN)) {
                 parseExternBlock(*prog);
@@ -2947,6 +3044,10 @@ public:
         fn->untypedParams = std::move(untyped);
         fn->defaults = std::move(defaults);
         fn->returnType = retType;
+        // Phase 2 / 2A: record the signature so a call to THIS function
+        // infers its declared return type (the parse-time engine used to
+        // answer i64 for every user function).
+        fnReturnTypes[fn->name] = retType;
         fn->isDeclaration = false;
         fn->loc = nameTok.loc;
         for (auto& p : fn->params) {
@@ -3071,8 +3172,16 @@ private:
     bool error = false;
     std::string msg;
     std::unordered_set<std::string> declaredVars;
+    // Phase 2 / 2A: the RETURN TYPES of the functions parsed so far, so a
+    // call to an already-declared function infers its real type instead of
+    // the builtins table's i64 fallback.
+    std::unordered_map<std::string, Type> fnReturnTypes;
     std::unordered_set<std::string> globalVarNames;
     std::unordered_map<std::string, Type> varTypeMap;
+    // Phase 2 / 2A: the types visible at the end of the LAST block parsed
+    // (a snapshot, because the scope restore drops them). Used only by the
+    // return-type inference, which runs after the body is parsed.
+    std::unordered_map<std::string, Type> lastBlockTypes;
     std::unordered_map<std::string, StructDef> structRegistry;
     std::unordered_map<std::string, TraitDef> traitRegistry;
     std::unordered_map<std::string, EnumDef> enumRegistry;
@@ -3204,17 +3313,26 @@ private:
                 auto* v = static_cast<VariableExprAST*>(expr);
                 auto it = varTypeMap.find(v->name);
                 if (it != varTypeMap.end()) return it->second;
+                // The block's own scope may already have been closed (the
+                // return-type inference runs after the body was parsed).
+                auto bt = lastBlockTypes.find(v->name);
+                if (bt != lastBlockTypes.end()) return bt->second;
                 return Type::i64();
             }
             case NodeKind::Binary: {
                 auto* b = static_cast<BinaryExprAST*>(expr);
-                if (b->op == '+') {
-                    Type lt = b->lhs ? inferType(b->lhs.get()) : Type::i64();
-                    Type rt = b->rhs ? inferType(b->rhs.get()) : Type::i64();
-                    if (lt.kind == TypeKind::Str || rt.kind == TypeKind::Str)
-                        return Type::str();
-                    return Type::i64();
-                }
+                Type lt = b->lhs ? inferType(b->lhs.get()) : Type::i64();
+                Type rt = b->rhs ? inferType(b->rhs.get()) : Type::i64();
+                if (b->op == '+' &&
+                    (lt.kind == TypeKind::Str || rt.kind == TypeKind::Str))
+                    return Type::str();
+                // Phase 2 / 2A: arithmetic with a float operand is f64.
+                // Without this the parse-time engine said i64 for
+                // `denom = 2.0 * k_f + 1.0` while the codegen's engine said
+                // f64 -- the last big shape of the drift the type audit
+                // measures.
+                if (lt.kind == TypeKind::F64 || rt.kind == TypeKind::F64)
+                    return Type::f64();
                 return Type::i64();
             }
             case NodeKind::Lambda: {
@@ -3230,7 +3348,28 @@ private:
             case NodeKind::Call: {
                 auto* c = static_cast<CallExprAST*>(expr);
                 if (c->callee == "print") return Type::void_();
+                // A USER function: its declared return type. The parser
+                // records signatures as it goes (fnReturnTypes), so a call
+                // to a function declared EARLIER is typed correctly. A
+                // forward reference is still unknown here -- single-pass
+                // parsing cannot know it -- and falls back to i64.
+                auto rit = fnReturnTypes.find(c->callee);
+                if (rit != fnReturnTypes.end()) return rit->second;
                 return inferCallType(c->callee);
+            }
+            case NodeKind::FieldAccess: {
+                // The field's declared type, from the parsed struct table
+                // (the same source the codegen's engine uses).
+                auto* f = static_cast<FieldAccessAST*>(expr);
+                Type base = f->base ? inferType(f->base.get()) : Type::i64();
+                if (base.kind == TypeKind::Struct) {
+                    auto sit = gStructFieldTypes.find(base.structName);
+                    if (sit != gStructFieldTypes.end()) {
+                        for (auto& fd : sit->second)
+                            if (fd.first == f->fieldName) return fd.second;
+                    }
+                }
+                return Type::i64();
             }
             case NodeKind::StructLiteral: {
                 auto* sl = static_cast<StructLiteralAST*>(expr);
@@ -3331,6 +3470,31 @@ private:
                         }
                     }
                 }
+                // Phase 2 / 2A: a function whose last statement is an
+                // EXPLICIT `return` gets its return type from that
+                // expression. Without this the type stayed void and the
+                // codegen emitted `ret ptr` from a void function -- invalid
+                // IR, so a perfectly valid program
+                //
+                //     fn user() { return later() }
+                //     fn later() -> str { return "hello" }
+                //
+                // failed to compile with an internal LLVM error.
+                if (retType.kind == TypeKind::Void && fn->body &&
+                    fn->body->kind == NodeKind::Block) {
+                    auto* block = static_cast<BlockStmtAST*>(fn->body.get());
+                    for (auto& st : block->stmts) {
+                        if (!st || st->kind != NodeKind::Return) continue;
+                        auto* r = static_cast<ReturnStmtAST*>(st.get());
+                        if (!r->value) break;
+                        Type t = inferType(r->value.get());
+                        if (t.kind != TypeKind::Void) {
+                            retType = t;
+                            fn->returnType = retType;
+                        }
+                        break;
+                    }
+                }
                 // Implicit last-expr return: for non-void functions, wrap the last
                 // expression statement in an explicit return.
                 if (fn->body && fn->body->kind == NodeKind::Block && retType.kind != TypeKind::Void) {
@@ -3385,6 +3549,19 @@ private:
             else if (pos == before && !check(TokenType::RBRACE) && !isAtEnd()) advance();
         }
         consume(TokenType::RBRACE, "expected '}' to close block");
+        // Phase 2 / 2A: the types visible at the END of this block, kept
+        // as a SNAPSHOT. The scope restore below discards the block's
+        // declarations -- but the function's return type is inferred AFTER
+        // the body is parsed, so without the snapshot the inference saw only
+        // the default i64. That made
+        //
+        //     fn user() { s = later()
+        //                  s }
+        //     fn later() -> str { return "hello" }
+        //
+        // infer `user()` as returning i64 and emit invalid IR ("return type
+        // does not match operand type"), refusing a valid program.
+        lastBlockTypes = varTypeMap;
         // Restore outer scope (block-scoped variables go out of scope)
         declaredVars = std::move(outerVars);
         varTypeMap = std::move(outerTypes);
@@ -3877,7 +4054,20 @@ private:
                     varType = inferCallType(cInit->callee);
                     break;
                 }
-                default: break;
+                // Phase 2 / 2A: every other initializer shape goes through
+                // the general inferencer instead of keeping the default i64.
+                //
+                // The switch above handled eight shapes; everything else --
+                // an interpolated string (a `+` chain), a field access, an
+                // index, a call to a USER function -- silently became i64
+                // here, while the codegen's engine inferred the real type.
+                // That is the drift the type audit measures (135 declarations
+                // corpus-wide), and it is why the parse-time type could not
+                // be trusted for anything.
+                default: {
+                    if (init) varType = inferType(init.get());
+                    break;
+                }
             }
         }
         varTypeMap[nameTok.lexeme] = varType;
@@ -5043,6 +5233,11 @@ public:
             mod->setDataLayout(tm->createDataLayout());
             delete tm;
         }
+        // Phase 2 / 2A: register the builtins NOW, so the registry of
+        // builtin TYPES exists before the parser runs and the parser's
+        // inference reads the compiler's own table. (initBuiltins is
+        // idempotent; generateDeclarations calls it again, harmlessly.)
+        initBuiltins();
     }
 
     void setParser(Parser* p) { parser = p; }
@@ -5096,6 +5291,9 @@ public:
     // partial IR is never JIT-run/emitted/linked. emitFunction returns false
     // when the flag is set (checked at its end).
     bool cgHadError = false;
+    // Phase 2 / 2A: the builtins are registered once; the TYPE registry
+    // they fill must exist before parsing.
+    bool builtinsInitialized = false;
     // A short, stable name for a type, for the audit report.
     static std::string typeTag(const Type& t) {
         switch (t.kind) {
@@ -5448,10 +5646,45 @@ public:
         enumRegistry["Result"] = resultEnum;
     }
 
+    // The Flint type behind an LLVM type, for the builtins the compiler
+    // registers. Phase 2 / 2A: the parser's inference reads the compiler's
+    // OWN registry through this, so the two engines cannot disagree about
+    // a builtin's type.
+    Type flintTypeOfLlvm(llvm::Type* t) {
+        if (!t) return Type::void_();
+        if (t == llvm::Type::getInt64Ty(*ctx)) return Type::i64();
+        if (t == llvm::Type::getInt32Ty(*ctx)) return Type::i64();
+        if (t == llvm::Type::getDoubleTy(*ctx)) return Type::f64();
+        if (t->isPointerTy()) return Type::str();
+        if (t->isVoidTy()) return Type::void_();
+        if (t->isStructTy()) {
+            // An aggregate handle: {ptr, i64} is an array.
+            auto* st = llvm::cast<llvm::StructType>(t);
+            if (st->getNumElements() == 2 &&
+                st->getElementType(0)->isPointerTy() &&
+                st->getElementType(1)->isIntegerTy(64))
+                return Type::array(Type::i64());
+        }
+        return Type::i64();
+    }
+
     void initBuiltins() {
+        // Idempotent: the registry of builtin TYPES must exist before the
+        // parser runs (the parser's inference reads it), and the functions
+        // themselves are created once.
+        if (builtinsInitialized) return;
+        builtinsInitialized = true;
         auto add = [&](const std::string& n, llvm::Type* r, std::vector<llvm::Type*> p, bool va) {
             auto f = llvm::Function::Create(llvm::FunctionType::get(r, p, va), llvm::Function::ExternalLinkage, n, mod.get());
             functionMap[n] = f;
+            // Phase 2 / 2A: the builtin's FLINT type, derived from the
+            // return type AT REGISTRATION. The parser used to answer from a
+            // hand-written list that had drifted from this registry (the
+            // type audit measured 178 declarations where the two engines
+            // disagreed, always "the parser says i64"). Deriving the table
+            // here makes that class of drift IMPOSSIBLE: there is one
+            // registry, and the parser reads it.
+            gBuiltinTypes[n] = flintTypeOfLlvm(r);
         };
         add("flint_println_i64", voidTy, {i64Ty}, false);
         add("flint_println_str", voidTy, {i8PtrTy}, false);
@@ -6357,7 +6590,7 @@ public:
             case NodeKind::Call: {
                 auto* c = static_cast<CallExprAST*>(e);
                 if (c->callee == "print") return Type::void_();
-                return Parser::inferCallType(c->callee);
+                return Parser::inferCallTypeFallback(c->callee);
             }
             // The three cases below were missing, so generic inference fell
             // through to the `default` i64 for any of them. That is the
@@ -6530,7 +6763,7 @@ public:
                 }
                 // A builtin: the builtins table knows the real return types.
                 if (c->callee == "print") return false; // void
-                out = Parser::inferCallType(c->callee);
+                out = Parser::inferCallTypeFallback(c->callee);
                 return true;
             }
             default:
@@ -13531,7 +13764,7 @@ int main(int argc, char* argv[]) {
     // And skip in --test mode: a cached binary would skip the tests silently.
     bool emitBinary = !emitLl && !emitObj && !runMode;
 
-    if (emitBinary && !testModeFlag && !checkBce && cache.hasBinary(sourceHash)) {
+    if (emitBinary && !testModeFlag && !checkBce && !gTypeAudit && cache.hasBinary(sourceHash)) {
         if (cache.loadBinary(sourceHash, outputPath)) {
             if (getenv("FLINT_LOG_CACHE"))
                 std::cerr << "cache: hit binary (skipped lex/parse/codegen/link)\n";
@@ -13549,7 +13782,10 @@ int main(int argc, char* argv[]) {
     // cache hit the "checks emitted" count is gone and the flag would
     // print nothing (or, worse, a misleading number). A diagnostic that
     // depends on cache state is not a diagnostic.
-    if (!runMode && !testModeFlag && !checkBce && cache.has(sourceHash)) {
+    // The type audit needs codegen to RUN, so it bypasses the module cache
+    // (the same reasoning as --check-bce: a diagnostic that depends on
+    // cache state is not a diagnostic).
+    if (!runMode && !testModeFlag && !checkBce && !gTypeAudit && cache.has(sourceHash)) {
         llvm::LLVMContext ctx;
         if (auto cachedMod = cache.load(sourceHash, ctx)) {
             PROFILE_END(); // cache_check
@@ -13592,6 +13828,14 @@ int main(int argc, char* argv[]) {
     PROFILE_BEGIN("lex");
     Lexer lexer(sourceRef);
     PROFILE_END(); // lex (lexing is now lazy, happens during parse_decls)
+
+    // Phase 2 / 2A: the compiler is constructed BEFORE the parse, so the
+    // registry of builtin TYPES exists when the parser infers. The parser
+    // and the codegen then read ONE registry and cannot drift on a
+    // builtin's type.
+    PROFILE_BEGIN("codegen_setup");
+    Codegen codegen(targetTripleSpec);
+    PROFILE_END(); // codegen_setup
 
     PROFILE_BEGIN("parse_decls");
     Parser parser(lexer);
@@ -13840,7 +14084,7 @@ int main(int argc, char* argv[]) {
     }
 
     PROFILE_BEGIN("codegen");
-    Codegen codegen(targetTripleSpec);
+    // (the Codegen was constructed before the parse -- see above)
     // Phase 2 / 2A.0: the type audit must be enabled BEFORE codegen
     // runs -- it compares the two inference engines as it goes.
     codegen.auditTypes = gTypeAudit;
