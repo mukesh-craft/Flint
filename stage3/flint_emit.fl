@@ -6911,8 +6911,13 @@ fn e_fn_body() -> i64 {
     nm = e_word()
     tp = e_skip_balanced_fn()
     if tp != "tparams" {
+        # A non-empty tparams group is a GENERIC function: it must be
+        # monomorphized (one instance per type-argument tuple) rather than
+        # emitted as-is. The stage2 parser already produces that form; the
+        # monomorphization is specified, with the exact S-expression
+        # contract, in docs/PIPELINE-GENERICS.md.
         EERR = EERR + 1
-        print("emit error: generics need G6")
+        print("emit error: generics need G6 (see docs/PIPELINE-GENERICS.md)")
         return 0
     }
     idx = e_sig_lookup(nm)
