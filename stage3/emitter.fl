@@ -1,6 +1,6 @@
-# stage3/flint_emit.fl — S-expr to LLVM IR text (Stage 3, self-hosting).
+# stage3/emitter.fl — S-expr to LLVM IR text (Stage 3, self-hosting).
 #
-# Usage: flintc stage3/flint_emit.fl -- prog.sexp prog.ll
+# Usage: flintc stage3/emitter.fl -- prog.sexp prog.ll
 # Reads an S-expression IR file (Stage-2 output), writes LLVM IR text.
 # Scope: G0 (prog/main/decl/assign/return/call-print/num/str/var) +
 # G1 (binops/if/while/break/continue + overflow/divzero panics) +
@@ -19,7 +19,7 @@
 # channel, like pp's PPPREC); sym tables are scope-stamped maps (like PDECL);
 # no short-circuit `and` relied on; `mut` loop bounds; `//` is a comment.
 # Type codes: 1 i64, 2 f64, 3 str/ptr, 0 void/unknown.
-import "../stage1/flint_lex"
+import "../stage1/lexer"
 # S-expr input globals (set once by driver; never reassigned, only read).
 mut ESRC: str = ""
 EC = flint_vec_new()
@@ -7582,7 +7582,7 @@ fn e_eval_default(off: i64, len: i64) -> str {
 # ---- driver ----
 fn main() -> i64 {
     if flint_arg_count() < 3 {
-        print("usage: flint_emit <prog.sexp> <out.ll>")
+        print("usage: emitter <prog.sexp> <out.ll>")
         return 1
     }
     path = flint_get_arg(1)

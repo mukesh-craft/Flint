@@ -5,7 +5,7 @@
 set -u
 FLINTC="${1:-./flintc}"
 SELF_DIR="${SELF_DIR:-}"
-EMIT_CMD=("$FLINTC" stage3/flint_emit.fl --)
+EMIT_CMD=("$FLINTC" stage3/emitter.fl --)
 if [ -n "$SELF_DIR" ] && [ -x "$SELF_DIR/emit.0" ]; then
   EMIT_CMD=("$SELF_DIR/emit.0")
 fi

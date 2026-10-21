@@ -5,9 +5,12 @@ set -u
 FLINTC="${1:-./flintc}"
 pass=0; fail=0
 DIFFDIR="$(mktemp -d)"
-for f in stage2/p*.fl; do
+# The golden corpus is the numbered p-cases (p2.sexp, p3.sexp). The glob is
+# digit-anchored on purpose: `p*.fl` also matched stage2/parser.fl, whose
+# parse has no golden (and is far too big to want one).
+for f in stage2/p[0-9]*.fl; do
   base="${f%.fl}"
-  "$FLINTC" stage2/flint_parse.fl -- "$f" > "$DIFFDIR/got.txt" 2>/dev/null
+  "$FLINTC" stage2/parser.fl -- "$f" > "$DIFFDIR/got.txt" 2>/dev/null
   if [ $? -ne 0 ]; then echo "FAIL $f (nonzero exit)"; fail=$((fail+1)); continue; fi
   if diff -q "$base.sexp" "$DIFFDIR/got.txt" > /dev/null; then pass=$((pass+1));
   else echo "FAIL $f (golden diff)"; diff "$base.sexp" "$DIFFDIR/got.txt" | head -n 6; fail=$((fail+1)); fi

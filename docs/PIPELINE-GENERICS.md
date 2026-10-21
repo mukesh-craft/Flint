@@ -9,7 +9,7 @@ re-derived. The measurements below are from this device.
 | piece | state | evidence |
 |---|---|---|
 | stage2 (parser) accepts a **generic function** | **YES** | `parse.0` on `fn idc<T>(x: T) -> T { return x }` yields `(fn idc (tparams T) ( (x T -)) T (block (return (var x))))` — the type parameters are captured in the `tparams` group |
-| stage3 (emitter) accepts a generic function | **NO** | `emit.0` prints `emit error: generics need G6` (`stage3/flint_emit.fl:6915`, and again at `:7350`) |
+| stage3 (emitter) accepts a generic function | **NO** | `emit.0` prints `emit error: generics need G6` (`stage3/emitter.fl:6915`, and again at `:7350`) |
 | stage2 accepts a **trait** | **NO** | `parse.0` on a `trait Shape { fn area(self) -> i64 }` reports `parse error at 2:7 (kind 14)` — a method SIGNATURE (no body) is not parseable; worse, the trait text is mis-parsed as a function named `trait` |
 | stage3 emits a trait | **NO** | no trait form exists in the emitter |
 

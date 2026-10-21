@@ -4,7 +4,7 @@
 # Env: SELF_DIR with parse.0/emit.0 (default $TMPDIR/slipstream/self).
 # C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
 # Prints CSV: input,bytes,cpp_ms,self_parse_ms,self_emit_ms,self_total_ms
-# Corpus: tests/differential/common.fl (small), stage1/flint_lex.fl (large).
+# Corpus: tests/differential/common.fl (small), stage1/lexer.fl (large).
 set -u
 FLINTC="${1:-./flintc}"
 RUNS="${2:-3}"
@@ -37,4 +37,4 @@ bench_one() { # $1=label $2=src
 }
 echo "input,bytes,cpp_ms,self_parse_ms,self_emit_ms,self_total_ms"
 bench_one small tests/differential/common.fl
-bench_one lex stage1/flint_lex.fl
+bench_one lex stage1/lexer.fl

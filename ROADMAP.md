@@ -550,7 +550,7 @@ done), hygiene/docs (commit + push done, auto-docs open).
 | Task | Goal | Locations | Acceptance gate | Effort |
 |------|------|-----------|-----------------|--------|
 | B1 cold panics + UB audit | mark panic/overflow/bounds paths cold; audit `runtime.c` casts under UBSan (checked-by-default already done — not redone) | `runtime/runtime.c` `flint_panic`, `flint_bounds_check` (CPP-ONLY) | no perf regression on 17/17; sanitizers clean | S/M |
-| B2 redundant-check drop | drop provably-redundant checks only (emitter attrs already done — not redone). EDIT-FLINT, HIGH fixpoint risk | `stage3/flint_emit.fl` `e_rt_sig`, `e_bounds_inline` | falsifier: self-host fixpoint byte-identical + 17/17; abort on any differential mismatch | M |
+| B2 redundant-check drop | drop provably-redundant checks only (emitter attrs already done — not redone). EDIT-FLINT, HIGH fixpoint risk | `stage3/emitter.fl` `e_rt_sig`, `e_bounds_inline` | falsifier: self-host fixpoint byte-identical + 17/17; abort on any differential mismatch | M |
 | B3 interface-cache remainder + init timing | finish only the open cache paths; measure process-init share to decide if a daemon is ever justified (C1 done — not redone) | `src/main.cpp` `emitInterface`/`loadInterface` (CPP-ONLY) | hit-rate + init-time logged; no cold-build slowdown; 17/17 green | M |
 
 ### J-C: Bigger bets (only if A+B green)

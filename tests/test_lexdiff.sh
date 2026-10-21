@@ -19,7 +19,7 @@ for f in $(find tests tutorial benchmarks examples stage1 agent-bench -name "*.f
   if [ -n "$SELF_DIR" ] && [ -x "$SELF_DIR/lex.0" ]; then
     "$SELF_DIR/lex.0" "$f" > "$DIFFDIR/fl.txt" 2>/dev/null
   else
-    "$FLINTC" stage1/flint_lex.fl -- "$f" > "$DIFFDIR/fl.txt" 2>/dev/null
+    "$FLINTC" stage1/lexer.fl -- "$f" > "$DIFFDIR/fl.txt" 2>/dev/null
   fi
   if diff -q "$DIFFDIR/cpp.txt" "$DIFFDIR/fl.txt" > /dev/null; then pass=$((pass+1));
   else echo "FAIL $f (diff)"; fail=$((fail+1)); fi

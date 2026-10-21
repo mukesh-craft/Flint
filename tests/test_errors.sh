@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# errors gate: every diagnostic stage3/flint_emit.fl can print must be
+# errors gate: every diagnostic stage3/emitter.fl can print must be
 # catalogued in docs/errors.md (and vice versa) — no silent new errors.
 # Usage: bash tests/test_errors.sh          # gate only
 #        bash tests/test_errors.sh --fix    # regenerate the catalog section
@@ -7,7 +7,7 @@ set -u
 if [ "${1:-}" = "--fix" ]; then
 python3 - <<'PYFIX'
 import re
-src = open('stage3/flint_emit.fl').read()
+src = open('stage3/emitter.fl').read()
 emitted = sorted(set(re.findall(r'print\("((?:emit error|codegen)[^"]*)"\)', src)))
 doc = open('docs/errors.md').read()
 head, _ = doc.split('## Complete message list', 1)
@@ -26,7 +26,7 @@ fi
 python3 - <<'PYEOF'
 import re
 import sys
-src = open('stage3/flint_emit.fl').read()
+src = open('stage3/emitter.fl').read()
 emitted = set(re.findall(r'print\("((?:emit error|codegen)[^"]*)"\)', src))
 doc = open('docs/errors.md').read()
 documented = set(re.findall(r'`((?:emit error|codegen)[^`]*)`', doc))

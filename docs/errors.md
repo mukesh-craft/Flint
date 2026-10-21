@@ -1,6 +1,6 @@
 # Emitter error catalog
 
-Every diagnostic the self-hosted emitter (`stage3/flint_emit.fl`) can
+Every diagnostic the self-hosted emitter (`stage3/emitter.fl`) can
 produce. Generated list; fix guidance curated. Stage-2 (parser) errors
 are prefixed `parse error` with line/col and are not catalogued here.
 
@@ -77,6 +77,7 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: for needs an iterator`
 - `emit error: for needs range, array or str`
 - `emit error: generics need G6`
+- `emit error: generics need G6 (see docs/PIPELINE-GENERICS.md)`
 - `emit error: global init mismatch`
 - `emit error: idx-set needs array (strings are immutable)`
 - `emit error: idx-set needs i64 index`
@@ -161,4 +162,4 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: void initializer`
 - `emit error: void variadic arg`
 
-Total: 128 messages.
+Total: 129 messages.

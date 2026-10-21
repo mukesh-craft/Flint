@@ -652,7 +652,7 @@ The differential gate is green (11/11) *because* it does not cover them.
 **Do**: after 4.2, make the pipeline emit the shared HIR rather than
 re-implementing the semantics. Until then, D5 is the honest record.
 
-**Verify**: `grep -c typeParams stage2/flint_parse.fl` → 0 today.
+**Verify**: `grep -c typeParams stage2/parser.fl` → 0 today.
 
 ### 4.10 P3 — Items that need a decision or a different machine
 

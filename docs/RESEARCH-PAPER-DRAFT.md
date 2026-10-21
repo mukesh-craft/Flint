@@ -376,8 +376,8 @@ capability quarantine (§2.1) once D1/D2 are closed.
 
 External ideas enter the roadmap above only if they pass four tests.
 (a) Layer test: name the layer — C++ compiler pass (`src/main.cpp`),
-self-hosted pipeline stage (`stage1/flint_lex.fl`, `stage2/flint_parse.fl`,
-`stage3/flint_emit.fl`), C runtime (`runtime/`), or hardware-dependent;
+self-hosted pipeline stage (`stage1/lexer.fl`, `stage2/parser.fl`,
+`stage3/emitter.fl`), C runtime (`runtime/`), or hardware-dependent;
 hardware-dependent (GPU/NPU, cross-compilation) is out on phones per the
 §1 non-goals, and C++/self-hosted divergences must be logged in
 `COMPATIBILITY.md` and covered by `tests/test_differential.sh`.

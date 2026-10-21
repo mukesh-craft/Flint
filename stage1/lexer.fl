@@ -1,4 +1,4 @@
-# stage1/flint_lex.fl — Flint lexer (Stage 1 of self-hosting).
+# stage1/lexer.fl — Flint lexer (Stage 1 of self-hosting).
 #
 # Contract: byte-identical token stream to `flintc --dump-tokens`:
 #   kinds: 1 IDENT, 2 NUMBER, 3 STRING, 10-36 keywords, 50-88 punctuation
@@ -848,12 +848,12 @@ fn lex_esc_dump(s: str) -> str {
     flint_sb_free(sb)
     r
 }
-# Dump driver: `flintc run stage1/flint_lex.fl -- <file.fl>` prints
+# Dump driver: `flintc run stage1/lexer.fl -- <file.fl>` prints
 # kind:lexeme:line:col per line, same shape as `flintc --dump-tokens`.
 # Exit: lexer hadErr (0 clean, 1 on bad char / unterminated string).
 fn main() -> i64 {
     if flint_arg_count() < 2 {
-        print("usage: flint_lex <file.fl>")
+        print("usage: lexer <file.fl>")
         return 1
     }
     path = flint_get_arg(1)
