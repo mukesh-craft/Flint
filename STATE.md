@@ -34,6 +34,29 @@ Companion documents, and what each is for:
 
 ---
 
+## 0.1 CONTEXT WATCH (living block — update at every step)
+
+**Purpose:** if a future session (or a compacted one) has no memory of this
+work, this block says where the work stands, what is in flight, and what the
+next action is. It is the first thing to read and the first thing to update.
+
+| field | value |
+|---|---|
+| current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`) |
+| in flight | (none — see the git log for the newest commit) |
+| next action | **2A: make ONE inference engine authoritative** — complete the parser's `inferType` with the cases the codegen's engine already has (Call, FieldAccess, Cast, Index), so the type audit's drift goes to zero |
+| then | 2C the loop-range analysis (designed in §4.2); 2B one place that emits safety checks; 2D capture-less closures may escape (a static box); 2E the pipeline convergence (document, do not attempt) |
+| build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
+| gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
+| invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
+| do not | hand-write a vectorizer (the roadmap rejects it); use `llvm.assume` for range facts instead |
+
+**If you are reading this with no memory at all:** §2 has the build and gate
+recipes, §4 has the open items with a "verify it is still open" command for
+each, §6 has the findings that justify the plan, §8 has the traps (read §8
+before running anything), and the git log has one commit per completed step.
+
 ## 1. Current position
 
 **Flint is a 0.22.0 systems language with a safety model, a
