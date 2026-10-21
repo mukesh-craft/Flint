@@ -5646,6 +5646,25 @@ public:
     std::unordered_map<std::string, FunctionAST*> genericFunctions;
     bool hasPython = false;
     bool releaseMode = true;  // default: no overflow checks
+    // Phase 2 / 2B: the SAFETY POLICY -- one place that decides which
+    // checks are inserted.
+    //
+    // The posture used to be spread over two switches (`releaseMode` for
+    // the overflow check, a separate flag for the bounds check), which can
+    // disagree -- and a disagreement means either a missing check (unsafe)
+    // or a check nobody asked for (slow). One struct, one decision point.
+    //
+    // The counters are exact and PRE-optimization, so the dashboard can
+    // report "checks inserted" and "checks surviving" separately.
+    struct SafetyPolicy {
+        bool bounds = true;    // array index bounds
+        bool overflow = true;  // integer overflow
+        bool divZero = true;   // division by zero
+        long boundsInserted = 0;
+        long overflowInserted = 0;
+        long divZeroInserted = 0;
+    };
+    SafetyPolicy safety;
     bool loopOpt = false;   // C1 --loop-opt: loop-friendly check attrs (off by default)
     std::unordered_map<std::string, Type> typeSubstMap;
     std::unordered_map<std::string, llvm::Function*> genericCache;
@@ -6071,7 +6090,7 @@ public:
         // `free(a)` then `read_i64_unchecked(a, 999999)`. releaseMode is true
         // only for --unsafe (false = safe mode, the default), and it is
         // assigned before generateDeclarations runs.
-        if (releaseMode) {
+        if (!safety.overflow) {
             add("flint_aegis_read_i64_unchecked", i64Ty, {i64Ty, i64Ty}, false);
             add("flint_aegis_write_i64_unchecked", voidTy, {i64Ty, i64Ty, i64Ty}, false);
         }
@@ -7555,7 +7574,7 @@ public:
                     }
                 }
                 if (b->op == '+' || b->op == '-' || b->op == '*') {
-                    if (releaseMode) {
+                    if (!safety.overflow) {
                         switch (b->op) {
                             case '+': return builder->CreateAdd(l, r, "add");
                             case '-': return builder->CreateSub(l, r, "sub");
@@ -7603,6 +7622,7 @@ public:
                             return builder->CreateSub(l, r, "sub_notime");
                     }
                     llvm::Intrinsic::ID iid;
+                    safety.overflowInserted++;
                     switch (b->op) {
                         case '+': iid = llvm::Intrinsic::sadd_with_overflow; break;
                         case '-': iid = llvm::Intrinsic::ssub_with_overflow; break;
@@ -8163,8 +8183,10 @@ public:
 // check mirrors the overflow check beside it: inline `icmp` + branch, with
 // flint_panic only in the cold block, so the hot path keeps no call.
 void emitDivByZeroCheck(llvm::Value* r) {
+    if (!safety.divZero) return;
     auto* panicFn = functionMap["flint_panic"];
     if (!panicFn) return;
+    safety.divZeroInserted++;
     auto* curF = builder->GetInsertBlock()->getParent();
     auto* okBB = llvm::BasicBlock::Create(*ctx, "div_ok", curF);
     auto* panicBB = llvm::BasicBlock::Create(*ctx, "div_panic", curF);
@@ -8882,9 +8904,10 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         // there, so the opt-out is explicit (a build flag, never a
         // profile), visible (a warning), and auditable (the artifact is
         // stamped "flint:safety=unsafe").
-        if (gSafetyPosture == "unsafe") return;
+        if (!safety.bounds) return;
         auto* boundsFn = functionMap["flint_bounds_check"];
         if (!boundsFn) return;
+        safety.boundsInserted++;
         auto* curF = builder->GetInsertBlock()->getParent();
         auto* okBB = llvm::BasicBlock::Create(*ctx, "bounds_ok", curF);
         auto* panicBB = llvm::BasicBlock::Create(*ctx, "bounds_panic", curF);
@@ -11085,7 +11108,7 @@ llvm::Value* Parser::parseIdentEmit() {
 }
 
 llvm::Value* Parser::emitArithOpEmit(char op, llvm::Value* l, llvm::Value* r) {
-    if (cg->releaseMode) {
+    if (!cg->safety.overflow) {
         switch (op) {
             case '+': return cg->builder->CreateAdd(l, r, "add");
             case '-': return cg->builder->CreateSub(l, r, "sub");
@@ -14409,6 +14432,17 @@ int main(int argc, char* argv[]) {
     // Phase 2 / 2A.0: the type audit must be enabled BEFORE codegen
     // runs -- it compares the two inference engines as it goes.
     codegen.auditTypes = gTypeAudit;
+    // Phase 2 / 2B: the safety posture becomes the safety POLICY, in one
+    // place. `--unsafe` removes the two PERFORMANCE checks (overflow and
+    // bounds); the divide-by-zero trap, the ownership rules and the
+    // one-error-per-program contract are NOT part of the performance
+    // posture and stay.
+    {
+        bool unsafeBuild = (gSafetyPosture == "unsafe");
+        codegen.safety.bounds = !unsafeBuild;
+        codegen.safety.overflow = !unsafeBuild;
+        codegen.safety.divZero = true;
+    }
     if (debugFlag) codegen.initDebugSource(inputPath);
     codegen.releaseMode = releaseMode;
     codegen.loopOpt = loopOpt;
@@ -14519,6 +14553,12 @@ int main(int argc, char* argv[]) {
         std::cout << "bce: " << checksBeforeOpt << " checks emitted, "
                   << checksAfterOpt << " survive O2 ("
                   << (checksBeforeOpt - checksAfterOpt) << " elided)\n";
+        // Phase 2 / 2B: the policy's own counters are exact and
+        // pre-optimization, so "emitted" is not inferred from the IR.
+        std::cout << "bce: inserted by policy -- bounds "
+                  << codegen.safety.boundsInserted
+                  << ", overflow " << codegen.safety.overflowInserted
+                  << ", div-zero " << codegen.safety.divZeroInserted << "\n";
     }
 
     // --test mode: compile & run all test_ functions via JIT, report results
