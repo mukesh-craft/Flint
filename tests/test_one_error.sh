@@ -24,7 +24,7 @@ CASES=(
     "tests/t_pfor_removed.fl|'parallel for' was removed"
     "tests_manual/t_explicit_targs_bad.fl|expects 1 type argument(s), got 2"
     "tests_manual/t_explicit_targs_nongen.fl|explicit type arguments are only allowed on a generic function"
-    "tests_manual/t_named_fn_escape.fl|cannot return a function value"
+    "tests_manual/t_capturing_escape.fl|cannot return a lambda: it would escape its defining frame"
     "tests_manual/t_generic_no_infer.fl|cannot infer type parameter"
 )
 

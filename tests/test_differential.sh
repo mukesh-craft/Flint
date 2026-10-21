@@ -9,6 +9,27 @@ set -u
 FLINTC="${1:-./flintc}"
 _TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
 SELF_DIR="${SELF_DIR:-$_TMPBASE/slipstream/self}"
+# The tmp copy is cleaned by the system from time to time, and then this
+# gate fails with "self binaries" for a reason that has nothing to do with
+# the code. The STABLE self-host artifacts (built by tests/test_selfhost.sh)
+# are used as a fallback.
+if [ ! -x "$SELF_DIR/parse.0" ] && [ -x /data/data/com.termux/files/home/flintwork/self/parse.0 ]; then
+    # Only use the stable artifacts if they are NEWER than the pipeline
+    # sources. Stale artifacts produce FALSE divergences (the pipeline of
+    # last month rejects what today's pipeline accepts), which looks like a
+    # bug in the compiler and hides real ones.
+    STABLE=/data/data/com.termux/files/home/flintwork/self
+    stable_ok=1
+    for src in stage2/flint_parse.fl stage3/flint_emit.fl stage1/flint_lex.fl; do
+        if [ "$src" -nt "$STABLE/parse.0" ] 2>/dev/null; then stable_ok=0; fi
+    done
+    if [ "$stable_ok" = 1 ]; then
+        SELF_DIR="$STABLE"
+    else
+        echo "differential: the stable self-host artifacts are OLDER than the pipeline sources;" >&2
+        echo "            build fresh ones with: bash tests/test_selfhost.sh A" >&2
+    fi
+fi
 TMPD="$_TMPBASE/slipstream/diff"
 mkdir -p "$TMPD"
 pass=0; fail=0; known=0

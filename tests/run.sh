@@ -57,6 +57,9 @@ check tests_manual/t_named_fn_value.fl "10"
 # invalid IR (forward reference, explicit return, return-statement type).
 check tests_manual/t_return_inference.fl "hello"
 check tests_manual/t_return_inference.fl "hi"
+# Phase 2 / 2D: a function value that captures nothing may escape.
+check tests_manual/t_static_fn_value.fl "6"
+check tests_manual/t_static_fn_value.fl "10"
 # Copying a function VALUE into another binding keeps its fn type.
 check tests_manual/t_fn_value_copy.fl "6"
 check tests_manual/t_fn_value_copy.fl "10"
@@ -96,8 +99,10 @@ check_fail tests/t_pfor_removed.fl "'parallel for' was removed: it could not cap
 # M2b: explicit type arguments — wrong count, and a non-generic callee.
 check_fail tests_manual/t_explicit_targs_bad.fl "'idc' expects 1 type argument(s), got 2"
 check_fail tests_manual/t_explicit_targs_nongen.fl "explicit type arguments are only allowed on a generic function"
-# M4 follow-up: a named function value is frame-bound, like a lambda.
-check_fail tests_manual/t_named_fn_escape.fl "cannot return a function value: it would escape its defining frame"
+# Phase 2 / 2D: a named function's value may escape (it captures nothing),
+# and a closure that CAPTURES may not (its box is frame-bound).
+check tests_manual/t_named_fn_escape.fl "6"
+check_fail tests_manual/t_capturing_escape.fl "cannot return a lambda: it would escape its defining frame"
 # M2c: an argument whose type cannot be determined is reported by name.
 check_fail tests_manual/t_generic_no_infer.fl "cannot infer type parameter 'T' for 'idc'; the argument's type could not be determined"
 echo "smoke: $pass passed, $fail failed"

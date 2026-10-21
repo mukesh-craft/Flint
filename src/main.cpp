@@ -2814,6 +2814,45 @@ public:
     // struct or enum name): a function whose return type is INFERRED from
     // its body cannot be known before the body is parsed, and guessing
     // would be exactly the silent wrongness this work removes.
+    // Reads a type from the token stream, for the pre-pass. Only the
+    // shapes the pre-pass can read without the full type parser (which
+    // would report errors for shapes it does not model): the scalars, a
+    // known struct or enum name, and a fn type.
+    bool readTypeFromTokens(const std::vector<Token>& toks, size_t& i, Type& out) {
+        if (i >= toks.size()) return false;
+        const Token& t = toks[i];
+        if (t.type == TokenType::KW_I64) { out = Type::i64(); i++; return true; }
+        if (t.type == TokenType::KW_F64) { out = Type::f64(); i++; return true; }
+        if (t.type == TokenType::KW_STR) { out = Type::str(); i++; return true; }
+        if (t.type == TokenType::KW_BOOL) { out = Type::boolean(); i++; return true; }
+        if (t.type == TokenType::KW_FN) {
+            // fn(T1, T2) -> R
+            i++;
+            if (i >= toks.size() || toks[i].type != TokenType::LPAREN) return false;
+            i++;
+            std::vector<Type> ps;
+            while (i < toks.size() && toks[i].type != TokenType::RPAREN) {
+                Type pt;
+                if (!readTypeFromTokens(toks, i, pt)) return false;
+                ps.push_back(pt);
+                if (i < toks.size() && toks[i].type == TokenType::COMMA) i++;
+            }
+            if (i >= toks.size()) return false;
+            i++;                                   // ')'
+            if (i >= toks.size() || toks[i].type != TokenType::ARROW) return false;
+            i++;
+            Type rt;
+            if (!readTypeFromTokens(toks, i, rt)) return false;
+            out = Type::fn_(ps, rt);
+            return true;
+        }
+        if (t.type == TokenType::IDENTIFIER) {
+            if (structRegistry.count(t.lexeme)) { out = Type::struct_(t.lexeme); i++; return true; }
+            if (enumRegistry.count(t.lexeme)) { out = Type::enum_(t.lexeme); i++; return true; }
+        }
+        return false;
+    }
+
     void prescanSignatures() {
         // The lexer is LAZY (it tokenizes on demand), so the whole file is
         // tokenized first -- otherwise the pre-pass would see an empty
@@ -2838,22 +2877,11 @@ public:
                 else if (depth == 0 && tt == TokenType::LBRACE) break;      // body: no annotation
                 else if (depth == 0 && tt == TokenType::ARROW) {
                     // the return type, read from the tokens (no parseType:
-                    // it would report errors for shapes this pass does not model)
-                    if (j + 1 < toks.size()) {
-                        const Token& rt = toks[j + 1];
-                        Type r;
-                        bool known = true;
-                        if (rt.type == TokenType::KW_I64) r = Type::i64();
-                        else if (rt.type == TokenType::KW_F64) r = Type::f64();
-                        else if (rt.type == TokenType::KW_STR) r = Type::str();
-                        else if (rt.type == TokenType::KW_BOOL) r = Type::boolean();
-                        else if (rt.type == TokenType::IDENTIFIER) {
-                            if (structRegistry.count(rt.lexeme)) r = Type::struct_(rt.lexeme);
-                            else if (enumRegistry.count(rt.lexeme)) r = Type::enum_(rt.lexeme);
-                            else known = false;
-                        } else known = false;
-                        if (known) fnReturnTypes[name] = r;
-                    }
+                    // it would report errors for shapes this pass does not
+                    // model)
+                    size_t k = j + 1;
+                    Type r;
+                    if (readTypeFromTokens(toks, k, r)) fnReturnTypes[name] = r;
                     break;
                 }
                 j++;
@@ -7387,12 +7415,21 @@ public:
                     // M4: a global outlives every frame; storing an env box
                     // pointer (its captures live in some frame's static area)
                     // into a global is a use-after-return by construction.
-                    if (a->rhs->kind == NodeKind::Lambda)
-                        return codegenError("cannot store a lambda into global '" + a->varName + "': it would escape its defining frame");
+                    // Phase 2 / 2D: a function value may be stored in a
+                    // global when its box does not depend on the frame that
+                    // created it -- a capture-less closure's box and a named
+                    // function's box are module-level constants. A
+                    // frame-bound box still cannot (it would be a
+                    // use-after-return by construction).
+                    if (a->rhs->kind == NodeKind::Lambda) {
+                        auto* lamRhs = static_cast<LambdaExprAST*>(a->rhs.get());
+                        if (!lamRhs->captures.empty())
+                            return codegenError("cannot store a lambda into global '" + a->varName + "': it would escape its defining frame");
+                    }
                     if (a->rhs->kind == NodeKind::Variable) {
                         auto* vn = static_cast<VariableExprAST*>(a->rhs.get());
                         auto* srcSym = symTable.lookup(vn->name);
-                        if (Symbol::isFunctionValue(srcSym))
+                        if (Symbol::isFunctionValue(srcSym) && !functionValueIsStatic(srcSym))
                             return codegenError("cannot store a function value into global '" + a->varName + "': it would escape its defining frame");
                     }
                     auto* val = emitExpr(a->rhs.get());
@@ -7754,11 +7791,15 @@ public:
         Type fnTy;
         llvm::Function* thunk = namedFnThunk(name, fnTy);
         if (!thunk) return nullptr;
+        // Phase 2 / 2D: a named function captures nothing, so its box is a
+        // MODULE-LEVEL constant -- it does not depend on any frame, and a
+        // value that depends on no frame may ESCAPE.
         auto* boxTy = llvm::StructType::get(*ctx, llvm::ArrayRef<llvm::Type*>{
             llvm::PointerType::get(*ctx, 0)});
-        auto* box = createEntryAlloca(boxTy, "fnval_" + name);
-        auto* slot = builder->CreateStructGEP(boxTy, box, 0, "fnval.slot");
-        builder->CreateStore(thunk, slot);
+        auto* box = new llvm::GlobalVariable(*mod, boxTy, true,
+                                             llvm::GlobalValue::InternalLinkage,
+                                             llvm::ConstantStruct::get(boxTy, {thunk}),
+                                             "fnval." + name);
         return builder->CreatePointerCast(box, llvmType(fnTy, *ctx, mod.get()),
                                            "fnval.ptr");
     }
@@ -7828,17 +7869,34 @@ public:
         std::vector<llvm::Type*> boxFieldTys = {envPtrTy_i8};
         for (auto& c : caps) boxFieldTys.push_back(llvmType(c.ctype, *ctx, mod.get()));
         auto* envTy = llvm::StructType::create(*ctx, boxFieldTys, "lambox." + lamName);
-        auto* envBox = createEntryAlloca(envTy, "lambox_" + name);
-        builder->CreateStore(llvm::Constant::getNullValue(envPtrTy_i8),
-                             builder->CreateStructGEP(envTy, envBox, 0, "lambox.fnptr_slot"));
-        for (size_t i = 0; i < caps.size(); i++) {
-            auto* g = builder->CreateStructGEP(envTy, envBox,
-                                               1 + i, "lambox." + caps[i].cname);
-            builder->CreateStore(caps[i].cval, g);
-        }
-        {
-            auto* fslot = builder->CreateStructGEP(envTy, envBox, 0, "lambox.fn");
-            builder->CreateStore(fn, fslot);
+        // Phase 2 / 2D: a closure that captures NOTHING does not depend on
+        // the frame that created it, so its box is a MODULE-LEVEL constant
+        // instead of a frame slot. A static box has no frame lifetime, so
+        // such a value may ESCAPE (be returned, stored in a global, passed
+        // to a callee that keeps it) -- which is what makes closures
+        // usable as callbacks.
+        //
+        // A closure that DOES capture keeps its frame-bound box and the
+        // escape rules still apply to it.
+        llvm::Value* envBox = nullptr;
+        if (caps.empty()) {
+            auto* init = llvm::ConstantStruct::get(envTy, {fn});
+            envBox = new llvm::GlobalVariable(*mod, envTy, true,
+                                             llvm::GlobalValue::InternalLinkage,
+                                             init, "lambox." + lamName);
+        } else {
+            envBox = createEntryAlloca(envTy, "lambox_" + name);
+            builder->CreateStore(llvm::Constant::getNullValue(envPtrTy_i8),
+                                 builder->CreateStructGEP(envTy, envBox, 0, "lambox.fnptr_slot"));
+            for (size_t i = 0; i < caps.size(); i++) {
+                auto* g = builder->CreateStructGEP(envTy, envBox,
+                                                   1 + i, "lambox." + caps[i].cname);
+                builder->CreateStore(caps[i].cval, g);
+            }
+            {
+                auto* fslot = builder->CreateStructGEP(envTy, envBox, 0, "lambox.fn");
+                builder->CreateStore(fn, fslot);
+            }
         }
         entry.lambdaEnv = envBox;
         entry.lambdaBoxTy = envTy;
@@ -8151,9 +8209,16 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             // Returning one would hand out a pointer to dead locals the
             // moment the frame returns, so function values cannot cross a
             // return boundary (closure-escape rule from the M4 spec).
+            // Phase 2 / 2D: a function value may cross a return boundary
+            // when its box is STATIC (a capture-less closure, or a named
+            // function): such a box does not point into the frame that is
+            // going away. A frame-bound box still cannot.
             if (ret->value->kind == NodeKind::Lambda) {
-                codegenError("cannot return a lambda: it would escape its defining frame");
-                return;
+                auto* lamR = static_cast<LambdaExprAST*>(ret->value.get());
+                if (!lamR->captures.empty()) {
+                    codegenError("cannot return a lambda: it would escape its defining frame");
+                    return;
+                }
             }
             if (ret->value->kind == NodeKind::Variable) {
                 auto* vn = static_cast<VariableExprAST*>(ret->value.get());
@@ -8162,7 +8227,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 auto gvit = globalSymTable.find(vn->name);
                 if (gvit != globalSymTable.end()) gs = &gvit->second;
                 const Symbol* cs = srcSym ? srcSym : gs;
-                if (Symbol::isFunctionValue(cs)) {
+                if (Symbol::isFunctionValue(cs) && !functionValueIsStatic(cs)) {
                     codegenError("cannot return a function value: it would escape its defining frame");
                     return;
                 }
@@ -8417,6 +8482,20 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         };
         walk(body);
         return bad;
+    }
+
+    // Is this function value's box STATIC (module-level) rather than
+    // frame-bound? A static box does not depend on any frame, so the value
+    // may escape. Phase 2 / 2D.
+    static bool functionValueIsStatic(const Symbol* sym) {
+        if (!sym) return false;
+        if (!sym->isLambda) {
+            // A named function's value: its box is a module-level constant
+            // (see namedFnValue).
+            return true;
+        }
+        if (!sym->lambdaEnv) return false;
+        return llvm::isa<llvm::GlobalVariable>(sym->lambdaEnv);
     }
 
     // Does this statement assign to `name`? (The first assignment to the
