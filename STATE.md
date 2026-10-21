@@ -43,9 +43,9 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); **2C the loop-range analysis** (`a7c6e2b`) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); **2D escaping capture-less closures** (`57db1a4`); **2B the safety policy** (`37d9b8b`); **2E the pipeline gap measured + specified** (`66f85ae`) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **2D: regions / escaping closures** — the escape analysis (does the closure outlive its frame?) is the same machinery as the range analysis, and the lease model already has the vocabulary. Then **2B** (checks as IR operations) and **2E** (the pipeline convergence: the stage2/stage3 Flint pipeline cannot express generics or traits yet, so it cannot consume the shared semantics — that is a language-feature project in the pipeline, not a compiler change) |
+| next action | **2E implementation, step by step** (spec in `docs/PIPELINE-GENERICS.md`): (1) stage2: the trait form + method signatures; (2) stage3: monomorphization (infer type args by the by-parameter rule, instantiate, mangle like the C++ compiler so the differential gate compares symbol for symbol); (3) stage3: trait resolution by name+arity; (4) the C++ query mode so the pipeline stops re-deriving types. After that: the escape analysis for closures that DO capture (2D.2), and the region work (2D.3). |
 | then | 2C the loop-range analysis (designed in §4.2); 2B one place that emits safety checks; 2D capture-less closures may escape (a static box); 2E the pipeline convergence (document, do not attempt) |
 | build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
 | gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
@@ -471,6 +471,36 @@ itself. The gate `tests/test_bounds_safety.sh` pins the dangerous case
 NOT make the access in bounds, so the check must stay and the program must
 trap: it does).
 
+**Step 2D — capture-less function values may ESCAPE (landed 2026-10-20,
+commit 57db1a4).** The rule now follows the box's lifetime instead of a
+blanket ban: a closure that captures nothing has a module-level constant
+box, a named function's value has one too, and a value whose box does not
+depend on the frame may be returned, stored in a global, or handed to a
+callee that keeps it. A closure that CAPTURES still cannot (its box is
+frame-bound) — pinned by `tests_manual/t_capturing_escape.fl` ✓.
+
+**Step 2B — the safety checks are ONE policy (landed 2026-10-20, commit
+37d9b8b).** `Codegen::SafetyPolicy` decides what is inserted (bounds,
+overflow, div-zero) and counts it exactly; the posture was previously two
+switches that could disagree. `--unsafe` removes the two PERFORMANCE checks
+only; the div-zero trap, the ownership rules, the escape rules and the
+one-error contract stay. The gate checks that the policy's counts equal the
+compiler's pre-optimization IR count ✓ (a check emitted without the policy
+knowing is the failure mode this removes).
+
+**Step 2E — the pipeline gap, MEASURED and SPECIFIED (commit 66f85ae).**
+Measured on this device: the stage2 parser ALREADY accepts generic
+functions (it emits `(fn idc (tparams T) ...)`) and the stage3 emitter
+refuses them ("generics need G6"); the parser does not accept traits at
+all (a method signature has no body, which the grammar has no form for).
+The implementation is specified in `docs/PIPELINE-GENERICS.md` -- the
+S-expression contract, the inference rule, the instantiation steps, the
+mangled-name convention (the C++ compiler's, so the differential gate
+compares the two frontends symbol for symbol), the trait-resolution rule
+(the C++ compiler's M3 rule), and the order of work. It is NOT
+implemented: a half-implemented monomorphizer in a 7.6k-line Flint emitter
+would break the bootstrap fixed point, which is the ladder's own oracle.
+
 **Dead ends found while doing it (do not retry):**
 - The vestigial `IndexExprAST::unchecked` flag ("R2 BCE-lite: proven
   in-bounds") was never set anywhere — a dead field that claimed to
@@ -484,6 +514,13 @@ trap: it does).
   codegen, so no audit data was collected) — the same trap as
   `--check-bce`. Both now bypass the cache: a diagnostic that depends on
   cache state is not a diagnostic.
+- The **self-host artifacts in tmp are cleaned** by the system, which made
+  the differential gate fail with "self binaries" twice for a reason that had
+  nothing to do with the code. The gate now falls back to the STABLE
+  artifacts in `~/flintwork/self` — but ONLY if they are NEWER than the
+  pipeline sources: stale artifacts produce FALSE divergences (last month's
+  pipeline rejects what today's accepts), which looks like a compiler bug
+  and hides real ones.
 - **Absolute timings on this device are not comparable across runs** —
   the same C binary measured 11.5 ms, 15.4 ms and 23.7 ms in three
   consecutive runs while the agent's own runtime used ~46 % of a core.
