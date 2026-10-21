@@ -43,9 +43,9 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); **2A one inference engine + three bug fixes** (`f0441df`) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); **2C the loop-range analysis** (`a7c6e2b`) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **2C: the loop-range analysis** (designed in §4.2) — recognise `while i < n` / `i <= n` / `i*c <= n` with a non-negative induction variable, and emit the range as an LLVM assumption so the bounds check folds and the vectorizer gets the trip-count range. Soundness conditions are spelled out in §4.2; an unsound assumption is a miscompilation, so emit NOTHING unless every precondition holds |
+| next action | **2D: regions / escaping closures** — the escape analysis (does the closure outlive its frame?) is the same machinery as the range analysis, and the lease model already has the vocabulary. Then **2B** (checks as IR operations) and **2E** (the pipeline convergence: the stage2/stage3 Flint pipeline cannot express generics or traits yet, so it cannot consume the shared semantics — that is a language-feature project in the pipeline, not a compiler change) |
 | then | 2C the loop-range analysis (designed in §4.2); 2B one place that emits safety checks; 2D capture-less closures may escape (a static box); 2E the pipeline convergence (document, do not attempt) |
 | build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
 | gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
@@ -454,6 +454,23 @@ return type does not match operand type of return inst!"):
 
 Fixture: `tests_manual/t_return_inference.fl` (four shapes).
 
+**Step 2C — the loop-range analysis (landed 2026-10-20, commit a7c6e2b).**
+A recognised loop hands the optimizer a RANGE fact about its induction
+variable, as an LLVM assumption: `i < n` and `i <= n` give the condition
+itself; `i * c <= n` (c a positive constant) gives the DERIVED `i <= n`
+(LLVM cannot derive that itself — the multiply may overflow in its
+reasoning — and the derivation is sound for negative i as well).
+
+Measured: `primes` goes from **7 bounds-check calls in the final IR to 1**.
+
+Soundness: the fact is emitted only when the condition shape is
+recognised exactly, the induction variable is not assigned before the
+access, its address is not taken, and the access reads the variable
+itself. The gate `tests/test_bounds_safety.sh` pins the dangerous case
+(a loop `while i <= limit` over an array of length `limit` — the fact does
+NOT make the access in bounds, so the check must stay and the program must
+trap: it does).
+
 **Dead ends found while doing it (do not retry):**
 - The vestigial `IndexExprAST::unchecked` flag ("R2 BCE-lite: proven
   in-bounds") was never set anywhere — a dead field that claimed to
@@ -467,6 +484,13 @@ Fixture: `tests_manual/t_return_inference.fl` (four shapes).
   codegen, so no audit data was collected) — the same trap as
   `--check-bce`. Both now bypass the cache: a diagnostic that depends on
   cache state is not a diagnostic.
+- **Absolute timings on this device are not comparable across runs** —
+  the same C binary measured 11.5 ms, 15.4 ms and 23.7 ms in three
+  consecutive runs while the agent's own runtime used ~46 % of a core.
+  Measure the RATIO to a control compiled the same way, interleaved, and
+  report the check/IR counts for anything the optimizer decides. The
+  measurement dashboard (Phase 0) must do this: a control + a ratio, not a
+  raw number.
 - A fact must not be used where its value does not dominate. Flint's
   block scoping hides the obvious case (a binding declared in a loop is
   not visible after it), but the general rule still needs the
