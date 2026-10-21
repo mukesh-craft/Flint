@@ -53,6 +53,10 @@ check tests_manual/t_explicit_targs.fl "42"
 # M4 follow-up: a named function used as a value (`let h = inc`).
 check tests_manual/t_named_fn_value.fl "6"
 check tests_manual/t_named_fn_value.fl "10"
+# Phase 2 / 2A: return-type inference across the shapes that used to emit
+# invalid IR (forward reference, explicit return, return-statement type).
+check tests_manual/t_return_inference.fl "hello"
+check tests_manual/t_return_inference.fl "hi"
 # Copying a function VALUE into another binding keeps its fn type.
 check tests_manual/t_fn_value_copy.fl "6"
 check tests_manual/t_fn_value_copy.fl "10"
