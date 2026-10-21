@@ -4540,3 +4540,50 @@ and a curated (not mirrored) registry.
   mis-parsed as a top-level `fn-decl`, and the error pointed at the
   `{`. The cause was a token consumed twice (the name), not the
   grammar. The diagnostic that helped: printing the branch taken.
+- **The 2026-10-21 research pass, turned into a plan (STATE.md §11).**
+  Four idea-clusters came in from outside the repo — a C/C++ → Flint
+  transpiler (c2rust-shaped), Rust-like diagnostics, the four "Flint
+  Twist" selling points, and two positioning questions — and the plan
+  maps every one of them onto what the repository already has, so that
+  nothing is left as an aspiration. The decisions recorded there:
+  - *Positioning*: Flint is a **systems language with an
+    application-language workflow** — a systems language by measurement
+    (12.0 ms vs C's 8.3 ms on sum_array, 4,536 B stripped hello, 0
+    bounds-check calls in the final IR) and an application language by
+    workflow (one binary, no build file, compile-and-run through the ORC
+    JIT in ~95 ms). The compromise to protect: the safety machinery may
+    never cost more than the measurement says it does.
+  - *Memory safety*: **leases + a runtime backstop** — deliberately
+    neither ARC (it would erode the 1.44× gap to C everywhere) nor a GC
+    (it would put a pause-latency and a footprint floor under the
+    embedded story and the 4,536 B hello). One ownership model, never
+    two.
+  - *The transpiler*: Clang LibTooling for the C++ front (never a
+    hand-written C++ parser), then pointer classification, then
+    ownership inference, then idiomatic Flint source so LLVM's O2 does
+    the "peak optimization". The valuable shippable subset is **C, not
+    C++**, and a transpiler that **refuses** what it cannot prove — the
+    same posture as the compiler's own one-error-per-input contract. It
+    needs the `[T]` containers (M7) as its safe target and an
+    `unsafe {}` block to say "I could not prove this".
+  - *Diagnostics*: the gap is precisely a single `line:col` and a free
+    string. The work: a Span (start+end+file id) on every AST node, a
+    structured Diagnostic (code, severity, title, labels, suggestion),
+    codes derived from the existing 273-message catalogue, a renderer
+    (LLVM's for the C++ compiler, a small one in the pipeline's idiom),
+    Levenshtein suggestions, and error poisoning. It is cheap because
+    the positions and the catalogue already exist; it is high-leverage
+    because the CLI, the LSP and the transpiler all consume the same
+    structure — the LSP currently *scrapes stderr text* and loses the
+    codegen positions because the text has no structure.
+  - *The four selling points*: instant ignition (needs the incremental
+    story and a measured budget), embedded/edge (needs the `[T]`
+    containers, a freestanding build, and the arena story to reach the
+    core language), data-streaming (needs async and the capability model
+    BEFORE any stream syntax), and interop (needs native `.c` import
+    and FFI contract checking — the lease model ends at the FFI
+    boundary). The order in each case is the type system first, the
+    syntax second.
+  - *What is not in the plan*: a vectorizer (LLVM does it), a second
+    ownership system, a semantics-changing dialect framework, and a
+    hand-written C++ parser.
