@@ -1557,7 +1557,7 @@ enum class TokenType {
     EQ_EQ, NE, LT, GT, LE, GE, FAT_ARROW, PIPE_PIPE, PIPE
 };
 
-// Stable Stage-1 token IDs (contract with stage1/flint_lex.fl):
+// Stable Stage-1 token IDs (contract with stage1/lexer.fl):
 // 1 IDENT, 2 NUMBER, 3 STRING, 10-36 keywords, 50-88 punctuation.
 static int stableTokenKind(TokenType t, const std::string& lexeme) {
     switch (t) {

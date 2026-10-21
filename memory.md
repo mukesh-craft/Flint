@@ -4,6 +4,13 @@
 **Repository:** https://github.com/shell-bay/Flint
 **Branch:** main
 
+> **File-rename note (2026-10-21, Phase 2E):** the self-host pipeline files
+> were renamed `stage1/flint_lex.fl` → `stage1/lexer.fl`,
+> `stage2/flint_parse.fl` → `stage2/parser.fl`,
+> `stage3/flint_emit.fl` → `stage3/emitter.fl`. Historical entries below
+> predate the rename and use the old names; the *behaviour* they describe is
+> unchanged.
+
 ---
 
 ## How We Started

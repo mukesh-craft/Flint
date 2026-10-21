@@ -15,7 +15,7 @@ for f in $(find tests tutorial benchmarks examples stage1 stage2 agent-bench -na
   if [ -n "$SELF_DIR" ] && [ -x "$SELF_DIR/parse.0" ]; then
     timeout -s KILL 60 "$SELF_DIR/parse.0" "$f" > /dev/null 2>&1
   else
-    timeout -s KILL 60 "$FLINTC" stage2/flint_parse.fl -- "$f" > /dev/null 2>&1
+    timeout -s KILL 60 "$FLINTC" stage2/parser.fl -- "$f" > /dev/null 2>&1
   fi
   rc=$?
   if [ $rc -eq 0 ]; then pass=$((pass+1)); else fail="$fail $f($rc)"; fi

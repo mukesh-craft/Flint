@@ -18,7 +18,7 @@ FXBIN="$_TMPBASE/slipstream/fxbin"
 if [ -n "$SELF_DIR" ] && [ -x "$SELF_DIR/parse.0" ]; then
   : # SELF_DIR provides parse.0; skip slow AOT build (C++ syntax has no `build` subcommand)
 else
-  "$FLINTC" stage2/flint_parse.fl -o "$FXBIN" > /dev/null 2>&1
+  "$FLINTC" stage2/parser.fl -o "$FXBIN" > /dev/null 2>&1
   if [ $? -ne 0 ]; then echo "fixpoint: AOT build failed"; exit 1; fi
 fi
 pass=0; fail=""

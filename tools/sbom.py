@@ -49,9 +49,9 @@ def llvm_pin():
 COMPONENTS = [
     ("flintc", "flintc", "native compiler binary (C++/LLVM)"),
     ("runtime", "runtime/runtime.c", "portable C runtime"),
-    ("stage1-lexer", "stage1/flint_lex.fl", "self-hosted lexer"),
-    ("stage2-parser", "stage2/flint_parse.fl", "self-hosted parser"),
-    ("stage3-emitter", "stage3/flint_emit.fl", "self-hosted emitter"),
+    ("stage1-lexer", "stage1/lexer.fl", "self-hosted lexer"),
+    ("stage2-parser", "stage2/parser.fl", "self-hosted parser"),
+    ("stage3-emitter", "stage3/emitter.fl", "self-hosted emitter"),
     ("driver", "driver/flintc.fl", "pipeline driver"),
     ("merge-tool", "tools/merge_sexp.fl", "S-expr merger"),
     ("formatter", "flint-fmt", "source formatter"),

@@ -20,7 +20,7 @@ if [ ! -x "$SELF_DIR/parse.0" ] && [ -x /data/data/com.termux/files/home/flintwo
     # bug in the compiler and hides real ones.
     STABLE=/data/data/com.termux/files/home/flintwork/self
     stable_ok=1
-    for src in stage2/flint_parse.fl stage3/flint_emit.fl stage1/flint_lex.fl; do
+    for src in stage2/parser.fl stage3/emitter.fl stage1/lexer.fl; do
         if [ "$src" -nt "$STABLE/parse.0" ] 2>/dev/null; then stable_ok=0; fi
     done
     if [ "$stable_ok" = 1 ]; then
@@ -53,8 +53,8 @@ run_cpp() { # $1=src $2=outbase ; echoes "emit_ok run_exit"
 run_self() { # $1=src $2=outbase ; echoes "emit_ok run_exit"
   base="$2"
   if [ "${FLINT_JIT:-0}" = 1 ]; then
-    PARSE=(timeout -s KILL 600 "$FLINTC" stage2/flint_parse.fl --)
-    EMIT=(timeout -s KILL 600 "$FLINTC" stage3/flint_emit.fl --)
+    PARSE=(timeout -s KILL 600 "$FLINTC" stage2/parser.fl --)
+    EMIT=(timeout -s KILL 600 "$FLINTC" stage3/emitter.fl --)
   else
     [ -x "$SELF_DIR/parse.0" ] && [ -x "$SELF_DIR/emit.0" ] \
       || { echo "MISSING self binaries (build via tests/test_selfhost.sh A or FLINT_JIT=1)"; echo "0 -1"; return; }

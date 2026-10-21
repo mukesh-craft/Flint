@@ -1,7 +1,7 @@
 # M2b: explicit type arguments — `f::<T>(...)` overrides inference.
 #
 # New syntax, so this fixture lives in tests_manual/ and is NOT part of the
-# corpus the self-hosted parser (stage2/flint_parse.fl) has to re-lex. The
+# corpus the self-hosted parser (stage2/parser.fl) has to re-lex. The
 # self-host pipeline does not implement this syntax yet — the same situation
 # as the `trait` keyword (M3): the shipped C++ compiler has it, the bootstrap
 # ladder does not. The run.sh checks below gate it in the smoke suite.

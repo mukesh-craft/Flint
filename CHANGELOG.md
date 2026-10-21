@@ -7,6 +7,12 @@ All notable changes to Flint are documented here. Format follows
 ## [Unreleased]
 
 ### Changed
+- **The self-host pipeline files are renamed to their stage roles**:
+  `stage1/flint_lex.fl` → `stage1/lexer.fl`, `stage2/flint_parse.fl` →
+  `stage2/parser.fl`, `stage3/flint_emit.fl` → `stage3/emitter.fl`. All
+  references are updated (imports, gates, CI, SBOM oracles, docs, driver
+  usage strings). Entries below predate the rename and use the old file
+  names.
 - **The Python language server is removed** (`flint-lsp`, 522 lines), replaced
   by the Rust server in `lsp/` described below. It had no tests, wrote its
   scratch file to a hardcoded `/tmp` (absent on Android, where Flint targets),

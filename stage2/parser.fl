@@ -1,4 +1,4 @@
-# stage2/flint_parse.fl — Flint parser (Stage 2 of self-hosting).
+# stage2/parser.fl — Flint parser (Stage 2 of self-hosting).
 #
 # Reads Stage-1 token vecs, emits flat S-expr IR into an sb. S-expr spec:
 #   (prog FORM*)  (fn NAME TP (PARAMS) RET BODY)  (fn-decl ... no body)
@@ -28,7 +28,7 @@
 # short-circuit `and` is relied on (Flint evaluates both sides); loop-bound
 # vars are always `mut`; `//` is a comment (use `/`); literal braces in
 # strings need `{{` (bare `}` is fine).
-import "../stage1/flint_lex"
+import "../stage1/lexer"
 # Token stream globals (filled by the driver before parsing).
 mut GSRC: str = ""
 mut TK = flint_vec_new()
@@ -4065,12 +4065,12 @@ fn fixpoint_run(path: str) -> i64 {
 }
 fn main() -> i64 {
     if flint_arg_count() < 2 {
-        print("usage: flint_parse <file.fl> | flint_parse --fixpoint <file.fl>")
+        print("usage: parser <file.fl> | parser --fixpoint <file.fl>")
         return 1
     }
     if flint_str_compare(flint_get_arg(1), "--fixpoint") == 0 {
         if flint_arg_count() < 3 {
-            print("usage: flint_parse --fixpoint <file.fl> [...]")
+            print("usage: parser --fixpoint <file.fl> [...]")
             return 1
         }
         mut fails: i64 = 0

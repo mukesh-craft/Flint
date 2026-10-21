@@ -624,10 +624,10 @@ investigation, not presented as a new number).
 | `clang++ -O2 -c` | `src/main.cpp` (495 KB, 10,542 lines) | ~74,400 ms | 6.5 KB/s, 142 lines/s |
 | `clang++ -O0 -emit-llvm` | `src/main.cpp` | ~35,400 ms | ~14 KB/s |
 | `clang -O2 -c` | `runtime/runtime.c` (44 KB) | ~1,162 ms | 38 KB/s |
-| `flintc` default | `stage2/flint_parse.fl` (112 KB, 3,845 lines) | ~909 ms | 123 KB/s, 4,230 lines/s |
-| `flintc --fast` (Slipstream) | `stage2/flint_parse.fl` | ~200 ms | 560 KB/s, 19,225 lines/s |
-| `flintc` default | `stage1/flint_lex.fl` (48 KB) | ~277 ms | 174 KB/s |
-| `flintc --fast` | `stage1/flint_lex.fl` | ~123 ms | 394 KB/s |
+| `flintc` default | `stage2/parser.fl` (112 KB, 3,845 lines) | ~909 ms | 123 KB/s, 4,230 lines/s |
+| `flintc --fast` (Slipstream) | `stage2/parser.fl` | ~200 ms | 560 KB/s, 19,225 lines/s |
+| `flintc` default | `stage1/lexer.fl` (48 KB) | ~277 ms | 174 KB/s |
+| `flintc --fast` | `stage1/lexer.fl` | ~123 ms | 394 KB/s |
 
 Same-size comparison: `--fast` 123 ms vs C 1,162 ms (~9.5x).
 O0-to-O0 (no optimization either side): Flint still leads ~38x wall
@@ -650,7 +650,7 @@ Historical `--fast` measurements below predate that change.
 
 Historical (pre-no-op `--fast`, kept for reference): `--fast` compiled
 faster (2.2x at 48 KB → ~4.5x at 112 KB) but emitted larger,
-less-optimized code: `flint_parse.fl` IR was 828 KB vs 628 KB default
+less-optimized code: `parser.fl` IR was 828 KB vs 628 KB default
 (+32%), and `sum_array` ran 42.5 ms vs 19.3 ms (2.3x slower).
 
 ## Testing
@@ -671,7 +671,7 @@ What exists and how to run it (file lists and line counts verified
 | `lsp/` language server | Rust, `serde_json` only; 21 unit tests + 31 protocol checks + keyword/builtin drift gates | — | `bash tests/test_lsp.sh ./flintc` |
 | `editors/vscode/` extension | manifest, TextMate grammar (26 patterns), language config, stdio client | — | `python3 tools/check_vscode_extension.py` |
 | `tutorial/` lessons | 8 (`01_hello`–`08_wrap`), each with `EXPECT` checks | 198 | `bash tests/run_tutorial.sh ./flintc` |
-| `stage1/` Flint lexer | `flint_lex.fl` + edge corpora, byte-identical to `--dump-tokens` | — | `bash tests/test_lexdiff.sh ./flintc` |
+| `stage1/` Flint lexer | `lexer.fl` + edge corpora, byte-identical to `--dump-tokens` | — | `bash tests/test_lexdiff.sh ./flintc` |
 | `agent-bench/` tasks | 5 tasks (`TASK.md` + `expected.txt` + `reference.fl` each, 136 lines) + `check.sh` 24 | 160 | `bash agent-bench/check.sh ./flintc` |
 
 ```bash

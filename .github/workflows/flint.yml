@@ -58,7 +58,7 @@ jobs:
         run: |
           bash tools/bench_gate.sh --json bench-current.json ||             echo "measurement gate reported a delta (advisory on CI; see tools/bench_gate.sh)"
       - name: Declaration-order tracker gate
-        run: python3 tests/test_decl_order.py stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl driver/flintc.fl tools/merge_sexp.fl
+        run: python3 tests/test_decl_order.py stage1/lexer.fl stage2/parser.fl stage3/emitter.fl driver/flintc.fl tools/merge_sexp.fl
       - name: Formatter gate (check + idempotency + parse-stability)
         run: bash tests/test_fmt.sh ./flintc
       - name: Error-catalog sync gate

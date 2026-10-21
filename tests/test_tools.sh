@@ -61,7 +61,7 @@ else
 fi
 
 # --- decl-order: same verdict on the self-hosted stages --------------------
-STAGES="stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl"
+STAGES="stage1/lexer.fl stage2/parser.fl stage3/emitter.fl"
 # shellcheck disable=SC2086
 python3 tests/test_decl_order.py $STAGES > "$WORK/decl.py" 2>&1; py_status=$?
 # shellcheck disable=SC2086
