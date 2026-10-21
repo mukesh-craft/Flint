@@ -101,5 +101,43 @@ else
     fail=$((fail+1))
 fi
 
+# 5. The safety POLICY must agree with the IR it produced (Phase 2 / 2B).
+#    The policy counts the checks it inserted; the IR must contain exactly
+#    that many. A mismatch means a check was emitted without the policy
+#    knowing -- the failure mode where the safety posture and the emitted
+#    code disagree.
+cat > "$T/policy.fl" <<'EOF'
+fn main() -> i64 {
+    a = [1, 2, 3]
+    mut s: i64 = 0
+    mut i: i64 = 0
+    while i < 3 { s = s + a[i]
+        i = i + 1 }
+    print(s)
+    return 0
+}
+EOF
+if "$FLINTC" --check-bce "$T/policy.fl" -o "$T/policy.bin" > "$T/policy.txt" 2>&1 \
+   && "$FLINTC" --check-bce "$T/policy.fl" --emit-llvm -o "$T/policy.ll" >/dev/null 2>&1; then
+    # The policy's own counts (exact, pre-optimization) against the
+    # compiler's pre-optimization IR count ("checks emitted"). The
+    # optimized IR is NOT the right comparison: the optimizer legitimately
+    # removes checks the policy inserted.
+    said=$(awk '/inserted by policy/ {n = 0; for (i = 1; i <= NF; i++) {
+                        if ($i == "bounds") n += $(i + 1) + 0;
+                        if ($i == "overflow") n += $(i + 1) + 0 }
+                    gsub(/[^0-9]/, "", n); print n; exit }' "$T/policy.txt")
+    have=$(awk '/checks emitted/ {print $2; exit}' "$T/policy.txt")
+    if [ -n "$said" ] && [ -n "$have" ] && [ "$said" = "$have" ]; then
+        pass=$((pass+1))
+    else
+        echo "FAIL the policy inserted $said checks, the IR has $have before optimization"
+        fail=$((fail+1))
+    fi
+else
+    echo "FAIL the policy program did not compile"
+    fail=$((fail+1))
+fi
+
 echo "bounds-safety: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]
