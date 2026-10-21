@@ -1,0 +1,17 @@
+# A closure that CAPTURES cannot cross a return boundary.
+#
+# The other half of the Phase 2 / 2D rule: a capture-less closure's box is
+# a module-level constant (so it may escape), but a closure that captures
+# a local keeps its box in the frame that is going away -- returning it
+# would hand out a pointer to dead storage.
+#
+# This program must be REJECTED.
+
+fn make() -> fn(i64) -> i64 {
+    k = 5
+    return |x: i64| x + k
+}
+
+fn main() {
+    print(1)
+}
