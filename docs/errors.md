@@ -57,8 +57,10 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: bad top-level form`
 - `emit error: binop needs numeric/str/array`
 - `emit error: break outside loop`
+- `emit error: call needs a closing paren`
 - `emit error: cannot bind empty variant`
 - `emit error: cannot bind tag-only variant`
+- `emit error: cannot infer type parameter`
 - `emit error: cannot reassign lambda`
 - `emit error: continue outside loop`
 - `emit error: default type mismatch calling`
@@ -76,8 +78,9 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: fn body must be a block`
 - `emit error: for needs an iterator`
 - `emit error: for needs range, array or str`
-- `emit error: generics need G6`
-- `emit error: generics need G6 (see docs/PIPELINE-GENERICS.md)`
+- `emit error: generic call is missing arguments`
+- `emit error: generic parameter type is not a type`
+- `emit error: generic return type is not a type`
 - `emit error: global init mismatch`
 - `emit error: idx-set needs array (strings are immutable)`
 - `emit error: idx-set needs i64 index`
@@ -133,6 +136,9 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: spread needs an array`
 - `emit error: strings support only +/==/!= in G6`
 - `emit error: struct literal missing fields`
+- `emit error: template parameter needs a closing paren`
+- `emit error: template parameter needs a name`
+- `emit error: template parameters need a closing paren`
 - `emit error: tensor literal is neither a flat f64 list nor equal-length f64 rows`
 - `emit error: tensor literal needs at least one f64 element`
 - `emit error: tensor literal rows must be non-empty all-numeric f64 literal lists`
@@ -162,4 +168,4 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error: void initializer`
 - `emit error: void variadic arg`
 
-Total: 129 messages.
+Total: 135 messages.

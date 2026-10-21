@@ -139,6 +139,133 @@ mut ELAMASSIGN: str = ""
 ELAMCAPO = flint_vec_new()
 ELAMCAPL = flint_vec_new()
 ELAMCAPC = flint_vec_new()
+# ---- G6b: generic templates and their monomorphized instances ----
+# A function whose `tparams` group is non-empty is a TEMPLATE: it is never
+# emitted as-is, only its instances are. ETPLMAP holds template name ->
+# template index. Per template: the type-parameter names, the parameters'
+# type WORDS (a type parameter has no type code, so the declared word is
+# kept), the return type word, and the text spans (in ESRC) of the
+# parameter group and the body group. ETPLTEXT holds every word (the
+# type-parameter names and the type words) as concatenated text; the
+# vectors hold the offsets and the lengths.
+ETPLMAP = map {
+    "": 0
+}
+ETPLN = flint_vec_new()
+ETPLTB = flint_vec_new()
+ETPLTPO = flint_vec_new()
+ETPLTPL = flint_vec_new()
+ETPLNP = flint_vec_new()
+ETPLPB = flint_vec_new()
+ETPLPWO = flint_vec_new()
+ETPLPWL = flint_vec_new()
+ETPLPNO = flint_vec_new()
+ETPLPNL = flint_vec_new()
+ETPLDOFF = flint_vec_new()
+ETPLDLEN = flint_vec_new()
+ETPLREO = flint_vec_new()
+ETPLREL = flint_vec_new()
+ETPLPO = flint_vec_new()
+ETPLPL = flint_vec_new()
+ETPLBO = flint_vec_new()
+ETPLBL = flint_vec_new()
+mut ETPLTEXT: str = ""
+# The ORIGINAL program text. The template spans point into it, and the
+# instance drain swaps ESRC for the instance text -- so the templates
+# must be read from here, not from ESRC.
+mut ESRC0: str = ""
+# The instances: the synthesized `(fn ...)` forms and their type
+# environment (type parameter -> concrete type code). EINSTOF/EINSTLN
+# locate the form in EINSTTEXT; EINSTEB/EINSTEN give the base and the
+# count of the environment entries (EINSTEO/EINSTEL the name, EINSTEC
+# the code).
+EINSTOF = flint_vec_new()
+EINSTLN = flint_vec_new()
+EINSTEB = flint_vec_new()
+EINSTEN = flint_vec_new()
+EINSTEO = flint_vec_new()
+EINSTEL = flint_vec_new()
+EINSTEC = flint_vec_new()
+mut EINSTTEXT: str = ""
+mut EINSTN: i64 = 0
+# The ACTIVE type environment (one instance is emitted at a time):
+# EENVO/EENVL the type-parameter name (in ETPLTEXT), EENVCODE its
+# concrete type code.
+mut EENVN: i64 = 0
+EENVO = flint_vec_new()
+EENVL = flint_vec_new()
+EENVCODE = flint_vec_new()
+# Scratch for a template call site: the argument values (in EARGTEXT)
+# and their type codes.
+EARGVO = flint_vec_new()
+EARGVL = flint_vec_new()
+EARGCODE = flint_vec_new()
+mut EARGTEXT: str = ""
+# The inferred type argument codes of one template call.
+ECODES = flint_vec_new()
+# The type environment of the instance being emitted: the type code a
+# type parameter is bound to (0 = not bound).
+fn e_env_find(name: str) -> i64 {
+    mut r: i64 = 0
+    mut k: i64 = 0
+    while k < EENVN {
+        eoff = flint_vec_get(EENVO, k)
+        eln = flint_vec_get(EENVL, k)
+        if flint_str_compare(flint_str_substring(ETPLTEXT, eoff, eoff + eln), name) == 0 {
+            r = flint_vec_get(EENVCODE, k)
+            k = EENVN
+        } else {
+            k = k + 1
+        }
+    }
+    r
+}
+# The mangling tag of a type code. Injective, like the C++ compiler's
+# typeMangleTag (src/main.cpp): two different type arguments must never
+# produce the same tag, or two instances would collide. The pipeline has
+# no `bool` code (bool is i64 in this codegen), so a bool instantiation
+# mangles as `i64` where the C++ compiler says `bool` -- the same
+# behaviour, a different symbol name.
+fn e_mangle_tag(code: i64) -> str {
+    mut r: str = ""
+    if code == 1 {
+        r = "i64"
+    } else {
+        if code == 2 {
+            r = "f64"
+        } else {
+            if code == 3 {
+                r = "str"
+            } else {
+                if code == 4 {
+                    r = "arr"
+                } else {
+                    if code == 6 {
+                        r = "map"
+                    } else {
+                        if code == 7 {
+                            r = "fn"
+                        } else {
+                            if code == 8 {
+                                r = "ptr"
+                            } else {
+                                if code >= 100 {
+                                    ek = flint_vec_get(ENTKind, code - 100)
+                                    if ek == 0 {
+                                        r = "s:" + e_ent_name(code)
+                                    } else {
+                                        r = "e:" + e_ent_name(code)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    r
+}
 # Scratch-set membership ("\n"-framed).
 fn e_lam_mem(settext: str, name: str) -> i64 {
     key = "\n" + name + "\n"
@@ -3201,7 +3328,7 @@ fn e_rt_call(name: str, sig: str) -> str {
         ""
     } else {
         if rc == 0 {
-            e_emit("  call void @" + name + "(" + argstr + ")\n")
+            e_emit("  call void " + e_sym(name) + "(" + argstr + ")\n")
             ETYPE = 0
             ""
         } else {
@@ -4161,166 +4288,433 @@ fn e_var_rd(name: str) -> str {
 # via the pre-scanned registry (positional args, defaults fill trailing
 # missing params, i64->f64 promotes, variadics pass through).
 # Parses args up to `)`; the closing paren belongs to the caller.
+# The type code a type parameter is bound to in one instance (0 = the word
+# is not a type parameter of this template).
+fn e_tparam_code(word: str, tb: i64, nt: i64) -> i64 {
+    mut r: i64 = 0
+    mut k: i64 = 0
+    while k < nt {
+        woff = flint_vec_get(ETPLTPO, tb + k)
+        wlen = flint_vec_get(ETPLTPL, tb + k)
+        if flint_str_compare(flint_str_substring(ETPLTEXT, woff, woff + wlen), word) == 0 {
+            r = flint_vec_get(ECODES, k)
+            k = nt
+        } else {
+            k = k + 1
+        }
+    }
+    r
+}
+# Create an instance of a template: the signature table gets the concrete
+# parameter and return types, and the synthesized function text is queued
+# for emission (e_drain_instances). The instance is registered BEFORE its
+# body is emitted, so a recursive generic finds it -- the C++ compiler had
+# exactly that bug and fixed it the same way (src/main.cpp:9805).
+fn e_instantiate(name: str, tidx: i64, mangled: str) -> i64 {
+    nt = flint_vec_get(ETPLN, tidx)
+    tb = flint_vec_get(ETPLTB, tidx)
+    pbase = flint_vec_get(ETPLPB, tidx)
+    np = flint_vec_get(ETPLNP, tidx)
+    pstart = flint_vec_get(ETPLPO, tidx)
+    ptext = flint_str_substring(ESRC0, pstart, pstart + flint_vec_get(ETPLPL, tidx))
+    bstart = flint_vec_get(ETPLBO, tidx)
+    btext = flint_str_substring(ESRC0, bstart, bstart + flint_vec_get(ETPLBL, tidx))
+    roff = flint_vec_get(ETPLREO, tidx)
+    rtext = flint_str_substring(ETPLTEXT, roff, roff + flint_vec_get(ETPLREL, tidx))
+    fnidx = flint_vec_len(EFNN)
+    flint_vec_push(EFNN, 0)
+    flint_vec_push(EFNRET, 0)
+    flint_vec_push(EFNVAR, 0)
+    flint_vec_push(EFNPB, flint_vec_len(EFPTYPE))
+    flint_vec_push(EFNEXT, 0)
+    EFNMAP.set(mangled, fnidx)
+    mut vari: i64 = 0
+    mut pi: i64 = 0
+    while pi < np {
+        noff = flint_vec_get(ETPLPNO, pbase + pi)
+        nlen = flint_vec_get(ETPLPNL, pbase + pi)
+        pname = flint_str_substring(ESIGTEXT, noff, noff + nlen)
+        mut code: i64 = 0
+        if pname == "..." {
+            vari = 1
+        } else {
+            woff = flint_vec_get(ETPLPWO, pbase + pi)
+            wlen = flint_vec_get(ETPLPWL, pbase + pi)
+            pword = flint_str_substring(ETPLTEXT, woff, woff + wlen)
+            code = e_tparam_code(pword, tb, nt)
+            if code == 0 {
+                code = e_ann_code(pword)
+            }
+            if code == 0 {
+                EERR = EERR + 1
+                print("emit error: generic parameter type is not a type")
+                print(pname)
+                return 0
+            }
+        }
+        flint_vec_push(EFPTYPE, code)
+        flint_vec_push(EFPOFF, flint_vec_get(ETPLDOFF, pbase + pi))
+        flint_vec_push(EFPLEN, flint_vec_get(ETPLDLEN, pbase + pi))
+        flint_vec_push(EFPNOff, noff)
+        flint_vec_push(EFPNLen, nlen)
+        pi = pi + 1
+    }
+    flint_vec_set(EFNN, fnidx, np)
+    flint_vec_set(EFNVAR, fnidx, vari)
+    mut rcode: i64 = e_tparam_code(rtext, tb, nt)
+    if rcode == 0 {
+        rcode = e_ann_code(rtext)
+    }
+    if rcode == 0 {
+        EERR = EERR + 1
+        print("emit error: generic return type is not a type")
+        print(name)
+        return 0
+    }
+    flint_vec_set(EFNRET, fnidx, rcode)
+    itext = "(fn " + mangled + " (tparams) " + ptext + " " + rtext + " " + btext + ")"
+    ioff = flint_str_length(EINSTTEXT)
+    EINSTTEXT = EINSTTEXT + itext
+    flint_vec_push(EINSTOF, ioff)
+    flint_vec_push(EINSTLN, flint_str_length(itext))
+    ebase = flint_vec_len(EINSTEO)
+    mut k: i64 = 0
+    while k < nt {
+        flint_vec_push(EINSTEO, flint_vec_get(ETPLTPO, tb + k))
+        flint_vec_push(EINSTEL, flint_vec_get(ETPLTPL, tb + k))
+        flint_vec_push(EINSTEC, flint_vec_get(ECODES, k))
+        k = k + 1
+    }
+    flint_vec_push(EINSTEB, ebase)
+    flint_vec_push(EINSTEN, nt)
+    EINSTN = EINSTN + 1
+    1
+}
+# A call to a TEMPLATE. The type arguments are inferred by the
+# by-parameter rule the C++ compiler uses: the type argument is the type
+# of the argument that fills the parameter which mentions the type
+# parameter. A type parameter that cannot be inferred is an error, never
+# a guess (the C++ compiler says the same).
+fn e_call_template(name: str) -> str {
+    tidx = ETPLMAP.get(name)
+    # The argument scratch is global, so a NESTED generic call would
+    # overwrite the outer call's arguments. Every call therefore works on
+    # its own window of the scratch, starting at `argbase`.
+    argbase = flint_vec_len(EARGVO)
+    mut nargs: i64 = 0
+    mut go: i64 = 1
+    while go == 1 {
+        e_skip()
+        if e_peek() == 41 {
+            go = 0
+        } else {
+            if e_peek() == -1 {
+                EERR = EERR + 1
+                print("emit error: call needs a closing paren")
+                print(name)
+                ETYPE = 0
+                return ""
+            } else {
+                a = e_expr()
+                ac = ETYPE
+                voff = flint_str_length(EARGTEXT)
+                EARGTEXT = EARGTEXT + a
+                flint_vec_push(EARGVO, voff)
+                flint_vec_push(EARGVL, flint_str_length(a))
+                flint_vec_push(EARGCODE, ac)
+                nargs = nargs + 1
+            }
+        }
+    }
+    nt = flint_vec_get(ETPLN, tidx)
+    tb = flint_vec_get(ETPLTB, tidx)
+    pbase = flint_vec_get(ETPLPB, tidx)
+    np = flint_vec_get(ETPLNP, tidx)
+    flint_vec_clear(ECODES)
+    mut infok: i64 = 1
+    mut failed: str = ""
+    mut ai: i64 = 0
+    while ai < nt {
+        tname = flint_str_substring(ETPLTEXT, flint_vec_get(ETPLTPO, tb + ai), flint_vec_get(ETPLTPO, tb + ai) + flint_vec_get(ETPLTPL, tb + ai))
+        # the first parameter that mentions this type parameter
+        mut argi: i64 = -1
+        mut pi: i64 = 0
+        while pi < np {
+            pword = flint_str_substring(ETPLTEXT, flint_vec_get(ETPLPWO, pbase + pi), flint_vec_get(ETPLPWO, pbase + pi) + flint_vec_get(ETPLPWL, pbase + pi))
+            if flint_str_compare(pword, tname) == 0 {
+                argi = pi
+                pi = np
+            } else {
+                pi = pi + 1
+            }
+        }
+        mut code: i64 = 0
+        if argi >= 0 {
+            if argi < nargs {
+                code = flint_vec_get(EARGCODE, argbase + argi)
+            }
+        }
+        if code == 0 {
+            infok = 0
+            if failed == "" {
+                failed = tname
+            }
+        }
+        flint_vec_push(ECODES, code)
+        ai = ai + 1
+    }
+    if infok == 0 {
+        EERR = EERR + 1
+        print("emit error: cannot infer type parameter")
+        print(failed)
+        print(name)
+        ETYPE = 0
+        return ""
+    }
+    mut mangled: str = name
+    mut k: i64 = 0
+    while k < nt {
+        mangled = mangled + "." + e_mangle_tag(flint_vec_get(ECODES, k))
+        k = k + 1
+    }
+    if EFNMAP.has(mangled) == 0 {
+        if e_instantiate(name, tidx, mangled) == 0 {
+            ETYPE = 0
+            return ""
+        }
+    }
+    idx = e_sig_lookup(mangled)
+    n = flint_vec_get(EFNN, idx)
+    base = flint_vec_get(EFNPB, idx)
+    varg = flint_vec_get(EFNVAR, idx)
+    ret = flint_vec_get(EFNRET, idx)
+    fixed = n - varg
+    sb = flint_sb_new()
+    mut i: i64 = 0
+    mut ok: i64 = 1
+    while i < nargs {
+        if i > 0 {
+            flint_sb_append(sb, ", ")
+        }
+        av = flint_str_substring(EARGTEXT, flint_vec_get(EARGVO, argbase + i), flint_vec_get(EARGVO, argbase + i) + flint_vec_get(EARGVL, argbase + i))
+        ac = flint_vec_get(EARGCODE, argbase + i)
+        if i < fixed {
+            want = flint_vec_get(EFPTYPE, base + i)
+            esv = EERR
+            cv = e_conv(av, ac, want)
+            er2 = EERR
+            if er2 == esv {
+                flint_sb_append(sb, e_llvm_typecode(want) + " " + cv)
+            } else {
+                print("emit error: arg type mismatch calling")
+                print(name)
+                ok = 0
+            }
+        } else {
+            if varg == 1 {
+                flint_sb_append(sb, e_llvm_typecode(ac) + " " + av)
+            } else {
+                EERR = EERR + 1
+                print("emit error: too many args calling")
+                print(name)
+                ok = 0
+            }
+        }
+        i = i + 1
+    }
+    # A generic call must pass every argument: the C++ compiler does not
+    # fill a generic's default arguments either ("'f' expects 2
+    # argument(s), got 1"), and the two frontends must agree.
+    if varg == 0 {
+        if nargs < fixed {
+            EERR = EERR + 1
+            print("emit error: generic call is missing arguments")
+            print(name)
+            return ""
+        }
+    }
+    argstr = flint_sb_build(sb)
+    flint_sb_free(sb)
+    if ok == 0 {
+        ETYPE = 0
+        ""
+    } else {
+        if ret == 0 {
+            e_emit("  call void " + e_sym(mangled) + "(" + argstr + ")\n")
+            ETYPE = 0
+            ""
+        } else {
+            t3 = e_fresh()
+            e_emit("  " + t3 + " = call " + e_llvm_typecode(ret) + " " + e_sym(mangled) + "(" + argstr + ")\n")
+            ETYPE = ret
+            t3
+        }
+    }
+}
 fn e_call(name: str) -> str {
     if ELAMMAP.has(name) == 1 {
         e_lambda_call(name)
     } else {
-        if name == "print" {
-            a = e_expr()
-            ac = ETYPE
-            if ac == 2 {
-                e_emit("  call void @flint_println_f64(double " + a + ")\n")
-            } else {
-                if ac == 3 {
-                    e_emit("  call void @flint_println_str(ptr " + a + ")\n")
-                } else {
-                    if ac == 1 {
-                        e_emit("  call void @flint_println_i64(i64 " + a + ")\n")
-                    } else {
-                        EERR = EERR + 1
-                        print("emit error: print needs i64/f64/str in G3")
-                        print(name)
-                    }
-                }
-            }
-            ETYPE = 0
-            ""
+        if ETPLMAP.has(name) == 1 {
+            e_call_template(name)
         } else {
-            if name == "len" {
-                la = e_expr()
-                lac = ETYPE
-                if lac == 4 {
-                    lt = e_fresh()
-                    e_emit("  " + lt + " = extractvalue {{ptr, i64}} " + la + ", 1\n")
-                    ETYPE = 1
-                    lt
+            if name == "print" {
+                a = e_expr()
+                ac = ETYPE
+                if ac == 2 {
+                    e_emit("  call void @flint_println_f64(double " + a + ")\n")
                 } else {
-                    if lac == 3 {
-                        lt2 = e_fresh()
-                        e_emit("  " + lt2 + " = call i64 @flint_str_length(ptr " + la + ")\n")
-                        ETYPE = 1
-                        lt2
+                    if ac == 3 {
+                        e_emit("  call void @flint_println_str(ptr " + a + ")\n")
                     } else {
-                        if lac == 6 {
-                            lt3 = e_fresh()
-                            e_rt_declare("flint_map_len", e_rt_sig("flint_map_len"))
-                            e_emit("  " + lt3 + " = call i64 @flint_map_len(ptr " + la + ")\n")
-                            ETYPE = 1
-                            lt3
+                        if ac == 1 {
+                            e_emit("  call void @flint_println_i64(i64 " + a + ")\n")
                         } else {
                             EERR = EERR + 1
-                            print("emit error: len needs array, str or map")
-                            ""
+                            print("emit error: print needs i64/f64/str in G3")
+                            print(name)
                         }
                     }
                 }
+                ETYPE = 0
+                ""
             } else {
-                idx = e_sig_lookup(name)
-                if idx == -1 {
-                    rs = e_rt_sig(name)
-                    if rs == "" {
-                        EERR = EERR + 1
-                        print("emit error: unknown function")
-                        print(name)
-                        ""
+                if name == "len" {
+                    la = e_expr()
+                    lac = ETYPE
+                    if lac == 4 {
+                        lt = e_fresh()
+                        e_emit("  " + lt + " = extractvalue {{ptr, i64}} " + la + ", 1\n")
+                        ETYPE = 1
+                        lt
                     } else {
-                        e_rt_call(name, rs)
+                        if lac == 3 {
+                            lt2 = e_fresh()
+                            e_emit("  " + lt2 + " = call i64 @flint_str_length(ptr " + la + ")\n")
+                            ETYPE = 1
+                            lt2
+                        } else {
+                            if lac == 6 {
+                                lt3 = e_fresh()
+                                e_rt_declare("flint_map_len", e_rt_sig("flint_map_len"))
+                                e_emit("  " + lt3 + " = call i64 @flint_map_len(ptr " + la + ")\n")
+                                ETYPE = 1
+                                lt3
+                            } else {
+                                EERR = EERR + 1
+                                print("emit error: len needs array, str or map")
+                                ""
+                            }
+                        }
                     }
                 } else {
-                    n = flint_vec_get(EFNN, idx)
-                    base = flint_vec_get(EFNPB, idx)
-                    varg = flint_vec_get(EFNVAR, idx)
-                    ret = flint_vec_get(EFNRET, idx)
-                    fixed = n - varg
-                    sb = flint_sb_new()
-                    mut i: i64 = 0
-                    mut ok: i64 = 1
-                    mut go: i64 = 1
-                    while go == 1 {
-                        e_skip()
-                        if e_peek() == 41 {
-                            go = 0
+                    idx = e_sig_lookup(name)
+                    if idx == -1 {
+                        rs = e_rt_sig(name)
+                        if rs == "" {
+                            EERR = EERR + 1
+                            print("emit error: unknown function")
+                            print(name)
+                            ""
                         } else {
+                            e_rt_call(name, rs)
+                        }
+                    } else {
+                        n = flint_vec_get(EFNN, idx)
+                        base = flint_vec_get(EFNPB, idx)
+                        varg = flint_vec_get(EFNVAR, idx)
+                        ret = flint_vec_get(EFNRET, idx)
+                        fixed = n - varg
+                        sb = flint_sb_new()
+                        mut i: i64 = 0
+                        mut ok: i64 = 1
+                        mut go: i64 = 1
+                        while go == 1 {
+                            e_skip()
+                            if e_peek() == 41 {
+                                go = 0
+                            } else {
+                                if i > 0 {
+                                    flint_sb_append(sb, ", ")
+                                }
+                                a = e_expr()
+                                ac = ETYPE
+                                if i < fixed {
+                                    want = flint_vec_get(EFPTYPE, base + i)
+                                    esv = EERR
+                                    cv = e_conv(a, ac, want)
+                                    er2 = EERR
+                                    if er2 == esv {
+                                        flint_sb_append(sb, e_llvm_typecode(want) + " " + cv)
+                                    } else {
+                                        print("emit error: arg type mismatch calling")
+                                        print(name)
+                                        ok = 0
+                                    }
+                                } else {
+                                    if varg == 1 {
+                                        if ac == 0 {
+                                            EERR = EERR + 1
+                                            print("emit error: void variadic arg")
+                                            ok = 0
+                                        } else {
+                                            flint_sb_append(sb, e_llvm_typecode(ac) + " " + a)
+                                        }
+                                    } else {
+                                        EERR = EERR + 1
+                                        print("emit error: too many args calling")
+                                        print(name)
+                                        ok = 0
+                                    }
+                                }
+                                i = i + 1
+                            }
+                        }
+                        while i < fixed {
                             if i > 0 {
                                 flint_sb_append(sb, ", ")
                             }
-                            a = e_expr()
-                            ac = ETYPE
-                            if i < fixed {
-                                want = flint_vec_get(EFPTYPE, base + i)
-                                esv = EERR
-                                cv = e_conv(a, ac, want)
-                                er2 = EERR
-                                if er2 == esv {
-                                    flint_sb_append(sb, e_llvm_typecode(want) + " " + cv)
-                                } else {
-                                    print("emit error: arg type mismatch calling")
-                                    print(name)
-                                    ok = 0
-                                }
-                            } else {
-                                if varg == 1 {
-                                    if ac == 0 {
-                                        EERR = EERR + 1
-                                        print("emit error: void variadic arg")
-                                        ok = 0
-                                    } else {
-                                        flint_sb_append(sb, e_llvm_typecode(ac) + " " + a)
-                                    }
-                                } else {
-                                    EERR = EERR + 1
-                                    print("emit error: too many args calling")
-                                    print(name)
-                                    ok = 0
-                                }
-                            }
-                            i = i + 1
-                        }
-                    }
-                    while i < fixed {
-                        if i > 0 {
-                            flint_sb_append(sb, ", ")
-                        }
-                        want2 = flint_vec_get(EFPTYPE, base + i)
-                        off = flint_vec_get(EFPOFF, base + i)
-                        if off == -1 {
-                            EERR = EERR + 1
-                            print("emit error: missing arg, no default calling")
-                            print(name)
-                            ok = 0
-                            i = fixed
-                        } else {
-                            ln = flint_vec_get(EFPLEN, base + i)
-                            d = e_eval_default(off, ln)
-                            dc = ETYPE
-                            esv2 = EERR
-                            dv = e_conv(d, dc, want2)
-                            er3 = EERR
-                            if er3 == esv2 {
-                                flint_sb_append(sb, e_llvm_typecode(want2) + " " + dv)
-                            } else {
-                                print("emit error: default type mismatch calling")
+                            want2 = flint_vec_get(EFPTYPE, base + i)
+                            off = flint_vec_get(EFPOFF, base + i)
+                            if off == -1 {
+                                EERR = EERR + 1
+                                print("emit error: missing arg, no default calling")
                                 print(name)
                                 ok = 0
+                                i = fixed
+                            } else {
+                                ln = flint_vec_get(EFPLEN, base + i)
+                                d = e_eval_default(off, ln)
+                                dc = ETYPE
+                                esv2 = EERR
+                                dv = e_conv(d, dc, want2)
+                                er3 = EERR
+                                if er3 == esv2 {
+                                    flint_sb_append(sb, e_llvm_typecode(want2) + " " + dv)
+                                } else {
+                                    print("emit error: default type mismatch calling")
+                                    print(name)
+                                    ok = 0
+                                }
+                                i = i + 1
                             }
-                            i = i + 1
                         }
-                    }
-                    argstr = flint_sb_build(sb)
-                    flint_sb_free(sb)
-                    if ok == 0 {
-                        ETYPE = 0
-                        ""
-                    } else {
-                        if ret == 0 {
-                            e_emit("  call void @" + name + "(" + argstr + ")\n")
+                        argstr = flint_sb_build(sb)
+                        flint_sb_free(sb)
+                        if ok == 0 {
                             ETYPE = 0
                             ""
                         } else {
-                            t3 = e_fresh()
-                            e_emit("  " + t3 + " = call " + e_llvm_typecode(ret) + " @" + name + "(" + argstr + ")\n")
-                            ETYPE = ret
-                            t3
+                            if ret == 0 {
+                                e_emit("  call void " + e_sym(name) + "(" + argstr + ")\n")
+                                ETYPE = 0
+                                ""
+                            } else {
+                                t3 = e_fresh()
+                                e_emit("  " + t3 + " = call " + e_llvm_typecode(ret) + " " + e_sym(name) + "(" + argstr + ")\n")
+                                ETYPE = ret
+                                t3
+                            }
                         }
                     }
                 }
@@ -4608,6 +5002,22 @@ fn e_decl_value(nm: str, ty: str) -> i64 {
     1
 }
 fn e_ann_code(ty: str) -> i64 {
+    # A type parameter bound by the instance being emitted resolves to
+    # its concrete type. This is the whole substitution mechanism: the
+    # instance keeps the template's type words, and the type environment
+    # says what each of them means right now.
+    if EENVN > 0 {
+        ec2 = e_env_find(ty)
+        if ec2 != 0 {
+            ec2
+        } else {
+            e_ann_code_plain(ty)
+        }
+    } else {
+        e_ann_code_plain(ty)
+    }
+}
+fn e_ann_code_plain(ty: str) -> i64 {
     if ty == "i64" {
         1
     } else {
@@ -5896,7 +6306,20 @@ fn e_ent_lookup(name: str) -> i64 {
     if ENTMAP.has(name) == 1 {
         ENTMAP.get(name)
     } else {
-        -1
+        # A type parameter bound to a NAMED type (a struct or an enum)
+        # resolves to that type. The bound type must be a named type:
+        # e_ent_lookup is the named-type lookup, so an i64 binding does
+        # not belong here.
+        if EENVN > 0 {
+            ec2 = e_env_find(name)
+            if ec2 >= 100 {
+                ec2
+            } else {
+                -1
+            }
+        } else {
+            -1
+        }
     }
 }
 # Field/variant index by name, or -1.
@@ -6690,6 +7113,106 @@ fn e_skip_balanced_fn() -> str {
 fn e_read_paren_text() -> str {
     e_skip_balanced_fn()
 }
+# Emit the queued instances. Each instance is emitted with its type
+# environment active, so the type parameters resolve to the concrete
+# types they were inferred to. An instance may create more instances (a
+# generic calling a generic), so the queue is re-read every round.
+fn e_drain_instances() -> i64 {
+    mut ii: i64 = 0
+    while ii < EINSTN {
+        ioff = flint_vec_get(EINSTOF, ii)
+        iln = flint_vec_get(EINSTLN, ii)
+        saved = ESRC
+        savedp = e_pos()
+        oldcur = EFNCUR
+        flint_vec_clear(EENVO)
+        flint_vec_clear(EENVL)
+        flint_vec_clear(EENVCODE)
+        ebase = flint_vec_get(EINSTEB, ii)
+        ecnt = flint_vec_get(EINSTEN, ii)
+        mut k: i64 = 0
+        while k < ecnt {
+            flint_vec_push(EENVO, flint_vec_get(EINSTEO, ebase + k))
+            flint_vec_push(EENVL, flint_vec_get(EINSTEL, ebase + k))
+            flint_vec_push(EENVCODE, flint_vec_get(EINSTEC, ebase + k))
+            k = k + 1
+        }
+        EENVN = ecnt
+        ESRC = flint_str_substring(EINSTTEXT, ioff, ioff + iln)
+        flint_vec_set(EC, 0, 0)
+        e_form()
+        ESRC = saved
+        flint_vec_set(EC, 0, savedp)
+        EFNCUR = oldcur
+        EENVN = 0
+        flint_vec_clear(EENVO)
+        flint_vec_clear(EENVL)
+        flint_vec_clear(EENVCODE)
+        ii = ii + 1
+    }
+    1
+}
+# An LLVM symbol name. LLVM identifiers may hold [a-zA-Z$._0-9], and a name
+# with anything else (the generic mangle uses "s:" and "e:" for structs and
+# enums) has to be quoted -- exactly what the C++ compiler's IR does
+# (`@"idc.s:Inner"`). Without the quotes the IR does not parse.
+fn e_sym(nm: str) -> str {
+    mut ok: i64 = 1
+    mut i: i64 = 0
+    l = flint_str_length(nm)
+    while i < l {
+        c = flint_str_char_at(nm, i)
+        if e_sym_char_ok(c) == 0 {
+            ok = 0
+            i = l
+        } else {
+            i = i + 1
+        }
+    }
+    if ok == 1 {
+        "@" + nm
+    } else {
+        "@\"" + nm + "\""
+    }
+}
+fn e_sym_char_ok(c: i64) -> i64 {
+    mut ok: i64 = 0
+    if c >= 97 {
+        if c <= 122 {
+            ok = 1
+        }
+    }
+    if ok == 0 {
+        if c >= 65 {
+            if c <= 90 {
+                ok = 1
+            }
+        }
+    }
+    if ok == 0 {
+        if c >= 48 {
+            if c <= 57 {
+                ok = 1
+            }
+        }
+    }
+    if ok == 0 {
+        if c == 46 {
+            ok = 1
+        }
+    }
+    if ok == 0 {
+        if c == 95 {
+            ok = 1
+        }
+    }
+    if ok == 0 {
+        if c == 36 {
+            ok = 1
+        }
+    }
+    ok
+}
 fn e_prog() -> i64 {
     e_skip()
     if e_peek() == 40 {
@@ -6719,6 +7242,7 @@ fn e_prog() -> i64 {
         if e_peek() == 41 {
             e_adv()
             e_drain_lambdas()
+            e_drain_instances()
         } else {
             EERR = EERR + 1
             0
@@ -6798,7 +7322,7 @@ fn e_fn_decl_body() -> i64 {
         return 0
     }
     rt = e_word()
-    e_emit("declare " + e_llvm_typecode(ret) + " @" + nm + "(" + ps + ")\n")
+    e_emit("declare " + e_llvm_typecode(ret) + " " + e_sym(nm) + "(" + ps + ")\n")
     1
 }
 # Top-level form: fn (emit) or extern/import (ignore: builtins predeclared).
@@ -6911,14 +7435,14 @@ fn e_fn_body() -> i64 {
     nm = e_word()
     tp = e_skip_balanced_fn()
     if tp != "tparams" {
-        # A non-empty tparams group is a GENERIC function: it must be
-        # monomorphized (one instance per type-argument tuple) rather than
-        # emitted as-is. The stage2 parser already produces that form; the
-        # monomorphization is specified, with the exact S-expression
-        # contract, in docs/PIPELINE-GENERICS.md.
-        EERR = EERR + 1
-        print("emit error: generics need G6 (see docs/PIPELINE-GENERICS.md)")
-        return 0
+        # A TEMPLATE: it is not emitted as-is. Its instances are emitted
+        # from the instance queue (see e_drain_instances), each with the
+        # type parameters bound to concrete types. Skip the rest of the
+        # form: the parameter group, the return type, the body.
+        e_skip_balanced_fn()
+        e_word()
+        e_skip_balanced_fn()
+        return 1
     }
     idx = e_sig_lookup(nm)
     if idx == -1 {
@@ -7001,7 +7525,7 @@ fn e_fn_body() -> i64 {
         e_emit("define noundef i32 @main(i64 %flint_argc, ptr %flint_argv) local_unnamed_addr {{\n")
         e_emit("entry:\n")
     } else {
-        e_emit("define " + e_llvm_typecode(ret) + " @" + nm + "(" + ps + ") local_unnamed_addr {{\n")
+        e_emit("define " + e_llvm_typecode(ret) + " " + e_sym(nm) + "(" + ps + ") local_unnamed_addr {{\n")
         e_emit("entry:\n")
     }
     ESCOPE = ESCOPE + 1
@@ -7135,9 +7659,18 @@ fn e_fn_body() -> i64 {
                         }
                     }
                 } else {
-                    e_emit("  ret " + e_llvm_typecode(EFNRET_CUR) + " " + e_llvm_zero(EFNRET_CUR) + "\n")
-                    e_emit("}\n")
-                    1
+                    # A trailing expression of no value (a void call): the
+                    # function falls through to its zero return. `main`
+                    # returns i32, everything else its declared type.
+                    if ismain == 1 {
+                        e_emit("  ret i32 0\n")
+                        e_emit("}\n")
+                        1
+                    } else {
+                        e_emit("  ret " + e_llvm_typecode(EFNRET_CUR) + " " + e_llvm_zero(EFNRET_CUR) + "\n")
+                        e_emit("}\n")
+                        1
+                    }
                 }
             } else {
                 if ismain == 1 {
@@ -7207,23 +7740,28 @@ fn e_llvm_typecode(code: i64) -> str {
 }
 fn e_llvm_zero(code: i64) -> str {
     mut z: str = "0"
-    if code == 2 {
-        z = "0.0"
+    if code >= 100 {
+        # A struct or an enum: the zero value is the initializer, not 0.
+        z = "zeroinitializer"
     } else {
-        if code == 3 {
-            z = "null"
+        if code == 2 {
+            z = "0.0"
         } else {
-            if code == 4 {
-                z = "zeroinitializer"
+            if code == 3 {
+                z = "null"
             } else {
-                if code == 6 {
-                    z = "null"
+                if code == 4 {
+                    z = "zeroinitializer"
                 } else {
-                    if code == 7 {
+                    if code == 6 {
                         z = "null"
                     } else {
-                        if code == 8 {
+                        if code == 7 {
                             z = "null"
+                        } else {
+                            if code == 8 {
+                                z = "null"
+                            }
                         }
                     }
                 }
@@ -7325,6 +7863,147 @@ fn e_scan_param(fnidx: i64) -> i64 {
 }
 # Scan `(fn NAME TP (PARAMS) RET [BODY])` or `(fn-decl ...)`; cursor past
 # the tag word. ext=1 for extern declarations. Skips bodies. Returns 1/0.
+# The type-parameter names of a `(tparams T U)` group: the words after
+# "tparams". They are appended to ETPLTEXT; the count is returned.
+fn e_tparam_words(rest: str) -> i64 {
+    mut n: i64 = 0
+    mut i: i64 = 0
+    mut go: i64 = 1
+    l = flint_str_length(rest)
+    while go == 1 {
+        i = flint_str_skip_ws(rest, i)
+        if i >= l {
+            go = 0
+        } else {
+            e1 = flint_str_word_end(rest, i)
+            w = flint_str_substring(rest, i, e1)
+            woff = flint_str_length(ETPLTEXT)
+            ETPLTEXT = ETPLTEXT + w
+            flint_vec_push(ETPLTPO, woff)
+            flint_vec_push(ETPLTPL, flint_str_length(w))
+            n = n + 1
+            i = e1
+        }
+    }
+    n
+}
+# A TEMPLATE: `(fn NAME (tparams T U) (params) RET body)`. The cursor is
+# past the name and the tparams group has been read (its text is `tp`).
+# The type parameters are recorded by name, the parameters' type WORDS
+# (a type parameter has no type code), the return type word, and the
+# text spans of the parameter group and the body group. The template
+# itself is never emitted: only its instances are.
+fn e_scan_template(nm: str, tp: str) -> i64 {
+    tidx = flint_vec_len(ETPLN)
+    flint_vec_push(ETPLN, 0)
+    flint_vec_push(ETPLTB, flint_vec_len(ETPLTPO))
+    flint_vec_push(ETPLNP, 0)
+    flint_vec_push(ETPLPB, flint_vec_len(ETPLPWO))
+    flint_vec_push(ETPLREO, 0)
+    flint_vec_push(ETPLREL, 0)
+    flint_vec_push(ETPLPO, 0)
+    flint_vec_push(ETPLPL, 0)
+    flint_vec_push(ETPLBO, 0)
+    flint_vec_push(ETPLBL, 0)
+    ETPLMAP.set(nm, tidx)
+    # the type-parameter names: "tparams T U" -> T, U
+    mut nt: i64 = 0
+    tl = flint_str_length(tp)
+    if tl > 7 {
+        nt = e_tparam_words(flint_str_substring(tp, 7, tl))
+    }
+    flint_vec_set(ETPLN, tidx, nt)
+    # the parameters
+    pstart = e_pos()
+    ex4 = e_expect(40)
+    if ex4 == 0 {
+        return 0
+    }
+    mut n: i64 = 0
+    mut go: i64 = 1
+    while go == 1 {
+        e_skip()
+        if e_peek() == 41 {
+            go = 0
+        } else {
+            if e_peek() == -1 {
+                EERR = EERR + 1
+                print("emit error: template parameters need a closing paren")
+                print(nm)
+                return 0
+            } else {
+                if e_peek() == 40 {
+                    e_adv()
+                    pn = e_word()
+                    pt = e_word()
+                    toff = flint_str_length(ETPLTEXT)
+                    ETPLTEXT = ETPLTEXT + pt
+                    flint_vec_push(ETPLPWO, toff)
+                    flint_vec_push(ETPLPWL, flint_str_length(pt))
+                    noff = flint_str_length(ESIGTEXT)
+                    ESIGTEXT = ESIGTEXT + pn
+                    flint_vec_push(ETPLPNO, noff)
+                    flint_vec_push(ETPLPNL, flint_str_length(pn))
+                    # the default value, if any (the text goes to ESIGTEXT,
+                    # like the ordinary parameter path)
+                    e_skip()
+                    mut dov: i64 = -1
+                    mut dln: i64 = 0
+                    if e_peek() == 40 {
+                        inner = e_skip_balanced_fn()
+                        dov = flint_str_length(ESIGTEXT)
+                        dln = flint_str_length(inner)
+                        ESIGTEXT = ESIGTEXT + inner
+                    } else {
+                        w = e_word()
+                        if w != "-" {
+                            dov = flint_str_length(ESIGTEXT)
+                            dln = flint_str_length(w)
+                            ESIGTEXT = ESIGTEXT + w
+                        }
+                    }
+                    flint_vec_push(ETPLDOFF, dov)
+                    flint_vec_push(ETPLDLEN, dln)
+                    e_skip()
+                    if e_peek() == 41 {
+                        e_adv()
+                    } else {
+                        EERR = EERR + 1
+                        print("emit error: template parameter needs a closing paren")
+                        print(nm)
+                        return 0
+                    }
+                    n = n + 1
+                } else {
+                    EERR = EERR + 1
+                    print("emit error: template parameter needs a name")
+                    print(nm)
+                    return 0
+                }
+            }
+        }
+    }
+    ex5 = e_expect(41)
+    if ex5 == 0 {
+        return 0
+    }
+    flint_vec_set(ETPLNP, tidx, n)
+    flint_vec_set(ETPLPO, tidx, pstart)
+    flint_vec_set(ETPLPL, tidx, e_pos() - pstart)
+    # the return type word
+    ret = e_word()
+    roff = flint_str_length(ETPLTEXT)
+    ETPLTEXT = ETPLTEXT + ret
+    flint_vec_set(ETPLREO, tidx, roff)
+    flint_vec_set(ETPLREL, tidx, flint_str_length(ret))
+    # the body group
+    e_skip()
+    bstart = e_pos()
+    e_skip_balanced_fn()
+    flint_vec_set(ETPLBO, tidx, bstart)
+    flint_vec_set(ETPLBL, tidx, e_pos() - bstart)
+    1
+}
 fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
     e_skip()
     nm = e_word()
@@ -7353,10 +8032,9 @@ fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
     }
     tp = e_skip_balanced_fn()
     if tp != "tparams" {
-        EERR = EERR + 1
-        print("emit error: generics need G6")
-        print(nm)
-        return 0
+        # A TEMPLATE: it is not emitted as-is, only its instances are.
+        e_scan_template(nm, tp)
+        return 1
     }
     fnidx = flint_vec_len(EFNN)
     flint_vec_push(EFNN, 0)
@@ -7588,6 +8266,7 @@ fn main() -> i64 {
     path = flint_get_arg(1)
     outp = flint_get_arg(2)
     ESRC = flint_read_file(path)
+    ESRC0 = ESRC
     if flint_err_occurred() == 1 {
         print("cannot read file")
         return 1

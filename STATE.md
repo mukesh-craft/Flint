@@ -43,10 +43,10 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); **2D escaping capture-less closures** (`57db1a4`); **2B the safety policy** (`37d9b8b`); **2E the pipeline gap measured + specified** (`66f85ae`) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (the pipeline now compiles generics, with the C++ compiler's own symbol names) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **2E implementation, step by step** (spec in `docs/PIPELINE-GENERICS.md`): (1) stage2: the trait form + method signatures; (2) stage3: monomorphization (infer type args by the by-parameter rule, instantiate, mangle like the C++ compiler so the differential gate compares symbol for symbol); (3) stage3: trait resolution by name+arity; (4) the C++ query mode so the pipeline stops re-deriving types. After that: the escape analysis for closures that DO capture (2D.2), and the region work (2D.3). |
-| then | 2C the loop-range analysis (designed in §4.2); 2B one place that emits safety checks; 2D capture-less closures may escape (a static box); 2E the pipeline convergence (document, do not attempt) |
+| next action | **2E.3 the trait form in stage2** (the parser needs a signature-only member form, and the trait text must not be mis-parsed as a function named `trait`), then **2E.4 the trait resolution in stage3** (by name + arity, like the C++ compiler), then the C++ query mode. After 2E: the optimizer / LSP surface review (the last item of the 2E brief). |
+| then | the escape analysis for closures that DO capture (2D.2), and the region work (2D.3) |
 | build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
 | gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
@@ -653,6 +653,121 @@ The differential gate is green (11/11) *because* it does not cover them.
 re-implementing the semantics. Until then, D5 is the honest record.
 
 **Verify**: `grep -c typeParams stage2/parser.fl` → 0 today.
+
+#### 4.9.1 The 2E design: monomorphization in stage3 (decided 2026-10-21)
+
+The rename landed (`16adde0`). The next 2E slice is the monomorphizer —
+the piece that makes `fn idc<T>(x: T) -> T` compile through the pipeline.
+Everything below was read out of the code, not assumed.
+
+**What the code already gives us (the reason this is tractable):**
+
+| need | what exists | where |
+|---|---|---|
+| a signature table | `EFNMAP`/`EFNN`/`EFNPB`/`EFPTYPE`/`EFNRET`/`EFNVAR` | `stage3/emitter.fl:58-71` |
+| balanced-group text reading | `e_skip_balanced_fn()` returns the group's inner text | `stage3/emitter.fl:6643` |
+| a type code per expression | `ETYPE` (set by every `e_expr` arm) | `stage3/emitter.fl:30` |
+| a type name per struct/enum | `ENTNameOff`/`ENTNameLen` (code − 100) | `stage3/emitter.fl:101-102` |
+| **synthesize a function, register it, emit it later** | the lambda mechanism: `e_decl_lambda` registers the signature, stores the text, `e_drain_lambdas` emits it | `stage3/emitter.fl:285`, `:628` |
+
+The lambda mechanism is the *precedent*: the monomorphizer is the same
+shape, with a type environment instead of capture slots.
+
+**The design (four pieces):**
+
+1. **Template registry (new).** A function whose `tparams` group is
+   non-empty is a TEMPLATE: it is registered in a new `ETPLMAP` (not
+   `EFNMAP`), with its type-parameter names, its parameters' *type words*
+   (text, not codes — a type parameter has no code), its return type word,
+   and the text spans of its parameter group and body.
+2. **Type environment (new).** During an instance's emission, each type
+   parameter is bound to a concrete type code and name. Two hooks
+   consult it: `e_ann_code()` (the type word → code) and the struct-name
+   lookups (`e_struct_lit`, `e_ann_code`'s enum branch). **No textual
+   substitution** — the earlier draft in `docs/PIPELINE-GENERICS.md` §3
+   said "textual over balanced groups"; that is wrong, because a textual
+   pass over the body would also rewrite a *string literal* or a
+   *variable* that happens to be spelled `T`. The environment is the
+   structural version of the same idea, and the emitter already resolves
+   types through exactly these two functions.
+3. **Inference at the call site (by-parameter rule, as the C++ compiler
+   does).** For each type parameter, find the FIRST parameter whose
+   declared type word is that type parameter, and take the type of the
+   argument in that position. Un-inferrable → the C++ compiler's
+   diagnostic (`cannot infer type parameter 'T' for 'f'`), never a guess.
+4. **Instantiate, mangle, register, drain.** The instance's S-expression
+   is `(fn <mangled> (tparams) (params) ret body)`; the mangled name is
+   the C++ compiler's (`idc.i64`, `idc.s:Inner`, `idc.arr` — the
+   injective `typeMangleTag` scheme, `src/main.cpp:9722`). The instance
+   is registered in `EFNMAP` *before* its body is emitted (the C++
+   compiler's recursive-generic bug, `src/main.cpp:9805-9811`), and the
+   queued instances are emitted after the main sweep (`e_drain_lambdas`).
+
+**The two frontends must agree on:** the inference rule, the mangle, the
+diagnostics, and the type-parameter-to-argument mapping. That is what the
+differential gate will check — new cases in `tests/differential/` that
+use generics, with the C++ compiler as the oracle.
+
+**The known deviations (to be recorded, not hidden):**
+
+- `bool` is `i64` in this codegen, so the pipeline mangles a bool
+  instantiation as `.i64` where the C++ compiler says `.bool`. Same
+  behaviour (the C++ `llvmType` maps bool to i64 as well), different
+  symbol name.
+- the pipeline's array type is `[i64]` only (M7 is deferred), so an
+  array type argument is `.arr` and the element type cannot vary.
+
+**Order of work inside 2E:** (1) monomorphization (above); (2) stage2:
+the trait form and method signatures; (3) stage3: trait resolution by
+name + arity; (4) the C++ query mode. The monomorphizer comes first
+because it is the piece the other two depend on (a trait method can be
+generic).
+
+#### 4.9.2 The monomorphizer, as implemented (2026-10-21)
+
+**Landed.** The pipeline now compiles generic functions, and it produces
+the *same symbol names* as the C++ compiler — the strongest parity
+statement available:
+
+| program | C++ compiler | pipeline |
+|---|---|---|
+| `idc(5)`, `idc(2.5)`, `idc("hi")`, `idc(Inner{a:7})` | `idc.i64`, `idc.f64`, `idc.str`, `@"idc.s:Inner"` | the same four |
+| `pair(3,9)`, `pair(2.5,"x")` | `pair.i64.i64`, `pair.f64.str` | the same two |
+| recursion, generic→generic, typed local, default arg | `countdown.i64`, `twice.i64`, `local.i64`, `withdef.i64` | the same four |
+
+Both print `5 3 0 9 11 2` for `tests/differential/t_generic.fl` ✓ (the
+case is in the differential manifest ✓, so the gate checks it from now on).
+
+**Four bugs the implementation exposed (all fixed in the same change):**
+
+1. **The template spans were read from the wrong text.** The instance
+   drain swaps `ESRC` for the instance text, so a template's parameter
+   and body spans (which point into the *program* text) became garbage
+   → "emit failed" with no diagnostic. Fix: a dedicated `ESRC0` holds
+   the original program text ✓.
+2. **The argument scratch was global, so a nested generic call
+   clobbered the outer call's arguments** (`idc(idc(x))` → "too many
+   args calling"). Fix: every call works on its own window of the
+   scratch, starting at `argbase` ✓ (the same base-index discipline the
+   lambda captures already use ✓).
+3. **`main` ending with a void expression emitted `ret i64 0` in an
+   `i32` function** → invalid IR → the program does not link. This is
+   **pre-existing** (the old emitter does it too ✓ — the differential
+   corpus dodged it by ending every `main` with `0` ✓). Fix: `main`
+   returns `i32 0` ✓.
+4. **A struct-typed fall-through return emitted `ret {i64} 0`** →
+   invalid IR (the zero of a struct is `zeroinitializer`). Also
+   pre-existing ✓. Fix: `e_llvm_zero` handles the named types ✓.
+
+**One deliberate restriction (to match the oracle):** a generic call
+must pass every argument — the C++ compiler does not fill a generic's
+default arguments ("'f' expects 2 argument(s), got 1") ✓, so the
+pipeline refuses it too ✓ rather than being more permissive than the
+reference implementation.
+
+**The deviations that remain (recorded, not hidden):** `bool` mangles as
+`.i64` (the pipeline has no bool code) ✓; the explicit `::<T>` call
+syntax is still a stage2 gap ✓ (the *declaration* form works ✓).
 
 ### 4.10 P3 — Items that need a decision or a different machine
 

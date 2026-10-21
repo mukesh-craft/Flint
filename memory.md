@@ -4472,3 +4472,48 @@ and a curated (not mirrored) registry.
   artifacts in ~/flintwork/self, but only if they are NEWER than the
   pipeline sources — stale artifacts produce FALSE divergences, which look
   like a compiler bug and hide real ones.
+- **Step 2E.1 — the pipeline files are renamed to their stage roles
+  (16adde0).** `stage1/flint_lex.fl` -> `stage1/lexer.fl`,
+  `stage2/flint_parse.fl` -> `stage2/parser.fl`,
+  `stage3/flint_emit.fl` -> `stage3/emitter.fl`. 31 referencing files
+  updated, including the two `import "../stage1/..."` statements (the only
+  hard coupling in the tree), 17 gate/script files, CI, and BOTH SBOM
+  oracles (the tools gate compares the Python and the Rust output
+  byte-for-byte, so they have to move together). Two gates needed a real
+  fix, not a text swap: the parse-golden glob `stage2/p*.fl` collided with
+  the new `stage2/parser.fl` (now digit-anchored: `p[0-9]*.fl`), and the
+  errors catalog was one message behind the emitter (66f85ae added the G6
+  variant without regenerating docs/errors.md). The bootstrap gate A/B/C
+  passes with a byte-identical fixed point.
+- **Step 2E.2 — the monomorphizer (the pipeline compiles generics).**
+  The emitter now turns a generic function into one instance per type
+  argument tuple, and the instance names are the C++ compiler's own
+  (`idc.i64`, `idc.f64`, `idc.str`, `@"idc.s:Inner"`, `pair.f64.str`) --
+  verified symbol for symbol against the C++ IR, not just output for
+  output. The mechanism, in the emitter's own idiom: a template is
+  registered in a new table (`ETPLMAP`) with its type-parameter NAMES and
+  its parameters' type WORDS; a call infers the type arguments by the
+  by-parameter rule (the C++ compiler's rule, so the two frontends agree);
+  the instance is synthesized as text, registered in the signature table
+  BEFORE its body is emitted (the C++ compiler's recursive-generic bug),
+  and emitted after the main sweep -- the same shape as the lambda
+  mechanism, with a TYPE ENVIRONMENT instead of capture slots. The
+  environment is the point: a textual substitution over the body would
+  also rewrite a string literal or a variable spelled `T`.
+  Four bugs, all found by the first end-to-end run and all fixed:
+  (1) the template spans were read from the swapped `ESRC` during the
+  instance drain (fixed with a dedicated `ESRC0`); (2) the argument
+  scratch was global, so a NESTED generic call clobbered the outer call's
+  arguments (fixed with a per-call window, `argbase`); (3) `main` ending
+  with a void expression emitted `ret i64 0` in an `i32` function --
+  PRE-EXISTING, and the differential corpus had dodged it by ending
+  every main with `0`; (4) a struct-typed fall-through return emitted
+  `ret {i64} 0` instead of `zeroinitializer` -- also pre-existing. One
+  deliberate restriction: a generic call must pass every argument, because
+  the C++ compiler does not fill a generic's defaults either.
+- **The lesson of 2E.2: the two frontends are the oracle for each
+  other.** Every disagreement found here (the missing arguments, the
+  un-inferrable type parameter) was a case where the pipeline would have
+  been MORE permissive than the C++ compiler. The pipeline is the second
+  implementation, so "the C++ compiler accepts/rejects this" is the
+  specification; a divergence in either direction is a defect.
