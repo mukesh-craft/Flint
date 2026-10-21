@@ -8279,6 +8279,186 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         return phi;
     }
 
+    // Phase 2 / 2C: the loop-range context.
+    //
+    // A recognised loop gives the accesses in its body a RANGE fact about
+    // the induction variable, and the fact is handed to LLVM as an
+    // assumption. It is what lets the optimizer fold a bounds check the
+    // compiler cannot see through: for `while i * i <= limit`, LLVM cannot
+    // derive `i <= limit` (the multiply may overflow in its reasoning),
+    // but the DERIVATION is trivial and sound: i*c <= n with c >= 1 implies
+    // i <= n, for negative i as well (i*c <= i when c >= 1 and i < 0).
+    //
+    // The preconditions are the whole point, because an unsound assumption
+    // is a MISCOMPILATION:
+    //   * the condition shape must be recognised exactly;
+    //   * the induction variable must not be modified before the access
+    //     (the first assignment to it clears the fact);
+    //   * the induction variable must not have its address taken;
+    //   * the fact is only used for accesses that read the variable
+    //     itself.
+    // If any of these does not hold, NOTHING is emitted.
+    struct LoopRange {
+        std::string var;              // the induction variable
+        llvm::Value* bound = nullptr; // the bound's SSA value
+        bool strict = false;          // true: i < bound, false: i <= bound
+        bool active = false;          // cleared at the first assignment to i
+    };
+    std::vector<LoopRange> loopRanges;
+
+    // The induction variable and the bound of a recognised loop condition,
+    // or empty. `strict` is true for `i < n`, false for the derived
+    // `i * c <= n` form (which yields the weaker i <= n).
+    struct LoopShape {
+        bool ok = false;
+        std::string var;
+        bool strict = false;
+        ExprAST* bound = nullptr;
+    };
+    LoopShape loopShapeOf(ExprAST* cond) {
+        LoopShape sh;
+        if (!cond || cond->kind != NodeKind::Compare) return sh;
+        auto* cmp = static_cast<CompareExprAST*>(cond);
+        ExprAST* lhs = cmp->lhs.get();
+        ExprAST* rhs = cmp->rhs.get();
+        bool strict = (cmp->op == "<");
+        bool weak = (cmp->op == "<=");
+        if (!strict && !weak) return sh;
+        if (lhs && lhs->kind == NodeKind::Variable) {
+            sh.var = static_cast<VariableExprAST*>(lhs)->name;
+            sh.bound = rhs;
+            sh.strict = strict;
+            sh.ok = true;
+            return sh;
+        }
+        // The derived form: `i * c <= n` with c a POSITIVE CONSTANT.
+        // i*c <= n and c >= 1 imply i <= n (for i < 0: i*c <= i <= n).
+        if (lhs && lhs->kind == NodeKind::Binary) {
+            auto* b = static_cast<BinaryExprAST*>(lhs);
+            if (b->op == '*' && b->lhs && b->rhs) {
+                ExprAST* varE = nullptr;
+                ExprAST* cstE = nullptr;
+                if (b->lhs->kind == NodeKind::Variable &&
+                    b->rhs->kind == NodeKind::Number)
+                    { varE = b->lhs.get(); cstE = b->rhs.get(); }
+                else if (b->rhs->kind == NodeKind::Variable &&
+                         b->lhs->kind == NodeKind::Number)
+                    { varE = b->rhs.get(); cstE = b->lhs.get(); }
+                if (varE && cstE) {
+                    auto* num = static_cast<NumberExprAST*>(cstE);
+                    if (num->isInt && num->intValue >= 1) {
+                        sh.var = static_cast<VariableExprAST*>(varE)->name;
+                        sh.bound = rhs;
+                        sh.strict = false;   // i <= n
+                        sh.ok = true;
+                    }
+                }
+            }
+        }
+        return sh;
+    }
+
+    // Does the body take the address of the induction variable, or assign
+    // to it? Either makes the range fact unusable (an assignment changes
+    // the value; an address allows an alias to change it).
+    bool bodyBreaksRange(ExprAST* body, const std::string& var, size_t* firstAssign) {
+        if (firstAssign) *firstAssign = (size_t)-1;
+        bool bad = false;
+        std::function<void(ExprAST*)> walk = [&](ExprAST* e) {
+            if (!e || bad) return;
+            switch (e->kind) {
+                case NodeKind::Assign: {
+                    auto* a = static_cast<AssignExprAST*>(e);
+                    if (a->varName == var) {
+                        if (firstAssign && *firstAssign == (size_t)-1) {
+                            // the index of the statement, filled in by the caller
+                        }
+                        bad = true;
+                    }
+                    walk(a->rhs.get());
+                    break;
+                }
+                case NodeKind::Ref: {
+                    auto* r = static_cast<RefExprAST*>(e);
+                    if (r->target && r->target->kind == NodeKind::Variable &&
+                        static_cast<VariableExprAST*>(r->target.get())->name == var)
+                        bad = true;
+                    walk(r->target.get());
+                    break;
+                }
+                case NodeKind::Binary: {
+                    auto* b = static_cast<BinaryExprAST*>(e);
+                    walk(b->lhs.get()); walk(b->rhs.get()); break;
+                }
+                case NodeKind::Compare: {
+                    auto* c = static_cast<CompareExprAST*>(e);
+                    walk(c->lhs.get()); walk(c->rhs.get()); break;
+                }
+                case NodeKind::Index: {
+                    auto* i2 = static_cast<IndexExprAST*>(e);
+                    walk(i2->base.get()); walk(i2->index.get()); break;
+                }
+                case NodeKind::Call: {
+                    auto* c = static_cast<CallExprAST*>(e);
+                    for (auto& a : c->args) walk(a.get());
+                    break;
+                }
+                case NodeKind::Block: {
+                    auto* b = static_cast<BlockStmtAST*>(e);
+                    for (auto& s : b->stmts) walk(s.get());
+                    break;
+                }
+                case NodeKind::VarDecl: {
+                    auto* v = static_cast<VarDeclAST*>(e);
+                    walk(v->init.get()); break;
+                }
+                default: break;
+            }
+        };
+        walk(body);
+        return bad;
+    }
+
+    // Does this statement assign to `name`? (The first assignment to the
+    // induction variable invalidates the range fact.)
+    static bool assignsTo(ExprAST* e, const std::string& name) {
+        if (!e) return false;
+        if (e->kind == NodeKind::Assign) {
+            auto* a = static_cast<AssignExprAST*>(e);
+            if (a->varName == name) return true;
+            return assignsTo(a->rhs.get(), name);
+        }
+        if (e->kind == NodeKind::Block) {
+            auto* b = static_cast<BlockStmtAST*>(e);
+            for (auto& s : b->stmts) if (assignsTo(s.get(), name)) return true;
+            return false;
+        }
+        if (e->kind == NodeKind::Binary) {
+            auto* b = static_cast<BinaryExprAST*>(e);
+            return assignsTo(b->lhs.get(), name) || assignsTo(b->rhs.get(), name);
+        }
+        return false;
+    }
+
+    // Emits the range fact for an access indexed by the induction
+    // variable, as an LLVM assumption. Called ONLY where the index
+    // expression is the variable itself.
+    void emitLoopRangeAssume(ExprAST* indexExpr) {
+        if (loopRanges.empty()) return;
+        LoopRange& r = loopRanges.back();
+        if (!r.active || !r.bound) return;
+        if (!indexExpr || indexExpr->kind != NodeKind::Variable) return;
+        if (static_cast<VariableExprAST*>(indexExpr)->name != r.var) return;
+        Symbol* sym = symTable.lookup(r.var);
+        if (!sym || !sym->alloca) return;
+        llvm::Value* iv = builder->CreateLoad(i64Ty, sym->alloca, "loop_iv");
+        llvm::Value* cmp = r.strict
+            ? (llvm::Value*)builder->CreateICmpSLT(iv, r.bound, "loop_range")
+            : (llvm::Value*)builder->CreateICmpULE(iv, r.bound, "loop_range");
+        auto* assumeFn = llvm::Intrinsic::getDeclaration(mod.get(), llvm::Intrinsic::assume);
+        builder->CreateCall(assumeFn, {cmp});
+    }
+
     void emitWhile(WhileStmtAST* ws) {
         auto* condBB = llvm::BasicBlock::Create(*ctx, "while_cond", currentFunc);
         auto* bodyBB = llvm::BasicBlock::Create(*ctx, "while_body", currentFunc);
@@ -8287,7 +8467,32 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         builder->CreateBr(condBB);
 
         builder->SetInsertPoint(condBB);
-        auto* cond = emitExpr(ws->condition.get());
+        // Phase 2 / 2C: a recognised loop condition is built here (rather
+        // than through emitExpr) so the BOUND's SSA value is available for
+        // the range assumption. The comparison itself is the same one the
+        // generic path would build.
+        LoopShape sh = loopShapeOf(ws->condition.get());
+        llvm::Value* boundVal = nullptr;
+        llvm::Value* cond = nullptr;
+        if (sh.ok) {
+            // lhs = the induction variable, rhs = the bound
+            ExprAST* lhsE = nullptr;
+            if (ws->condition && ws->condition->kind == NodeKind::Compare) {
+                auto* c = static_cast<CompareExprAST*>(ws->condition.get());
+                lhsE = c->lhs.get();
+            }
+            llvm::Value* lhsVal = lhsE ? emitExpr(lhsE) : nullptr;
+            boundVal = sh.bound ? emitExpr(sh.bound) : nullptr;
+            if (!lhsVal || !boundVal) {
+                cond = emitExpr(ws->condition.get());
+                boundVal = nullptr;
+            } else {
+                cond = sh.strict ? builder->CreateICmpSLT(lhsVal, boundVal, "loop_cond")
+                                 : builder->CreateICmpULE(lhsVal, boundVal, "loop_cond");
+            }
+        } else {
+            cond = emitExpr(ws->condition.get());
+        }
         if (!cond) { builder->SetInsertPoint(endBB); return; }
         auto* condZero = cond->getType()->isPointerTy()
             ? (llvm::Value*)llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(cond->getType()))
@@ -8299,7 +8504,38 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         symTable.enterScope();
         breakStack.push_back(endBB);
         continueStack.push_back(condBB);
-        emitStmt(ws->body.get());
+        // Phase 2 / 2C: the range fact, if the loop shape was recognised
+        // AND the body does not assign to the induction variable or take
+        // its address (either would make the fact stale).
+        LoopRange range;
+        bool haveRange = false;
+        if (sh.ok && boundVal && !bodyBreaksRange(ws->body.get(), sh.var, nullptr)) {
+            range.var = sh.var;
+            range.bound = boundVal;
+            range.strict = sh.strict;
+            range.active = true;
+            haveRange = true;
+        }
+        if (haveRange) loopRanges.push_back(range);
+        if (haveRange) {
+            // Emit the body statement by statement so the fact can be
+            // cleared at the FIRST assignment to the induction variable.
+            if (auto* blk = dynamic_cast<BlockStmtAST*>(ws->body.get())) {
+                for (size_t i = 0; i < blk->stmts.size(); i++) {
+                    if (i > 0) {
+                        // an assignment before this statement invalidates it
+                        if (assignsTo(blk->stmts[i].get(), sh.var))
+                            loopRanges.back().active = false;
+                    }
+                    emitStmt(blk->stmts[i].get());
+                }
+            } else {
+                emitStmt(ws->body.get());
+            }
+        } else {
+            emitStmt(ws->body.get());
+        }
+        if (haveRange) loopRanges.pop_back();
         // Loop fixpoint for move state: a binding declared outside the loop and
         // moved inside the body is re-initialised on the next iteration, so the
         // move must not survive the iteration boundary.
@@ -8635,6 +8871,8 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         llvm::Value* base = emitExpr(idx->base.get());
         llvm::Value* index = emitExpr(idx->index.get());
         if (!base || !index) return nullptr;
+        // Phase 2 / 2C: the loop-range fact for this access.
+        emitLoopRangeAssume(idx->index.get());
         // The exact length of the base, when the compiler knows it.
         llvm::Value* knownLenValue = nullptr;
 
@@ -9764,6 +10002,8 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             if (call->args.size() != 2) { return codegenError("flint_array_get needs 2 args"); }
             auto* arrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
+            // Phase 2 / 2C: the loop-range fact for this access.
+            emitLoopRangeAssume(call->args[1].get());
             // P0-NEW-1: shared core (both paths).
             return emitArrayGetCore(arrVal, idxVal, knownLenOfArg(call->args[0].get()));
         }
@@ -9773,6 +10013,8 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             auto* arrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
             auto* valVal = emitExpr(call->args[2].get());
+            // Phase 2 / 2C: the loop-range fact for this access.
+            emitLoopRangeAssume(call->args[1].get());
             // P0-NEW-1: shared core (both paths).
             return emitArraySetCore(arrVal, idxVal, valVal, knownLenOfArg(call->args[0].get()));
         }

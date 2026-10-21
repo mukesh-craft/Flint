@@ -48,7 +48,40 @@ else
     fail=$((fail+1))
 fi
 
-# 3. A literal index that IS in range must work (the proof fires, and the
+# 3. The loop-range analysis (Phase 2 / 2C) must never excuse a REAL
+#    out-of-bounds access: a loop shaped `while i <= limit` proves
+#    `i <= limit`, which does NOT make `i < len` true when len == limit.
+cat > "$T/range_oob.fl" <<'EOF'
+fn main() -> i64 {
+    limit = 3
+    arr = flint_array_alloc(limit)
+    mut i: i64 = 0
+    while i <= limit {
+        flint_array_set(arr, i, i * 2)
+        i = i + 1
+    }
+    print(flint_array_get(arr, limit))
+    return 0
+}
+EOF
+if "$FLINTC" "$T/range_oob.fl" -o "$T/range_oob.bin" >/dev/null 2>&1; then
+    out=$("$T/range_oob.bin" 2>&1); rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "FAIL the loop-range analysis removed a real bounds check (no trap)"
+        fail=$((fail+1))
+    elif printf '%s
+' "$out" | grep -qi "out of bounds"; then
+        pass=$((pass+1))
+    else
+        echo "FAIL the program aborted, but not with a bounds diagnostic"
+        fail=$((fail+1))
+    fi
+else
+    echo "FAIL the range-oob program did not compile"
+    fail=$((fail+1))
+fi
+
+# 4. A literal index that IS in range must work (the proof fires, and the
 #    program is correct).
 cat > "$T/inrange.fl" <<'EOF'
 fn main() -> i64 {
