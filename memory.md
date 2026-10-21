@@ -4435,3 +4435,33 @@ and a curated (not mirrored) registry.
   in three consecutive runs while the agent's runtime used ~46 % of a
   core. Measure the RATIO to an interleaved control, and report IR/check
   counts for anything the optimizer decides.
+
+- **Step 2D — capture-less function values may escape (57db1a4).** The rule
+  follows the box's lifetime: a closure that captures nothing has a
+  module-level constant box, a named function's value has one too, and such
+  a value may be returned, stored in a global, or handed to a callee that
+  keeps it. A closure that CAPTURES keeps its frame-bound box and is still
+  refused (pinned by tests_manual/t_capturing_escape.fl).
+- **Step 2B — the safety checks are ONE policy (37d9b8b).**
+  `Codegen::SafetyPolicy` decides what is inserted (bounds, overflow,
+  div-zero) and counts it exactly; the posture used to be two switches that
+  could disagree. `--unsafe` removes the two PERFORMANCE checks only. The
+  gate checks that the policy's counts equal the compiler's
+  pre-optimization IR count.
+- **Step 2E — the pipeline gap, measured and specified (66f85ae).** The
+  stage2 parser ALREADY accepts generic functions (it emits
+  `(fn idc (tparams T) ...)`); the stage3 emitter refuses them ("generics
+  need G6"); the parser does not accept traits at all (a method signature
+  has no body and the grammar has no form for it). The implementation is
+  specified in docs/PIPELINE-GENERICS.md (S-expression contract, the
+  by-parameter inference rule, the instantiation steps, the C++-compatible
+  mangled names so the differential gate compares the two frontends symbol
+  for symbol, the M3 trait-resolution rule, and the order of work). It is
+  NOT implemented — a half-implemented monomorphizer in a 7.6k-line Flint
+  emitter would break the bootstrap fixed point.
+- **Infrastructure lesson: the self-host artifacts in tmp are cleaned** by
+  the system, which made the differential gate fail twice for a reason that
+  had nothing to do with the code. The gate now falls back to the stable
+  artifacts in ~/flintwork/self, but only if they are NEWER than the
+  pipeline sources — stale artifacts produce FALSE divergences, which look
+  like a compiler bug and hide real ones.
