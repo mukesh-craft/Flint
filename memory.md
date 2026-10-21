@@ -4418,3 +4418,20 @@ and a curated (not mirrored) registry.
   **The audit was silent on a cache hit** (the cached module skips
   codegen, so no audit data) — the same trap as `--check-bce`; both now
   bypass the cache.
+
+- **Step 2C — the loop-range analysis (a7c6e2b).** A recognised loop
+  hands the optimizer a RANGE fact about its induction variable as an LLVM
+  assumption: `i < n` / `i <= n` give the condition itself; `i * c <= n`
+  gives the DERIVED `i <= n` (LLVM cannot derive that itself — the
+  multiply may overflow in its reasoning — and the derivation is sound for
+  negative i too). Measured: `primes` goes from 7 bounds-check calls in
+  the final IR to 1. The fact is emitted only when the shape is recognised
+  exactly, the variable is not assigned before the access, its address is
+  not taken, and the access reads the variable itself; the gate pins the
+  dangerous case (a loop `while i <= limit` over an array of length
+  `limit`, where the fact must NOT excuse the check — it traps).
+- **Methodological finding: absolute timings on this device are not
+  comparable across runs** — the same C binary measured 11.5/15.4/23.7 ms
+  in three consecutive runs while the agent's runtime used ~46 % of a
+  core. Measure the RATIO to an interleaved control, and report IR/check
+  counts for anything the optimizer decides.
