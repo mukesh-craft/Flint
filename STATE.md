@@ -43,9 +43,9 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (the pipeline now compiles generics, with the C++ compiler's own symbol names) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **2E.3 the trait form in stage2** (the parser needs a signature-only member form, and the trait text must not be mis-parsed as a function named `trait`), then **2E.4 the trait resolution in stage3** (by name + arity, like the C++ compiler), then the C++ query mode. After 2E: the optimizer / LSP surface review (the last item of the 2E brief). |
+| next action | **2E.3 the trait form in stage2** (the parser needs a signature-only member form, and the trait text must not be mis-parsed as a function named `trait`), then **2E.4 the trait resolution in stage3** (by name + arity, like the C++ compiler), then the C++ query mode. The optimizer / LSP surface review is DONE (§4.7.1) and its first three items are cheap: compile the pipeline's IR with `-O2` in the gates and measure; give the LSP the nine missing builtins (`print` among them) and the codegen diagnostic position. |
 | then | the escape analysis for closures that DO capture (2D.2), and the region work (2D.3) |
 | build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
 | gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
@@ -630,6 +630,91 @@ the server.
 
 **Done when**: the LSP's diagnostics are byte-identical to the CLI's over
 the corpus (a test compares them).
+
+#### 4.7.1 The surface review (2026-10-21) — the optimizer and the LSP
+
+The last item of the 2E brief ("look at optimizers and other surfaces")
+was a review, so it is recorded here rather than left in a chat log.
+Both halves were read out of the code; nothing below is a guess.
+
+**A. The optimizer surface — the gap is NOT "the pipeline optimizes
+worse", it is "the pipeline never optimizes, and its consumers do not
+optimize either".**
+
+| | C++ compiler | the pipeline |
+|---|---|---|
+| runs an optimizer | **yes** — LLVM O2 in-process (`src/main.cpp:766-782`, called at `:14517`) | **no** — it writes text IR |
+| who optimizes the pipeline's IR | — | the consumer: every gate compiles it with plain `clang` = **-O0** (`tests/test_differential.sh:67`, `tests/test_selfhost.sh:97`, `tests/test_emit_stage3.sh:28`) |
+| `--opt-level` | maps to `CodeGenOptLevel` only (`:13905-13915`); the IR pipeline is always O2 | none |
+| `--fast` | an explicit **no-op** (`:13868-13872`) | none |
+| the array length fact | yes (`:8120-8156`) → the bounds check compares against a *constant* | no → it compares against the length loaded from memory (`stage3/emitter.fl:2026-2029`) |
+| literal-index BCE | yes (`:9049-9061`) | no |
+| the loop-range `llvm.assume` | yes (`:8547-8561`) | no |
+| cold / noreturn / `!prof` weights on the panic and the bounds check | yes (`:1125-1152`) | no (the pipeline's declares carry no attributes) |
+| the identity elisions (`x+0`, `x*1`, …) | yes | **yes** — the same shape (`stage3/emitter.fl:5401-5500`) |
+| div/mod-by-zero traps | yes | **yes** |
+
+So the *IR quality* gap is: the length fact, the literal-index BCE, the
+range analysis, and the cold-path attributes. The *performance* gap that
+follows from them is bigger than it looks, because the pipeline's IR is
+normally compiled at **-O0** — the same `.ll` at `-O2` is 50,944 B
+linked against the C++ post-O2 IR's 62,432 B, i.e. **the pipeline's IR
+optimizes BETTER once something optimizes it**.
+
+**The cheapest, highest-value fix is not in the compiler at all:** compile
+the pipeline's `.ll` with `-O2` in the differential gate and the
+self-host gate, and the two frontends become comparable *today*. That is
+a measurement question first: does the pipeline's IR survive `opt` and
+produce the same behaviour? (It must — the IR is the IR.) The gate
+compares *program output*, not IR, so the comparison stays valid.
+
+**B. The LSP surface — a thin line scanner with one compiler-backed
+feature.**
+
+- `lsp/` is 1,961 lines of Rust (5 files). Its **only** use of the
+  compiler is `Command::new(flintc).arg(&path)` with **no flags**
+  (`lsp/src/diagnostics.rs:142`) → that is the compiler's **run mode**,
+  so **the editor executes the user's program on every debounced
+  keystroke** (300 ms, `lsp/src/main.rs:30`). Everything else —
+  completion, hover, definition, references, documentSymbol — is a Rust
+  line scanner over the buffer (`lsp/src/analyzer.rs:229-282`).
+- It never uses the self-hosted pipeline, and it does not link the
+  compiler as a library.
+- The concrete gaps: `::<T>` is unknown; `trait` is not even a keyword
+  (so it is not completable, and a trait contributes no symbol to the
+  outline); generics are cosmetic (the name scan stops at `<`); fn
+  values, enum variants and struct fields are not modelled; nine
+  compiler-magic builtins are missing from completion — **`print`
+  itself is not completable** (the generator only scrapes `add("…")`,
+  and `print`/`len`/`range`/`py_eval`/`fa_*` are special-cased by name);
+  codegen diagnostics lose their `L:C` and land on line 0; **an import
+  that cannot be resolved produces no diagnostic at all** (a false
+  all-clear).
+- The drift gates are green (the 30 lexer keywords and the 586 builtins
+  match the compiler exactly) — so the LSP is in sync with the compiler
+  *as far as it models the language*, and blind exactly where the
+  compiler grew features after the lexer froze.
+
+**The ordering that follows from the two reviews** (the cheapest first):
+
+1. **Compile the pipeline's IR with `-O2` in the gates** (a one-line
+   change per gate) and measure. It removes the largest *measured*
+   performance difference between the frontends, and it costs nothing.
+2. **The pipeline's length fact + literal-index BCE** (the C++ compiler
+   has both; the emitter has the tables to do it: `ENFCode`, the array
+   length in `{ptr,i64}`).
+3. **The LSP's `print`/`len`/`range` builtins** (nine missing items, one
+   generator change) and **the codegen diagnostic position** (one
+   regex).
+4. **The LSP's import diagnostic** (a false all-clear is worse than no
+   feature).
+5. The trait form in stage2 + the trait resolution in stage3 (2E.3/2E.4).
+
+**Not now, and why:** the LSP being "compiler-backed" (4.7's real fix)
+needs the compiler's type checker to answer questions (4.2), and the
+compiler-backed LSP would then be *slow* unless the checker is fast —
+the TypeScript-7 precedent in 4.7 says: make the checker fast first.
+So the LSP work waits for 4.2; the three cheap items (1, 3, 4) do not.
 
 ### 4.8 P2 — Type-system features (roadmap Phase 4)
 
