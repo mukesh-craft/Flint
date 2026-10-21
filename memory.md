@@ -4587,3 +4587,59 @@ and a curated (not mirrored) registry.
   - *What is not in the plan*: a vectorizer (LLVM does it), a second
     ownership system, a semantics-changing dialect framework, and a
     hand-written C++ parser.
+- **The peer-comparison plan (STATE.md §12): how Flint goes from 6.1/10
+  upward.** The comparison (the same 10 categories and the same
+  weighting as §28) puts Flint at **6.1/10** — at the Zig/TypeScript/
+  Python level and BELOW C++ (6.6), despite beating C++ on memory safety
+  (78 vs 15) and binary size (92 vs 70) and losing on runtime (70 vs
+  100), ecosystem (12 vs 90) and DX (66 vs 55). Rust 8.6, Swift 7.6,
+  Go 7.3, Kotlin 6.9, C++ 6.6, Zig 6.1, TypeScript 6.1, Python 6.0.
+  The one sentence: **Flint's language is competitive; Flint's adoption
+  is not** — and the two multipliers (ecosystem 10 %, tooling 6 %) are
+  what hold the total at 6.1.
+  - **The arithmetic (the part that decides the order):** weighted, a
+    point of ecosystem score is worth +4.8, the capability model +3.3,
+    the type system +3.0, the diagnostics+LSP together +3.8, the region
+    work +2.1, the range analysis +2.3. The biggest line is the one
+    that CANNOT be worked on directly — the ecosystem is the *output*
+    of what other people do with the language.
+  - **The adoption ladder (why the order is not arbitrary):** type
+    system + capability model → diagnostics + compiler-backed LSP →
+    package manager + registry → the ecosystem score moves. It is the
+    §28 weighting's own logic ("ecosystem follows the rest; a package
+    manager without a sound compiler and a fast compiler just distributes
+    bugs").
+  - **Per category, what moves the number and what would falsify it:**
+    runtime 70→85 (the range analysis for `i*i <= limit`; falsifier:
+    sum_array must not regress from 12.0 ms), memory safety 78→92 (the
+    regions, the capturing closures, the FFI contracts — the FFI one is
+    the cheapest and the most valuable, because the lease model ENDS at
+    the FFI boundary), type system 55→80 (async, assoc types, `dyn`,
+    nullable, operator overloading — each feature must come with the
+    semantics the pipeline can also implement, which the monomorphizer
+    and the trait resolution just proved), maturity 76→90 (the rest of
+    D5, the never-compared JIT path, the C++ query mode), concurrency
+    42→75 (the capability model — the single highest-value engineerable
+    line), LSP 42→80 (the nine missing builtins, the diagnostic
+    positions, the import false all-clear, then the compiler-backed
+    server), DX 66→85 (the diagnostics, the `flt_` naming, the docs),
+    ecosystem 12→60 (the first milestone is NOT a package manager — it
+    is the binary registry that already exists, made to work and
+    documented), cross-platform 58→80 (actually run the battery on
+    Windows/macOS in CI — claimed but never executed from this device),
+    binary size 92→96 (the 72 MB of arenas, the monolithic flint_std.o).
+  - **Three strengths to protect, with the thing that would erode each:**
+    the self-hosting pipeline with a byte-identical fixed point (Rust,
+    Swift and Go do not self-host; Zig's self-hosted backend is still in
+    development) — every pipeline change must keep Phase C byte-identical
+    and must not gain a dependency the C++ compiler lacks; the binary
+    size (4,536 B vs Rust's 339,656 B measured here) — the ecosystem and
+    transpiler work must not add a runtime dependency or a GC; the
+    deterministic memory model — the capability model must not become a
+    second ownership system.
+  - **The targets:** 6.6 (the diagnostics + the LSP's cheap items) =
+    C++ today; 7.3 (the type system + the capability model) = Go today;
+    8.0 (the compiler-backed LSP + the runtime work + the cross-platform
+    runs); 8.6+ (the package manager, the registry, the resolver) = Rust
+    today — and that last row is not engineerable by us alone: it needs
+    people writing Flint programs.

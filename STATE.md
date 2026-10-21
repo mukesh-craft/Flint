@@ -45,7 +45,7 @@ next action is. It is the first thing to read and the first thing to update.
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
 | last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution** (the pipeline now compiles trait programs) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **§11.4 step 1+2: spans + structured diagnostics + error codes** (the first item of the research plan ✓ — cheap ✓, unblocks the LSP ✓, and it is the interface the C→Flint transpiler needs ✓). Then the C++ query mode (the last 2E item: the pipeline should consume the C++ compiler's answers instead of re-deriving them ✓ — see `docs/PIPELINE-GENERICS.md` §5), and the three cheap items the optimizer / LSP review found (§4.7.1): compile the pipeline's IR with `-O2` in the gates and measure; give the LSP the nine missing builtins (`print` among them) and the codegen diagnostic position. The trait form and its resolution are DONE (2E.3/2E.4 ✓); the explicit `::<T>` call syntax is still a stage2 gap ✓. |
+| next action | **§11.4 step 1+2: spans + structured diagnostics + error codes** (§12.3 puts this at +0.6 overall — the cheapest move that reaches C++'s score ✓) (the first item of the research plan ✓ — cheap ✓, unblocks the LSP ✓, and it is the interface the C→Flint transpiler needs ✓). Then the C++ query mode (the last 2E item: the pipeline should consume the C++ compiler's answers instead of re-deriving them ✓ — see `docs/PIPELINE-GENERICS.md` §5), and the three cheap items the optimizer / LSP review found (§4.7.1): compile the pipeline's IR with `-O2` in the gates and measure; give the LSP the nine missing builtins (`print` among them) and the codegen diagnostic position. The trait form and its resolution are DONE (2E.3/2E.4 ✓); the explicit `::<T>` call syntax is still a stage2 gap ✓. |
 | then | the escape analysis for closures that DO capture (2D.2), and the region work (2D.3) |
 | build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
 | gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
@@ -957,6 +957,12 @@ Phase 10 DIFFERENTIATE deterministic+safe+agent-native niche                 ←
 Phase 0 and Phase 8 are independent of everything else and can run in
 parallel with the compiler work. Phase 2 is the long pole.
 
+**§12 is the score plan** (the peer comparison: Flint 6.1/10 today,
+and the arithmetic that says which category is worth the most effort ✓)
+and **§11 is the work plan** (the C→Flint transpiler, the diagnostics
+overhaul, the four selling points, and the positioning/memory-safety
+answers ✓).
+
 **§11 adds the plan that came out of the 2026-10-21 research pass** (the
 C→Flint transpiler, the Rust-like diagnostics, the four "Flint Twist"
 selling points, and the positioning/memory-safety answers). Its first
@@ -1633,3 +1639,189 @@ LATER §11.4 step 3-5  the renderer, the suggestions, the poisoning
 roadmap rejects it ✓ — LLVM does it ✓), a second ownership system ✓
 (§6.11 ✓), a semantics-changing dialect framework ✓ (§6.11 ✓), and
 hand-written C++ parsing ✓ (Clang exists ✓).
+
+---
+
+## 12. The peer-comparison plan (how Flint goes from 6.1/10 upward)
+
+§11 planned the *work*. This section plans the *score*: the peer
+comparison (the same 10 categories, the same weighting as §28) says
+Flint is **6.1/10** — at the Zig/TypeScript/Python level, and **below
+C++ (6.6)**, despite beating C++ on safety (78 vs 15) and binary size
+(92 vs 70) and losing to it on runtime (70 vs 100), ecosystem (90 vs
+12) and DX (55 vs 66).
+
+**The baseline, as measured (2026-10-21; the peer scores are an
+assessment, Flint's are measurements):**
+
+| language (version) | runtime | mem-safety | types | maturity | ecosystem | concurrency | bin-size | DX | LSP | **weighted** |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Rust 1.99.1 | 85 | 95 | 90 | 90 | 95 | 88 | 35 | 85 | 90 | **8.6** |
+| Swift 6.3 | 75 | 80 | 85 | 85 | 70 | 85 | 45 | 75 | 75 | **7.6** |
+| Go 1.27.3 | 70 | 55 | 60 | 85 | 85 | 75 | 60 | 90 | 80 | **7.3** |
+| Kotlin 2.4 | 55 | 75 | 70 | 80 | 85 | 60 | 40 | 80 | 60 | **6.9** |
+| C++ (clang 21) | 100 | 15 | 65 | 90 | 90 | 25 | 70 | 55 | 75 | **6.6** |
+| Zig 0.17.0 | 90 | 70 | 65 | 45 | 35 | 40 | 80 | 55 | 45 | **6.1** |
+| TypeScript | 30 | 55 | 55 | 85 | 95 | 40 | 30 | 85 | 90 | **6.1** |
+| Python | 25 | 60 | 50 | 85 | 95 | 40 | 30 | 90 | 70 | **6.0** |
+| **Flint** | 70 | 78 | 55 | 76 | 12 | 42 | 92 | 66 | 42 | **6.1** |
+
+**The one sentence:** Flint's *language* is competitive (it beats C++ on
+safety, ties it on binary size, and is within 1.44× on integer loops);
+Flint's *adoption* is not (ecosystem 12, tooling 42), and the two
+multipliers — 10 % and 6 % of the weight — are exactly what holds the
+total at 6.1.
+
+### 12.1 The arithmetic: where a point of work actually pays
+
+The weighting (runtime 15, memory safety 15, type system 12, maturity
+12, ecosystem 10, concurrency 10, binary size 8, DX 8, LSP 6,
+cross-platform 4) turns each category into a **price per point of
+score**:
+
+| category | now | realistic target | points of score | what it costs |
+|---|---|---|---|---|
+| **ecosystem** | 12 | 60 | **+4.8** | a package manager, a registry, a resolver, a lockfile — §4.6 — but it *follows* the rest (§28: "a package manager without a sound compiler and a fast compiler just distributes bugs") |
+| **concurrency safety** | 42 | 75 | **+3.3** | the capability model (Send/Sync-equivalent) — §4.5 — plus async in the type system |
+| **type system** | 55 | 80 | **+3.0** | async, associated types, `dyn`, nullable types, operator overloading — §4.8 |
+| **memory safety** | 78 | 92 | **+2.1** | the precise regions and the FFI contracts — §4.4 |
+| **LSP/tooling** | 42 | 80 | **+2.3** | the compiler-backed LSP, rename, refactor, incremental analysis — §4.7 |
+| **runtime performance** | 70 | 85 | **+2.3** | the range analysis that removes the last checks — §4.3 (the 1.44× gap) |
+| **developer experience** | 66 | 85 | **+1.5** | the naming inconsistencies, the docs, the error messages — §11.4 |
+| **compiler maturity** | 76 | 90 | **+1.7** | the two-frontends drift (D5 — now much smaller ✓), the untested platforms |
+| **cross-platform** | 58 | 80 | **+0.9** | the untested Windows/macOS runs, the freestanding target — §11.3.2 |
+| **binary size** | 92 | 96 | **+0.3** | the 72 MB of arenas in library-heavy programs — §6.3 |
+
+**Read the table twice.** The biggest single line is the ecosystem
+(+4.8) and it is the one that *cannot be worked on directly* — it is
+the sum of what other people do with the language ✓. The three
+highest-value *engineerable* lines are the **capability model**
+(+3.3), the **type system** (+3.0) and the **diagnostics/LSP**
+(+2.3 + +1.5 = +3.8 together ✓) — and all three are the same work seen
+from three sides ✓ (§11.4 ✓, §11.5 ✓).
+
+### 12.2 The adoption ladder (the order that is not arbitrary)
+
+```
+  type system + capability model  ──►  can a team write safe concurrent code?
+        │                                    (concurrency 42, types 55)
+        ▼
+  diagnostics + compiler-backed LSP ──►  can a team SEE the code they write?
+        │                                    (LSP 42, DX 66)
+        ▼
+  package manager + registry        ──►  can a team share what they wrote?
+        │                                    (ecosystem 12)
+        ▼
+  ecosystem score moves              ──►  6.1 -> 7.x
+```
+
+The ladder is not a preference — it is the §28 weighting's own logic
+("ecosystem follows the rest") ✓. A package manager that ships a
+language with a line-scanning LSP and no static race freedom would
+distribute the *problems* ✓.
+
+### 12.3 The per-category plan (what moves each number)
+
+**Runtime performance 70 → 85 (§4.3, §6.2).**
+The remaining gap is *integer-specific* (the f64 loop is at C parity
+✓) and the remaining checks need **range analysis** — `primes`'s
+`i*i <= limit` does not give LLVM `i <= limit+1` ✓. The 2C slice
+(`llvm.assume`, with its soundness conditions) exists ✓; the next piece
+is the analysis over the loop's induction variable ✓. *Falsifier:*
+`sum_array` must not regress from 12.0 ms ✓ (the bench gate ✓).
+
+**Memory safety 78 → 92 (§4.4).**
+The named gaps: no precise regions ✓, closures that capture cannot
+escape ✓ (2D.2 ✓), FFI contracts unchecked ✓. The FFI one is the
+cheapest and the most valuable — it is where the lease model *ends* ✓,
+so it needs its own gate (the same shape as `tests/test_bounds_safety.sh`
+✓). *Falsifier:* the safety gates must stay green ✓.
+
+**Type system 55 → 80 (§4.8).**
+async/await ✓, associated types ✓, `dyn` ✓, nullable types ✓,
+operator overloading ✓. The rule that keeps this honest: **each
+feature must come with the semantics the pipeline can also implement**
+✓ (the monomorphizer and the trait resolution just proved the
+discipline ✓ — the C++ compiler is the oracle ✓ and the differential
+gate is the check ✓). The *ordering* rule from §11.3.3: the type system
+before any stream syntax ✓.
+
+**Compiler maturity 76 → 90.**
+D5 shrank this session (the pipeline now compiles generics and traits
+✓, with the C++ compiler's own symbol names ✓) ✓. What is left: the
+remaining frontends' drift (`::<T>` ✓, the fn-value surface ✓, the
+enum equality ✓), the **JIT path** (never compared against the AOT
+path ✓ — a real hole ✓), and the C++ query mode (§11 ✓) that would
+make the drift *impossible* rather than *detected* ✓.
+
+**Concurrency safety 42 → 75 (§4.5).**
+Threads and channels exist ✓; what does not exist is **static race
+freedom** ✓. The plan: a capability model (a `Send`/`Sync` equivalent
+✓) on top of the lease model ✓, then async ✓, then the runtime's
+channel implementation checked against it ✓. *This is the single
+highest-value engineerable line in the table (+3.3) ✓.*
+
+**LSP/tooling 42 → 80 (§4.7, §11.4).**
+The three cheap items the review found ✓: the nine missing builtins
+(`print` among them ✓), the codegen diagnostic positions ✓, the import
+diagnostic (a false all-clear ✓). Then the real fix: **serve the LSP
+from the compiler's own semantic model** ✓ — which needs the structured
+diagnostics (§11.4 ✓) and the type checker (2A ✓). The
+TypeScript-7 precedent applies: make the *checker* fast, not the
+server ✓.
+
+**Developer experience 66 → 85.**
+The one-error-per-input contract already exists ✓ (and the pipeline
+extends it ✓); the diagnostics overhaul (§11.4 ✓) is the biggest item
+✓; then the `flt_` naming inconsistencies ✓, the docs ✓, and the
+tutorial ✓.
+
+**Ecosystem 12 → 60 (§4.6).**
+Not engineerable directly ✓ — it is the *output* of the ladder ✓. The
+engineering is the *infrastructure*: a package manager, a registry, a
+resolver, a lockfile, signing, an audit trail ✓ (§4.6 ✓) and the
+"binary registry" that already exists ✓. The first milestone is
+**not** a package manager — it is a *binary registry that works* ✓
+(the repository already has one ✓) and the documentation of the
+publishing contract ✓.
+
+**Cross-platform 58 → 80.**
+The honest state: Linux/Android verified here ✓, Windows/macOS
+*claimed but never executed from this device* ✓. The plan: run the
+gate battery on the other two platforms in CI ✓ (the workflows exist ✓
+— they have never run here ✓), and the freestanding/no-stdlib target
+(§11.3.2 ✓) for the embedded claim ✓.
+
+**Binary size 92 → 96.**
+Already excellent ✓ (4,536 B ✓). The remaining 72 MB of arenas in
+library-heavy programs ✓ (§6.3 ✓) and the monolithic `flint_std.o` ✓ —
+per-subsystem stdlib objects ✓, profile-driven arenas ✓ (Phase 6 ✓).
+
+### 12.4 The strengths to protect (three things that are genuinely rare)
+
+1. **The self-hosting pipeline with a byte-identical fixed point.**
+   Rust, Swift and Go do not self-host ✓; Zig's self-hosted backend is
+   still in development ✓. *Protect it:* every pipeline change must
+   keep Phase C byte-identical ✓ (the gate ✓) — and the pipeline must
+   not gain a dependency the C++ compiler does not have ✓.
+2. **The binary size.** 4,536 B stripped hello against C's 4,368 B and
+   Rust's 339,656 B (measured on this device ✓). *Protect it:* the
+   ecosystem work must not add a runtime dependency ✓, and the
+   transpiler (§11.2 ✓) must not pull in a GC ✓.
+3. **The deterministic memory model with a runtime backstop.** *Protect
+   it:* the capability model (§4.5 ✓) must not become a second
+   ownership system (§6.11 ✓).
+
+### 12.5 The targets (what "better" means, in numbers)
+
+| milestone | the score | what has to be true |
+|---|---|---|
+| **today** | 6.1 | — |
+| **the first honest move** | **6.6** (= C++ today) | the diagnostics + the LSP's cheap items (+0.6) |
+| **the language catches up** | **7.3** (= Go today) | the type system + the capability model (+1.3) |
+| **a credible language** | **8.0** | the compiler-backed LSP + the runtime work + the cross-platform runs (+0.7) |
+| **the ecosystem moves** | **8.6+** (= Rust today) | the package manager, the registry, the resolver — the *output* of everything above ✓ |
+
+**The honest caveat, once:** the last row is not engineerable by us
+alone ✓ — it needs people writing Flint programs ✓. Every row before it
+is ✓.
