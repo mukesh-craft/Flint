@@ -205,7 +205,48 @@ else
   ok "an unrelated name gets no suggestion"
 fi
 
-# --- 6. an unknown format is refused -----------------------------------
+# --- 6. the PIPELINE's diagnostics have codes too ----------------------
+# The self-hosted emitter is a second compiler: its messages get the same
+# kind of stable code, in the same space (the C++ compiler's codes run to
+# E0144; the emitter's start after them, so no two diagnostics in the
+# project share a code).
+python3 - <<'PYINNER' > "$WORK/pipe_codes.txt" 2>&1
+import csv, re
+src = open('stage3/emitter.fl').read()
+live = re.findall(r'print\("(emit error[^"]*)"\)', src)
+nocode = [m for m in live if not re.match(r'emit error\[E\d{4}\]: ', m)]
+distinct = sorted(set(live))
+rows = list(csv.DictReader(open('docs/error-codes-pipeline.csv')))
+tabled = set(r['message'] for r in rows)
+missing = [m for m in distinct if m not in tabled]
+print("NOCODE:%d" % len(nocode))
+print("MISSING:%d" % len(missing))
+bycode = {}
+for m in distinct:
+    code = m[len('emit error['):m.index(']')]
+    bycode.setdefault(code, set()).add(m)
+dup = [c for c, ms in bycode.items() if len(ms) > 1]
+print("DUP:%d" % len(dup))
+print("PIPE:%d call sites, %d distinct, %d codes" % (len(live), len(distinct), len(bycode)))
+PYINNER
+if grep -q '^NOCODE:0' "$WORK/pipe_codes.txt"; then
+  ok "every emitter diagnostic has a code"
+else
+  bad "every emitter diagnostic has a code" "$(grep '^NOCODE' "$WORK/pipe_codes.txt")"
+fi
+if grep -q '^MISSING:0' "$WORK/pipe_codes.txt"; then
+  ok "the emitter's code table matches the source"
+else
+  bad "the emitter's code table matches the source" "$(grep '^MISSING' "$WORK/pipe_codes.txt")"
+fi
+if grep -q '^DUP:0' "$WORK/pipe_codes.txt"; then
+  ok "an emitter code maps to one message"
+else
+  bad "an emitter code maps to one message" "$(grep '^DUP' "$WORK/pipe_codes.txt")"
+fi
+echo "  $(grep '^PIPE' "$WORK/pipe_codes.txt")"
+
+# --- 7. an unknown format is refused -----------------------------------
 if timeout -s KILL 120 "$FLINTC" --error-format nope "$WORK/bad.fl" >/dev/null 2>&1; then
   bad "an unknown --error-format is refused" "it was accepted"
 else

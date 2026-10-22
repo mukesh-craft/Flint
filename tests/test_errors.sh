@@ -16,7 +16,22 @@ old = re.findall(r'^- `((?:emit error|codegen)[^`]*)`$',
 # The lambda family stays first (curated grouping); the rest is sorted.
 # A message that the emitter no longer prints is DROPPED: the catalog
 # must mirror the emitter exactly, in both directions.
-family = old[:11]
+# The curated lambda family stays first. Its entries are re-matched to the
+# emitted set by their TEXT (a code was added to every message, so the old
+# text and the new text differ by the code) -- otherwise the family would
+# keep the pre-code spellings and the gate would call them dead.
+def without_code(m):
+    # "emit error[E0123]: text" -> "emit error: text" (the code goes away)
+    if '[' in m and ']' in m and m.index(']') < m.index(':'):
+        i = m.index('[')
+        j = m.index(']')
+        return m[:i] + m[j+1:]
+    return m
+by_text = {without_code(m): m for m in emitted}
+family = []
+for m in old[:11]:
+    t = without_code(m)
+    family.append(by_text[t] if t in by_text else m)
 rest = (set(old[11:]) & set(emitted)) | set(emitted)
 block = "\n".join("- `%s`" % m for m in family + sorted(rest))
 open('docs/errors.md', 'w').write(
