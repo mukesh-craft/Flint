@@ -58,9 +58,20 @@ def split_top_level_plus(text):
 
 
 def literal_of(part):
-    """Return the literal text of a part, or None if it is not a literal."""
+    """Return the literal text of a part, or None if it is not a literal.
+
+    `std::string("literal")` IS a literal -- the wrapper is only a way to
+    build one. Unwrapping it matters: without it, three different
+    diagnostics ("undefined var 'x'", "cannot borrow moved variable 'x'",
+    ...) collapse into the same pattern, and a diagnostic code (which is
+    assigned per pattern) would be shared by messages that are not the
+    same.
+    """
     part = part.strip()
     m = re.fullmatch(r'"((?:[^"\\]|\\.)*)"', part)
+    if m:
+        return m.group(1)
+    m = re.fullmatch(r'std::string\(\s*"((?:[^"\\]|\\.)*)"\s*\)', part)
     if m:
         return m.group(1)
     return None
