@@ -1,9 +1,15 @@
 # C++ compiler diagnostic catalog
 
 Every diagnostic the shipped compiler (`flintc`, `src/main.cpp`) can print,
-as a PATTERN: literal text with `<...>` where a value is interpolated. A
-user searching for a message finds the pattern that starts like their
-message.
+as a CODE and a PATTERN: the code is stable across releases (the docs
+and the tools link to it), and the pattern is the literal text with
+`<...>` where a value is interpolated. A user searching for a message
+finds the pattern that starts like their message.
+
+The codes live in the source, next to the diagnostic (`codegenError("E0042",
+"...")`) — the same shape as Clang's DiagnosticIDs.td. The table is
+`docs/error-codes.csv`, and `tests/test_diagnostic_codes.sh` keeps the two
+in sync and checks that a code never changes its meaning.
 
 This catalog is about the C++ compiler. The self-hosted emitter's
 diagnostics are catalogued separately in [errors.md](errors.md), and
@@ -47,139 +53,139 @@ Regenerate: `python3 tools/errors_cpp.py --format md` (or
 
 ## Complete message list
 
-- `' <...> ' expects <...> argument(s), got <...>`
-- `' <...> ' expects <...> type argument(s), got <...>`
-- `' <...> ' is not defined for structs or enums; use == or !=`
-- `'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce`
-- `<...> () needs one string arg`
-- `<...> <...> '`
-- `<...> <...> ' has no field ' <...> '`
-- `<...> <...> ' in struct literal`
-- `<...> <...> ' while borrowed`
-- `a fn type needs an explicit return type (fn(...) -> Ret); without it an indirect call cannot know what the callee returns`
-- `a lambda has no '-> Ret' form: write an expression body (|x| x + 1); use a named fn when you need a return annotation`
-- `argument <...> of ' <...> ' has type <...> <...> <...>`
-- `array index needs i64 (got str; map keys are strings)`
-- `array literals must hold i64 values, but element <...> is <...> (arrays of other types are not supported yet)`
-- `as f64 needs an i64 or f64 value`
-- `as i64 needs an i64 or f64 value`
-- `as-cast target must be 'i64' or 'f64'`
-- `as-cast to ' <...> ' is not yet supported (only 'i64' and 'f64'; f64->i64 truncates toward zero)`
-- `as-casts support only 'i64' and 'f64' (got ' <...> ')`
-- `break outside loop`
-- `call to unknown function ' <...> '`
-- `can only reference variables`
-- `cannot access field ' <...> ' on non-struct type`
-- `cannot assign to ' <...> ' while borrowed`
-- `cannot assign to immutable ' <...> '`
-- `cannot assign to immutable global ' <...> '`
-- `cannot bind a function value to a non-fn type`
-- `cannot bind function ' <...> ': declared signature differs from the function's signature`
-- `cannot bind function value ' <...> ': declared signature differs from the value's fn type`
-- `cannot borrow moved variable ' <...> '`
-- `cannot call lambda ' <...> ' from a different function`
-- `cannot capture ' <...> '`
-- `cannot capture ' <...> ' while borrowed`
-- `cannot capture lambda ' <...> '`
-- `cannot capture moved variable ' <...> '`
-- `cannot capture unknown variable ' <...> '`
-- `cannot compare enum ' <...> ' with a value of a different type`
-- `cannot infer type parameter ' <...> ' for ' <...> '; the argument's type could not be determined`
-- `cannot move ' <...> ' while borrowed`
-- `cannot move while borrowed`
-- `cannot pass a lambda to parameter ' <...> ' of ' <...> ': the parameter is not a fn type`
-- `cannot rebind ' <...> ' as lambda`
-- `cannot return a function value: it would escape its defining frame`
-- `cannot return a lambda: it would escape its defining frame`
-- `cannot store a function value into global ' <...> ': it would escape its defining frame`
-- `cannot store a lambda into global ' <...> ': it would escape its defining frame`
-- `continue outside loop`
-- `empty lambda body`
-- `expected '<' after '::' before explicit type arguments`
-- `expected '\"C\"' after extern`
-- `expected 'fn' or 'def' in trait ' <...> ' body`
-- `expected a top-level statement or a 'fn name(params) { body }' definition; '(name) (' here does not look like either`
-- `expected a top-level statement or a 'fn name(params) { body }' definition; 'name name' here does not look like either`
-- `expected expression`
-- `expected expression after '='`
-- `expected module path (string literal or identifier)`
-- `expected type (i64, str, bool, [T], &T, struct name, or enum name)`
-- `expected value in map literal`
-- `explicit type arguments are only allowed on a generic function; ' <...> ' is not generic`
-- `failed to specialize ' <...> '`
-- `fao_matmul not linked`
-- `flint_array_data needs 1 arg`
-- `flint_array_get needs 2 args`
-- `flint_array_get needs an array`
-- `flint_array_get_ptr needs 2 args`
-- `flint_array_set needs 3 args`
-- `flint_array_set needs an array`
-- `flint_array_set_ptr needs 3 args`
-- `flint_array_slice not linked`
-- `flint_map_len not linked`
-- `flint_str_concat not linked`
-- `flint_str_concat/flint_f64_to_string not linked`
-- `flint_str_concat/flint_i64_to_string not linked`
-- `flint_str_length not linked`
-- `flint_thread_spawn first arg must be a string literal`
-- `flint_thread_spawn first arg must be a string literal (function name)`
-- `flint_thread_spawn needs 2 args: func_name, arg`
-- `flint_thread_spawn: runtime function 'flint_thread_create' not found`
-- `flint_thread_spawn: runtime function not found`
-- `flint_thread_spawn: unknown function ' <...> '`
-- `for-in needs an array or str collection`
-- `function ' <...> ' cannot be used as a value here; bind a lambda or pass it in a direct call`
-- `function value ' <...> ' argument type mismatch (parameter <...> )`
-- `function value ' <...> ' expects <...> argument(s), got <...>`
-- `generic function ' <...> ' cannot be used as a value yet; instantiate it first`
-- `if branches must yield the same type`
-- `index assignment requires an array variable`
-- `lambda ' <...> ' argument type mismatch`
-- `lambda ' <...> ' expects <...> argument(s), got <...>`
-- `lambda body type mismatch`
-- `lambda does not match the fn type of parameter ' <...> ' of ' <...> '`
-- `lambdas are not supported in generic functions`
-- `len needs array, str or map`
-- `len() needs 1 argument`
-- `map index needs a str key (map keys are strings)`
-- `map runtime not registered`
-- `map values must be i64 (got f64)`
-- `match arms must yield the same type`
-- `method ' <...> ' needs <...> argument(s)`
-- `no type in scope implements ' <...> '`
-- ``numeric dtype suffix ' <...> ' is not yet supported (tensor literals are f64-only; convert with `as f64` / `as i64`)``
-- `pattern <...> . <...> binds <...> value(s) but the variant has <...>`
-- `print() needs an arg`
-- `print() of unsupported type`
-- `py_eval() needs one string arg`
-- `py_eval_int not declared`
-- `ragged tensor literal: all rows must have the same length`
-- `range() needs 1 or 2 arguments`
-- `range() takes 1 or 2 arguments: range(n) or range(start, end)`
-- `right side of '|>' must be a function call or identifier`
-- `struct ' <...> ' has no field ' <...> '`
-- `struct type not found ' <...> '`
-- `tensor literal needs at least one f64 element (add a decimal point); nested i64 arrays are not supported`
-- `tensor literals support only rank 1 and 2 (f64)`
-- `tensor runtime not registered`
-- `tensor values cannot be indexed with []; use flt_get(t, i)`
-- `tensor-shaped array literal is neither a flat f64 list nor equal-length f64 rows (use bare f64 literals, or build dynamic tensors with flint_create_1d/2d + flt_set)`
-- `the explicit type argument for ' <...> ' must be a concrete type`
-- `trait ' <...> ' is already declared`
-- `trait method ' <...> ' is declared twice in ' <...> '`
-- `undefined variable ' <...> '`
-- `unknown enum ' <...> '`
-- `unknown enum in match`
-- `unknown method ' <...> ' for map (available: get, set, has, len, keys)`
-- `unknown method ' <...> ' for str (available: len, upper, lower, trim, reverse, get, repeat, startswith, endswith, indexof, replace)`
-- `unknown operator ' <...> '`
-- `unknown struct ' <...> '`
-- `unknown type ' <...> '`
-- `unknown variable ' <...> ' in lambda body`
-- `unknown variant ' <...> '`
-- `unrecognized top-level construct`
-- `use of moved variable ' <...> '`
-- `variable ' <...> ' already declared`
-- `variable ' <...> ' not declared`
+- `E0001  ' <...> ' expects <...> argument(s), got <...>`
+- `E0002  ' <...> ' expects <...> type argument(s), got <...>`
+- `E0003  ' <...> ' is not defined for structs or enums; use == or !=`
+- `E0004  'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce`
+- `E0005  <...> () needs one string arg`
+- `E0006  <...> <...> '`
+- `E0007  <...> <...> ' has no field ' <...> '`
+- `E0008  <...> <...> ' in struct literal`
+- `E0009  <...> <...> ' while borrowed`
+- `E0010  a fn type needs an explicit return type (fn(...) -> Ret); without it an indirect call cannot know what the callee returns`
+- `E0011  a lambda has no '-> Ret' form: write an expression body (|x| x + 1); use a named fn when you need a return annotation`
+- `E0012  argument <...> of ' <...> ' has type <...> <...> <...>`
+- `E0013  array index needs i64 (got str; map keys are strings)`
+- `E0014  array literals must hold i64 values, but element <...> is <...> (arrays of other types are not supported yet)`
+- `E0015  as f64 needs an i64 or f64 value`
+- `E0016  as i64 needs an i64 or f64 value`
+- `E0017  as-cast target must be 'i64' or 'f64'`
+- `E0018  as-cast to ' <...> ' is not yet supported (only 'i64' and 'f64'; f64->i64 truncates toward zero)`
+- `E0019  as-casts support only 'i64' and 'f64' (got ' <...> ')`
+- `E0020  break outside loop`
+- `E0021  call to unknown function ' <...> '`
+- `E0022  can only reference variables`
+- `E0023  cannot access field ' <...> ' on non-struct type`
+- `E0024  cannot assign to ' <...> ' while borrowed`
+- `E0025  cannot assign to immutable ' <...> '`
+- `E0026  cannot assign to immutable global ' <...> '`
+- `E0027  cannot bind a function value to a non-fn type`
+- `E0028  cannot bind function ' <...> ': declared signature differs from the function's signature`
+- `E0029  cannot bind function value ' <...> ': declared signature differs from the value's fn type`
+- `E0030  cannot borrow moved variable ' <...> '`
+- `E0031  cannot call lambda ' <...> ' from a different function`
+- `E0032  cannot capture ' <...> '`
+- `E0033  cannot capture ' <...> ' while borrowed`
+- `E0034  cannot capture lambda ' <...> '`
+- `E0035  cannot capture moved variable ' <...> '`
+- `E0036  cannot capture unknown variable ' <...> '`
+- `E0037  cannot compare enum ' <...> ' with a value of a different type`
+- `E0038  cannot infer type parameter ' <...> ' for ' <...> '; the argument's type could not be determined`
+- `E0039  cannot move ' <...> ' while borrowed`
+- `E0040  cannot move while borrowed`
+- `E0041  cannot pass a lambda to parameter ' <...> ' of ' <...> ': the parameter is not a fn type`
+- `E0042  cannot rebind ' <...> ' as lambda`
+- `E0043  cannot return a function value: it would escape its defining frame`
+- `E0044  cannot return a lambda: it would escape its defining frame`
+- `E0045  cannot store a function value into global ' <...> ': it would escape its defining frame`
+- `E0046  cannot store a lambda into global ' <...> ': it would escape its defining frame`
+- `E0047  continue outside loop`
+- `E0048  empty lambda body`
+- `E0049  expected '<' after '::' before explicit type arguments`
+- `E0050  expected '\"C\"' after extern`
+- `E0051  expected 'fn' or 'def' in trait ' <...> ' body`
+- `E0052  expected a top-level statement or a 'fn name(params) { body }' definition; '(name) (' here does not look like either`
+- `E0053  expected a top-level statement or a 'fn name(params) { body }' definition; 'name name' here does not look like either`
+- `E0054  expected expression`
+- `E0055  expected expression after '='`
+- `E0056  expected module path (string literal or identifier)`
+- `E0057  expected type (i64, str, bool, [T], &T, struct name, or enum name)`
+- `E0058  expected value in map literal`
+- `E0059  explicit type arguments are only allowed on a generic function; ' <...> ' is not generic`
+- `E0060  failed to specialize ' <...> '`
+- `E0061  fao_matmul not linked`
+- `E0062  flint_array_data needs 1 arg`
+- `E0063  flint_array_get needs 2 args`
+- `E0064  flint_array_get needs an array`
+- `E0065  flint_array_get_ptr needs 2 args`
+- `E0066  flint_array_set needs 3 args`
+- `E0067  flint_array_set needs an array`
+- `E0068  flint_array_set_ptr needs 3 args`
+- `E0069  flint_array_slice not linked`
+- `E0070  flint_map_len not linked`
+- `E0071  flint_str_concat not linked`
+- `E0072  flint_str_concat/flint_f64_to_string not linked`
+- `E0073  flint_str_concat/flint_i64_to_string not linked`
+- `E0074  flint_str_length not linked`
+- `E0075  flint_thread_spawn first arg must be a string literal`
+- `E0076  flint_thread_spawn first arg must be a string literal (function name)`
+- `E0077  flint_thread_spawn needs 2 args: func_name, arg`
+- `E0078  flint_thread_spawn: runtime function 'flint_thread_create' not found`
+- `E0079  flint_thread_spawn: runtime function not found`
+- `E0080  flint_thread_spawn: unknown function ' <...> '`
+- `E0081  for-in needs an array or str collection`
+- `E0082  function ' <...> ' cannot be used as a value here; bind a lambda or pass it in a direct call`
+- `E0083  function value ' <...> ' argument type mismatch (parameter <...> )`
+- `E0084  function value ' <...> ' expects <...> argument(s), got <...>`
+- `E0085  generic function ' <...> ' cannot be used as a value yet; instantiate it first`
+- `E0086  if branches must yield the same type`
+- `E0087  index assignment requires an array variable`
+- `E0088  lambda ' <...> ' argument type mismatch`
+- `E0089  lambda ' <...> ' expects <...> argument(s), got <...>`
+- `E0090  lambda body type mismatch`
+- `E0091  lambda does not match the fn type of parameter ' <...> ' of ' <...> '`
+- `E0092  lambdas are not supported in generic functions`
+- `E0093  len needs array, str or map`
+- `E0094  len() needs 1 argument`
+- `E0095  map index needs a str key (map keys are strings)`
+- `E0096  map runtime not registered`
+- `E0097  map values must be i64 (got f64)`
+- `E0098  match arms must yield the same type`
+- `E0099  method ' <...> ' needs <...> argument(s)`
+- `E0100  no type in scope implements ' <...> '`
+- ``E0101  numeric dtype suffix ' <...> ' is not yet supported (tensor literals are f64-only; convert with `as f64` / `as i64`)``
+- `E0102  pattern <...> . <...> binds <...> value(s) but the variant has <...>`
+- `E0103  print() needs an arg`
+- `E0104  print() of unsupported type`
+- `E0105  py_eval() needs one string arg`
+- `E0106  py_eval_int not declared`
+- `E0107  ragged tensor literal: all rows must have the same length`
+- `E0108  range() needs 1 or 2 arguments`
+- `E0109  range() takes 1 or 2 arguments: range(n) or range(start, end)`
+- `E0110  right side of '|>' must be a function call or identifier`
+- `E0111  struct ' <...> ' has no field ' <...> '`
+- `E0112  struct type not found ' <...> '`
+- `E0113  tensor literal needs at least one f64 element (add a decimal point); nested i64 arrays are not supported`
+- `E0114  tensor literals support only rank 1 and 2 (f64)`
+- `E0115  tensor runtime not registered`
+- `E0116  tensor values cannot be indexed with []; use flt_get(t, i)`
+- `E0117  tensor-shaped array literal is neither a flat f64 list nor equal-length f64 rows (use bare f64 literals, or build dynamic tensors with flint_create_1d/2d + flt_set)`
+- `E0118  the explicit type argument for ' <...> ' must be a concrete type`
+- `E0119  trait ' <...> ' is already declared`
+- `E0120  trait method ' <...> ' is declared twice in ' <...> '`
+- `E0121  undefined variable ' <...> '`
+- `E0122  unknown enum ' <...> '`
+- `E0123  unknown enum in match`
+- `E0124  unknown method ' <...> ' for map (available: get, set, has, len, keys)`
+- `E0125  unknown method ' <...> ' for str (available: len, upper, lower, trim, reverse, get, repeat, startswith, endswith, indexof, replace)`
+- `E0126  unknown operator ' <...> '`
+- `E0127  unknown struct ' <...> '`
+- `E0128  unknown type ' <...> '`
+- `E0129  unknown variable ' <...> ' in lambda body`
+- `E0130  unknown variant ' <...> '`
+- `E0131  unrecognized top-level construct`
+- `E0132  use of moved variable ' <...> '`
+- `E0133  variable ' <...> ' already declared`
+- `E0134  variable ' <...> ' not declared`
 
 Total: 134 diagnostics.

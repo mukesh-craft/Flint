@@ -5056,3 +5056,44 @@ per-subsystem stdlib objects ✓, profile-driven arenas ✓ (Phase 6 ✓).
 **The honest caveat, once:** the last row is not engineerable by us
 alone ✓ — it needs people writing Flint programs ✓. Every row before it
 is ✓.
+- **Phase 2 step 11.4.1+2 LANDED: the structured diagnostics (the C++
+  compiler's side).** The compiler now has ONE diagnostic structure —
+  a span (start/end line+col, a file id), a stable code, labels
+  (primary + secondary), a help line and notes — and TWO renderings of
+  it: the terminal window (rustc's shape: the `error[E0042]: message`
+  header, the `--> file:line:col`, the gutter, the source line and the
+  `^^^` / `---` underlines) and a JSON STREAM (`--error-format json`,
+  one object per line, flushed as it arrives — rustc's `--error-format
+  json` shape).
+  - **The codes**: every one of the 218 diagnostic call sites now carries
+    a code, assigned per diagnostic PATTERN (the literal parts of the
+    message with the interpolations collapsed — the same normalization
+    the catalogue uses), so 142 codes cover them. The codes live IN THE
+    SOURCE, next to the diagnostic (Clang's DiagnosticIDs.td model), which
+    is what makes them stable: a new message takes the next free code and
+    an old one never changes meaning. `docs/error-codes.csv` is the table
+    and `tests/test_diagnostic_codes.sh` is the gate: every call site has
+    a code, a code maps to exactly one pattern, the table matches the
+    source, the rendered form carries the code/location/source line/
+    underline, the JSON is well-formed, and an unknown `--error-format`
+    is refused.
+  - **One printer**: the diagnostic is printed once, by `emitDiagnostic`;
+    the parser's old "the caller prints errorMsg()" path was a second
+    copy (the gate caught it as a duplicate error line). The parser's
+    message is now a one-line SUMMARY for the import chain.
+  - **The LSP reads the JSON**, not the text. That is what makes the
+    editor's positions correct: the old text form carried the codegen
+    errors WITHOUT a position, so the server had to invent one (it
+    reported them at line 0). And the "never fake an all-clear" rule
+    survived the change: if the compiler fails and produces nothing
+    readable, the server says so.
+  - **The cost**: the compiler's own binary grew ~22 KB (the renderer,
+    the JSON writer and the code table); the COMPILED program's size is
+    unchanged (8,048 B raw ✓ — the size story is about the artifact,
+    not the compiler ✓).
+  - **What is left in 11.4**: the suggestions (Levenshtein over the
+    visible names), the error poisoning, and the PIPELINE's side — the
+    parser's diagnostics can have a span ✓ (it knows the token's
+    position), but the emitter's cannot, because the S-expression carries
+    no positions. Putting them in the S-expression is the honest fix and
+    is a format change (both frontends, the goldens, the ladder).
