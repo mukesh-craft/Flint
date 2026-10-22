@@ -5097,3 +5097,40 @@ is ✓.
     position), but the emitter's cannot, because the S-expression carries
     no positions. Putting them in the S-expression is the honest fix and
     is a format change (both frontends, the goldens, the ladder).
+- **Phase 2 steps 11.4.1-4 LANDED (the diagnostics overhaul).** The
+  compiler has ONE diagnostic structure — a span (start/end, a file id), a
+  stable code, labels (primary + secondary), a help line and notes — and
+  TWO renderings of it: the terminal window (rustc's shape) and a JSON
+  stream (`--error-format json`, one object per line, flushed as it
+  arrives). 144 codes for the C++ compiler, 139 for the self-hosted
+  emitter, in ONE space (no two diagnostics in the project share a code);
+  the codes live in the source next to the diagnostic (Clang's
+  DiagnosticIDs.td model), which is what makes them stable.
+  The gate (tests/test_diagnostic_codes.sh, 16 checks) keeps the promise:
+  every call site has a code, a code maps to exactly ONE message, the
+  tables match the source, the rendered form carries the code, the
+  location, the source line and the underline, the JSON is well-formed, a
+  typo gets a suggestion and an unrelated name does not.
+  The LSP reads the JSON instead of scraping the text — which is what
+  makes the editor's positions correct (the old text form carried the
+  codegen errors WITHOUT a position, so the server invented one and
+  reported them at line 0) — and it still never fakes an all-clear.
+  The suggestions are Levenshtein over the names in scope, worded as
+  rustc words them ("there is a name with a similar spelling: `x`" —
+  a statement, not a question).
+  Two things this work found: the duplicate print (the diagnostic was
+  printed by the emitter AND by the caller — the one-error gate caught
+  it as a duplicate error line), and a bug in my own code migration (the
+  catalogue's pattern extraction collapsed a `std::string("literal")`
+  wrapper, so three different diagnostics shared one pattern and one
+  code — the gate could not see it because it used the same flawed
+  extraction; the extractor now unwraps the wrapper, the codes are
+  re-assigned per the corrected patterns, and the catalogue is more
+  readable as a side effect).
+  The cost, measured: the compiler's own binary grew ~22 KB; the
+  COMPILED program's size is unchanged (8,048 B raw).
+  Still open in 11.4: the error poisoning, the `help:` with a suggested
+  FIX, and the pipeline's SPANS — the emitter's diagnostics can name the
+  construct but not the LINE, because the S-expression carries no
+  positions. Putting them in is the honest fix and it is a format change
+  (both frontends, the goldens, the ladder).
