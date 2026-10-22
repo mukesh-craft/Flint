@@ -1661,6 +1661,277 @@ struct Token {
 };
 
 // ============================================================================
+// DIAGNOSTICS — a span, a stable code, labels, a renderer, and a JSON form.
+//
+// The same structure serves three consumers: the terminal (the rendered
+// form), the LSP (the JSON form -- an IDE draws its own widgets, it does
+// not want our ASCII art), and the docs (the code).
+//
+// The shape follows rustc's (rustc-dev-guide: "Diagnostic structure"):
+// a level, a code, a message, a window (the path/line/column of the
+// primary span, the source, and the primary/secondary labels), and the
+// sub-diagnostics (help / notes).
+// ============================================================================
+
+// A position in a source file. Lines and columns are 1-indexed.
+struct DiagPos {
+    int line = 0;
+    int col = 0;
+};
+
+// A range in a source file. An invalid span has no position: some
+// diagnostics are not about a particular place ("the compiler ran out
+// of memory"), and pretending otherwise would be a lie.
+struct DiagSpan {
+    int fileId = -1;
+    DiagPos start;
+    DiagPos end;
+    bool valid() const { return start.line > 0; }
+};
+
+// A labelled region of the source. The primary label points at the
+// problem; the secondary ones give the context.
+struct DiagLabel {
+    DiagSpan span;
+    std::string message;
+    bool primary = false;
+};
+
+// A diagnostic. `code` is stable across releases (so the docs and the
+// tools can link to it), `labels` carry the spans, `help` is the
+// actionable line, `notes` the context.
+struct Diagnostic {
+    std::string code;      // "E0042"
+    std::string level;     // "error" | "warning"
+    std::string message;   // the title
+    std::vector<DiagLabel> labels;
+    std::string help;
+    std::vector<std::string> notes;
+};
+
+// One source file, with its lines pre-split (the renderer needs them).
+struct SourceFileEntry {
+    std::string path;
+    std::string text;
+    std::vector<std::string> lines;   // 1-indexed: lines[0] is unused
+};
+
+// The files the diagnostics point into. The compiler compiles one main
+// file plus its imports, so this is a small table.
+class SourceMap {
+public:
+    // The imports compile in threads, so the table is guarded.
+    std::mutex mu;
+    int addFile(const std::string& path, const std::string& text) {
+        std::lock_guard<std::mutex> lock(mu);
+        SourceFileEntry f;
+        f.path = path;
+        f.text = text;
+        f.lines.push_back("");
+        std::string cur;
+        for (char c : text) {
+            if (c == '\n') { f.lines.push_back(cur); cur.clear(); }
+            else cur.push_back(c);
+        }
+        f.lines.push_back(cur);
+        files.push_back(f);
+        return (int)files.size() - 1;
+    }
+    size_t count() { std::lock_guard<std::mutex> lock(mu); return files.size(); }
+    std::string filePath(int id) {
+        std::lock_guard<std::mutex> lock(mu);
+        if (id < 0 || id >= (int)files.size()) return "<input>";
+        return files[id].path;
+    }
+    std::string line(int id, int lineNo) {
+        std::lock_guard<std::mutex> lock(mu);
+        if (id < 0 || id >= (int)files.size()) return "";
+        const SourceFileEntry& f = files[id];
+        if (lineNo < 1 || lineNo >= (int)f.lines.size()) return "";
+        return f.lines[lineNo];
+    }
+private:
+    std::vector<SourceFileEntry> files;
+};
+
+SourceMap gSourceMap;
+
+// The output format: "human" (the default) or "json" (one JSON object
+// per line -- the LSP's input, and the shape rustc's --error-format
+// json uses).
+std::string gDiagFormat = "human";
+
+// Every diagnostic of this run, in order. The imports compile in
+// threads, so the list is guarded.
+std::vector<Diagnostic> gDiagnostics;
+std::mutex gDiagMutex;
+
+// JSON string escaping (the diagnostics carry source text and names).
+static std::string jsonEscape(const std::string& s) {
+    std::string out;
+    for (char c : s) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if ((unsigned char)c < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof buf, "\\u%04x", (unsigned)(unsigned char)c);
+                    out += buf;
+                } else out += c;
+        }
+    }
+    return out;
+}
+
+// The machine-readable form: one JSON object per diagnostic, one object
+// per line (a stream, so a tool can consume it as it arrives).
+static std::string diagnosticToJson(const Diagnostic& d) {
+    std::string out = "{";
+    out += "\"message\":\"" + jsonEscape(d.message) + "\",";
+    out += "\"code\":\"" + jsonEscape(d.code) + "\",";
+    out += "\"level\":\"" + jsonEscape(d.level.empty() ? "error" : d.level) + "\",";
+    out += "\"spans\":[";
+    bool first = true;
+    for (const auto& l : d.labels) {
+        if (!l.span.valid()) continue;
+        if (!first) out += ",";
+        first = false;
+        out += "{";
+        out += "\"file_name\":\"" + jsonEscape(gSourceMap.filePath(l.span.fileId)) + "\",";
+        out += "\"line_start\":" + std::to_string(l.span.start.line) + ",";
+        out += "\"line_end\":" + std::to_string(l.span.end.line) + ",";
+        out += "\"column_start\":" + std::to_string(l.span.start.col) + ",";
+        out += "\"column_end\":" + std::to_string(l.span.end.col) + ",";
+        out += "\"is_primary\":" + std::string(l.primary ? "true" : "false") + ",";
+        out += "\"label\":\"" + jsonEscape(l.message) + "\"";
+        out += "}";
+    }
+    out += "]";
+    if (!d.help.empty()) out += ",\"help\":\"" + jsonEscape(d.help) + "\"";
+    if (!d.notes.empty()) {
+        out += ",\"notes\":[";
+        for (size_t i = 0; i < d.notes.size(); i++) {
+            if (i) out += ",";
+            out += "\"" + jsonEscape(d.notes[i]) + "\"";
+        }
+        out += "]";
+    }
+    out += "}";
+    return out;
+}
+
+// The terminal form. The shape is rustc's:
+//
+//   error[E0042]: mismatched types
+//    --> file.fl:4:12
+//     |
+//   3 | let age: Int = "twenty";
+//     |          ---   -------- expected an 'Int', found a 'String'
+//     |
+//   help: cast or convert the value
+static std::string renderDiagnostic(const Diagnostic& d) {
+    std::string out;
+    std::string level = d.level.empty() ? "error" : d.level;
+    out += level;
+    if (!d.code.empty()) out += "[" + d.code + "]";
+    out += ": " + d.message + "\n";
+
+    const DiagLabel* primary = nullptr;
+    for (const auto& l : d.labels) if (l.primary) { primary = &l; break; }
+    if (!primary && !d.labels.empty()) primary = &d.labels[0];
+
+    if (!primary || !primary->span.valid()) {
+        for (const auto& n : d.notes) out += "note: " + n + "\n";
+        if (!d.help.empty()) out += "help: " + d.help + "\n";
+        return out;
+    }
+
+    const DiagSpan& sp = primary->span;
+    std::string path = gSourceMap.filePath(sp.fileId);
+    out += " --> " + path + ":" + std::to_string(sp.start.line) + ":" +
+           std::to_string(sp.start.col) + "\n";
+
+    // the lines the labels touch
+    int firstLine = sp.start.line, lastLine = sp.end.line;
+    for (const auto& l : d.labels) {
+        if (!l.span.valid()) continue;
+        if (l.span.start.line < firstLine) firstLine = l.span.start.line;
+        if (l.span.end.line > lastLine) lastLine = l.span.end.line;
+    }
+    if (firstLine < 1) firstLine = 1;
+    if (lastLine - firstLine > 8) lastLine = firstLine + 8;   // never print a whole file
+
+    int gw = (int)std::to_string(lastLine).size();
+    std::string pad(gw, ' ');
+    out += pad + " |\n";
+    for (int ln = firstLine; ln <= lastLine; ln++) {
+        std::string text = gSourceMap.line(sp.fileId, ln);
+        out += std::to_string(ln) + " | " + text + "\n";
+        // the underlines: '-' for a range, '^' for a single character
+        std::string marks(text.size() + 1, ' ');
+        bool any = false;
+        for (const auto& l : d.labels) {
+            if (!l.span.valid()) continue;
+            if (l.span.start.line > ln || l.span.end.line < ln) continue;
+            size_t s = (ln == l.span.start.line) ? (size_t)std::max(1, l.span.start.col) - 1 : 0;
+            size_t e = (ln == l.span.end.line) ? (size_t)std::max(1, l.span.end.col) - 1 : text.size();
+            if (s > text.size()) s = text.size();
+            if (e < s) e = s;
+            if (e > text.size()) e = text.size();
+            // The primary label is drawn with '^', the secondary with '-'
+            // (rustc's convention), so the eye finds the problem first.
+            char mk = l.primary ? '^' : '-';
+            for (size_t i = s; i < e; i++) marks[i] = mk;
+            if (e == s && e < marks.size()) marks[e] = mk;
+            any = true;
+        }
+        if (!any) continue;
+        while (!marks.empty() && marks.back() == ' ') marks.pop_back();
+        out += pad + " | " + marks + "\n";
+        // the label messages, under the marks
+        for (const auto& l : d.labels) {
+            if (!l.span.valid() || l.message.empty()) continue;
+            if (l.span.start.line > ln || l.span.end.line < ln) continue;
+            out += pad + " | " + l.message + "\n";
+        }
+    }
+    out += pad + " |\n";
+    for (const auto& n : d.notes) out += "note: " + n + "\n";
+    if (!d.help.empty()) out += "help: " + d.help + "\n";
+    return out;
+}
+
+// Record a diagnostic. In the human format it is printed as it happens
+// (so a long compile still shows progress); in the JSON format the
+// stream is printed at the end (one object per line).
+static void emitDiagnostic(Diagnostic d) {
+    if (d.level.empty()) d.level = "error";
+    {
+        std::lock_guard<std::mutex> lock(gDiagMutex);
+        gDiagnostics.push_back(d);
+    }
+    // The human form is printed as it happens; the JSON form is a
+    // STREAM (one object per line, flushed as it arrives) so a tool can
+    // consume it while the compiler is still running.
+    if (gDiagFormat == "json") std::cerr << diagnosticToJson(d) << "\n";
+    else std::cerr << renderDiagnostic(d);
+}
+
+// A file-level error: a diagnostic with no span (it is not about a
+// particular place in a particular file).
+static void emitFileError(const char* code, const std::string& message) {
+    Diagnostic d;
+    d.code = code ? code : "";
+    d.level = "error";
+    d.message = message;
+    emitDiagnostic(d);
+}
+
+// ============================================================================
 // LEXER
 // ============================================================================
 
@@ -2611,6 +2882,8 @@ public:
     // Single-pass mode: parser emits IR directly instead of building AST
     void setCodegen(Codegen* c, bool mode = true) { cg = c; emitMode = mode; }
     void setSkipBodies(bool s) { skipBodies = s; }
+    // The file this parser reads, so a diagnostic can point into it.
+    int fileId = 0;
     size_t getPos() const { return pos; }
     void setPos(size_t p) { pos = p; lexer.ensure(p); }
     bool isInEmitMode() const { return emitMode; }
@@ -2747,7 +3020,7 @@ public:
         TraitDef td;
         td.name = nameTok.lexeme;
         if (traitRegistry.count(td.name)) {
-            parseError("trait '" + td.name + "' is already declared");
+            parseError("E0119", "trait '" + td.name + "' is already declared");
             return;
         }
         consume(TokenType::LBRACE, "expected '{' after trait name");
@@ -2755,7 +3028,7 @@ public:
         while (!isAtEnd() && !check(TokenType::RBRACE)) {
             bool isFn = check(TokenType::KW_FN) || check(TokenType::KW_DEF);
             if (!isFn) {
-                parseError("expected 'fn' or 'def' in trait '" + td.name + "' body");
+                parseError("E0051", "expected 'fn' or 'def' in trait '" + td.name + "' body");
                 return;
             }
             advance();
@@ -2763,7 +3036,7 @@ public:
             TraitMethodDef md;
             md.name = mTok.lexeme;
             if (match(TokenType::LT)) {
-                parseError("generic trait methods are not supported: declare the "
+                parseError("E0135", "generic trait methods are not supported: declare the "
                            "method without type parameters");
                 return;
             }
@@ -2781,7 +3054,7 @@ public:
             if (match(TokenType::ARROW)) parseType();
             for (auto& m : td.methods)
                 if (m.name == md.name) {
-                    parseError("trait method '" + md.name + "' is declared twice in '" + td.name + "'");
+                    parseError("E0120", "trait method '" + md.name + "' is declared twice in '" + td.name + "'");
                     return;
                 }
             td.methods.push_back(md);
@@ -2944,7 +3217,7 @@ public:
                     match(TokenType::SEMICOLON);
                     prog->imports.push_back(modPath);
                 } else {
-                    parseError("expected module path (string literal or identifier)");
+                    parseError("E0056", "expected module path (string literal or identifier)");
                 }
             } else if (check(TokenType::KW_LET)) {
                 advance(); // 'let'
@@ -2979,7 +3252,7 @@ public:
                     // M6: `name (something not a fn shape)` used to be parsed
                     // silently as an expression statement (garbage accepted,
                     // rc=0). One clean error, one line, no cascade.
-                    parseError("expected a top-level statement or a 'fn name(params) { body }' definition; '(name) (' here does not look like either");
+                    parseError("E0052", "expected a top-level statement or a 'fn name(params) { body }' definition; '(name) (' here does not look like either");
                     skipToLineEndTokens();
                 }
             } else if (check(TokenType::IDENTIFIER) && peek(1).type == TokenType::IDENTIFIER) {
@@ -2996,7 +3269,7 @@ public:
                 } else {
                     // M6: `name name` without a body shape used to be silently
                     // accepted (rc=0, nothing happened). One clean error.
-                    parseError("expected a top-level statement or a 'fn name(params) { body }' definition; 'name name' here does not look like either");
+                    parseError("E0053", "expected a top-level statement or a 'fn name(params) { body }' definition; 'name name' here does not look like either");
                     skipToLineEndTokens();
                 }
             } else {
@@ -3006,7 +3279,7 @@ public:
                     prog->topStmts.push_back(std::move(stmt));
                     declaredVars.clear();
                 } else {
-                    parseError("unrecognized top-level construct");
+                    parseError("E0131", "unrecognized top-level construct");
                     advance();
                 }
             }
@@ -3187,7 +3460,7 @@ public:
                 consume(TokenType::RBRACE, "expected '}' to close extern block");
             }
         } else {
-            parseError("expected '\"C\"' after extern");
+            parseError("E0050", "expected '\"C\"' after extern");
         }
     }
 
@@ -3239,14 +3512,34 @@ private:
     bool check(TokenType t) { return !isAtEnd() && peek().type == t; }
     bool match(TokenType t) { if (check(t)) { advance(); return true; } return false; }
 
-    void parseError(const std::string& message) {
+    // A parse error. The FIRST one wins (the one-error-per-input
+    // contract: a cascade of parser errors is noise), and it is a
+    // structured diagnostic like every other: the code, the span of
+    // the offending token, and the rendered form.
+    void parseError(const char* code, const std::string& message) {
         if (!error) {
             error = true;
             auto& t = peek();
-            std::string line = lexer.getLine(t.loc.line);
-            std::string spaces(t.loc.col > 1 ? t.loc.col - 1 : 0, ' ');
-            msg = "error at line " + std::to_string(t.loc.line) + ":" + std::to_string(t.loc.col)
-                + ": " + message + "\n  " + line + "\n  " + spaces + "^";
+            Diagnostic d;
+            d.code = code ? code : "";
+            d.level = "error";
+            d.message = message;
+            DiagLabel l;
+            l.primary = true;
+            l.span.fileId = fileId;
+            l.span.start.line = t.loc.line;
+            l.span.start.col = t.loc.col;
+            // the token's end: its length on its own line
+            l.span.end.line = t.loc.line;
+            l.span.end.col = t.loc.col + (int)(t.lexeme.empty() ? 1 : t.lexeme.size());
+            d.labels.push_back(l);
+            // ONE printer: emitDiagnostic renders the human form (or
+            // streams the JSON object). `msg` keeps the one-line summary
+            // for the import chain and for the "did it fail" test.
+            emitDiagnostic(d);
+            msg = "error";
+            if (!d.code.empty()) msg += "[" + d.code + "]";
+            msg += ": " + message;
         }
     }
 
@@ -3265,7 +3558,7 @@ private:
     // caller's `lexeme` meaningful in diagnostics.
     Token consume(TokenType t, const std::string& err) {
         if (check(t)) return advance();
-        parseError(err);
+        parseError("E0136", err);
         if (isAtEnd()) return Token{};
         return advance();
     }
@@ -3289,7 +3582,7 @@ private:
             }
             consume(TokenType::RPAREN, "expected ')' after fn type parameters");
             if (!match(TokenType::ARROW)) {
-                parseError("a fn type needs an explicit return type (fn(...) -> Ret); without it an indirect call cannot know what the callee returns");
+                parseError("E0010", "a fn type needs an explicit return type (fn(...) -> Ret); without it an indirect call cannot know what the callee returns");
                 return Type::i64();
             }
             Type ret = parseType();
@@ -3310,10 +3603,10 @@ private:
             if (structRegistry.count(name)) return Type::struct_(name);
             if (enumRegistry.count(name)) return Type::enum_(name);
             for (auto& tp : parserTypeParams) if (tp == name) return Type::typeParam(name);
-            parseError("unknown type '" + name + "'");
+            parseError("E0128", "unknown type '" + name + "'");
             return Type::i64();
         }
-        parseError("expected type (i64, str, bool, [T], &T, struct name, or enum name)");
+        parseError("E0057", "expected type (i64, str, bool, [T], &T, struct name, or enum name)");
         return Type::i64();
     }
 
@@ -3787,7 +4080,7 @@ private:
             static_cast<CallExprAST*>(startExpr.get())->callee == "range") {
             auto* rc = static_cast<CallExprAST*>(startExpr.get());
             if (rc->args.size() < 1 || rc->args.size() > 2) {
-                parseError("range() needs 1 or 2 arguments");
+                parseError("E0108", "range() needs 1 or 2 arguments");
                 return nullptr;
             }
             std::unique_ptr<ExprAST> rStart, rEnd;
@@ -3841,7 +4134,7 @@ private:
             // silent skip. Fail loudly instead (matches stage3 e_for:
             // "for needs range, array or str").
             if (!isArray && !isStr) {
-                parseError("for-in needs an array or str collection");
+                parseError("E0081", "for-in needs an array or str collection");
                 return nullptr;
             }
             Type collDeclTy = collTy;
@@ -3951,7 +4244,7 @@ private:
         // a cross-thread use-after-free for non-copyable captures, and the
         // runtime call had no result channel. The token stays for lexing;
         // the syntax is refused here with migration advice.
-        parseError("'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce");
+        parseError("E0004", "'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce");
         return nullptr;
     }
 
@@ -3981,7 +4274,7 @@ private:
             if (isAtEnd()) break;
             Token nameTok = advance();
             if (declaredVars.count(nameTok.lexeme)) {
-                parseError("variable '" + nameTok.lexeme + "' already declared");
+                parseError("E0133", "variable '" + nameTok.lexeme + "' already declared");
             }
             declaredVars.insert(nameTok.lexeme);
             ds->names.push_back(nameTok.lexeme);
@@ -4003,7 +4296,7 @@ private:
     std::unique_ptr<ExprAST> parseVarDecl(bool isMutable) {
         Token nameTok = advance();
         if (declaredVars.count(nameTok.lexeme)) {
-            parseError("variable '" + nameTok.lexeme + "' already declared");
+            parseError("E0133", "variable '" + nameTok.lexeme + "' already declared");
         }
         declaredVars.insert(nameTok.lexeme);
         Type varType = Type::i64();
@@ -4018,7 +4311,7 @@ private:
         // Hang/segfault insurance (Bug-1 class): a failed RHS must never be
         // dereferenced below, and the caller must always make progress.
         if (!init) {
-            parseError("expected expression after '='");
+            parseError("E0055", "expected expression after '='");
             return nullptr;
         }
         if (!hasTypeAnnotation) {
@@ -4401,13 +4694,13 @@ private:
                         // are fully consumed, so returning nullptr is safe
                         // (block-loop guards guarantee progress).
                         if (methodArity > 0)
-                            parseError("method '" + fName.lexeme + "' needs " +
+                            parseError("E0099", "method '" + fName.lexeme + "' needs " +
                                 std::to_string(methodArity - 1) + " argument(s)");
                         else if (recvKind == 1)
-                            parseError("unknown method '" + fName.lexeme +
+                            parseError("E0125", "unknown method '" + fName.lexeme +
                                 "' for str (available: len, upper, lower, trim, reverse, get, repeat, startswith, endswith, indexof, replace)");
                         else
-                            parseError("unknown method '" + fName.lexeme +
+                            parseError("E0124", "unknown method '" + fName.lexeme +
                                 "' for map (available: get, set, has, len, keys)");
                         return nullptr;
                     } else {
@@ -4436,9 +4729,9 @@ private:
                 Token tyTok = advance(); // target
                 if (tk < 0) {
                     if (notYet)
-                        parseError("as-cast to '" + tyTok.lexeme + "' is not yet supported (only 'i64' and 'f64'; f64->i64 truncates toward zero)");
+                        parseError("E0018", "as-cast to '" + tyTok.lexeme + "' is not yet supported (only 'i64' and 'f64'; f64->i64 truncates toward zero)");
                     else
-                        parseError("as-casts support only 'i64' and 'f64' (got '" + tyTok.lexeme + "')");
+                        parseError("E0019", "as-casts support only 'i64' and 'f64' (got '" + tyTok.lexeme + "')");
                     return nullptr;
                 }
                 auto c = std::make_unique<CastExprAST>(
@@ -4456,7 +4749,7 @@ private:
         if (check(TokenType::IDENTIFIER) && peek(1).type == TokenType::ASSIGN) {
             std::string name = peek().lexeme;
             if (!declaredVars.count(name) && !globalVarNames.count(name)) {
-                parseError("variable '" + name + "' not declared");
+                parseError("E0134", "variable '" + name + "' not declared");
                 return nullptr;
             }
             Token nameTok = advance();
@@ -4475,7 +4768,7 @@ private:
              peek(1).type == TokenType::MODULO_EQ)) {
             std::string name = peek().lexeme;
             if (!declaredVars.count(name) && !globalVarNames.count(name)) {
-                parseError("variable '" + name + "' not declared");
+                parseError("E0134", "variable '" + name + "' not declared");
                 return nullptr;
             }
             Token nameTok = advance();
@@ -4510,7 +4803,7 @@ private:
                 if (it != varTypeMap.end() && it->second.kind == TypeKind::Array) isArray = true;
             }
             if (!isArray) {
-                parseError("index assignment requires an array variable");
+                parseError("E0087", "index assignment requires an array variable");
                 advance(); // '=' — guarantee progress, never spin
                 auto sink = parseExpression();
                 (void)sink;
@@ -4573,7 +4866,7 @@ private:
                     c->loc = opTok.loc;
                     lhs = std::move(c);
                 } else {
-                    parseError("right side of '|>' must be a function call or identifier");
+                    parseError("E0110", "right side of '|>' must be a function call or identifier");
                     return lhs;
                 }
             } else {
@@ -4595,7 +4888,7 @@ private:
                     Token kTok = consume(TokenType::STRING_LITERAL, "expected string key in map literal");
                     consume(TokenType::COLON, "expected ':' after map key");
                     auto v = parseExpression();
-                    if (!v) { parseError("expected value in map literal"); break; }
+                    if (!v) { parseError("E0058", "expected value in map literal"); break; }
                     ml->keys.push_back(kTok.lexeme);
                     ml->values.push_back(std::move(v));
                 } while (match(TokenType::COMMA));
@@ -4707,7 +5000,7 @@ private:
                     }
                     // Phase-2: dtype-suffixed numbers are loud, never silent.
                     if (check(TokenType::IDENTIFIER) && isTensorDtypeSuffix(peek().lexeme)) {
-                        parseError("numeric dtype suffix '" + peek().lexeme + "' is not yet supported (tensor literals are f64-only; convert with `as f64` / `as i64`)");
+                        parseError("E0101", "numeric dtype suffix '" + peek().lexeme + "' is not yet supported (tensor literals are f64-only; convert with `as f64` / `as i64`)");
                         return nullptr;
                     }
                 } while (match(TokenType::COMMA));
@@ -4748,7 +5041,7 @@ private:
                         poisoned = true;
                         auto* tn = static_cast<TensorLiteralAST*>(e.get());
                         if (tn->rank != 1) {
-                            parseError("tensor literals support only rank 1 and 2 (f64)");
+                            parseError("E0114", "tensor literals support only rank 1 and 2 (f64)");
                             return nullptr;
                         }
                         RowInfo ri;
@@ -4795,13 +5088,13 @@ private:
                     }
                 }
                 if (shapeErr) {
-                    parseError(shapeMsg);
+                    parseError("E0137", shapeMsg);
                     return nullptr;
                 }
                 if (poisoned) {
                     if (flatNums) {
                         if (!flatFloat) {
-                            parseError("tensor literal needs at least one f64 element (add a decimal point); nested i64 arrays are not supported");
+                            parseError("E0113", "tensor literal needs at least one f64 element (add a decimal point); nested i64 arrays are not supported");
                             return nullptr;
                         }
                         auto t = std::make_unique<TensorLiteralAST>();
@@ -4820,11 +5113,11 @@ private:
                             anyF = anyF || r.anyFloat;
                         }
                         if (ragged) {
-                            parseError("ragged tensor literal: all rows must have the same length");
+                            parseError("E0107", "ragged tensor literal: all rows must have the same length");
                             return nullptr;
                         }
                         if (!anyF) {
-                            parseError("tensor literal needs at least one f64 element (add a decimal point); nested i64 arrays are not supported");
+                            parseError("E0113", "tensor literal needs at least one f64 element (add a decimal point); nested i64 arrays are not supported");
                             return nullptr;
                         }
                         auto t = std::make_unique<TensorLiteralAST>();
@@ -4836,7 +5129,7 @@ private:
                         t->loc = previous().loc;
                         return t;
                     }
-                    parseError("tensor-shaped array literal is neither a flat f64 list nor equal-length f64 rows (use bare f64 literals, or build dynamic tensors with flint_create_1d/2d + flt_set)");
+                    parseError("E0117", "tensor-shaped array literal is neither a flat f64 list nor equal-length f64 rows (use bare f64 literals, or build dynamic tensors with flint_create_1d/2d + flt_set)");
                     return nullptr;
                 }
             }
@@ -4892,7 +5185,7 @@ private:
             // accepted it and codegen later said "empty lambda body". One
             // syntax error, then skip to line end so the cascade stops.
             if (check(TokenType::ARROW)) {
-                parseError("a lambda has no '-> Ret' form: write an expression body (|x| x + 1); use a named fn when you need a return annotation");
+                parseError("E0011", "a lambda has no '-> Ret' form: write an expression body (|x| x + 1); use a named fn when you need a return annotation");
                 skipToLineEndTokens();
                 return nullptr;
             }
@@ -4917,7 +5210,7 @@ private:
                 std::vector<std::string> uses;
                 std::string walkErr;
                 collectLambdaUses(lambda->body.get(), paramSet, uses, &walkErr);
-                if (!walkErr.empty()) { parseError(walkErr); return nullptr; }
+                if (!walkErr.empty()) { parseError("E0138", walkErr); return nullptr; }
                 for (auto& u : uses) {
                     if (paramSet.count(u)) continue;
                     if (globalVarNames.count(u)) continue;
@@ -5000,7 +5293,7 @@ private:
                 advance(); // ':'
                 advance(); // ':'
                 if (!match(TokenType::LT)) {
-                    parseError("expected '<' after '::' before explicit type arguments");
+                    parseError("E0049", "expected '<' after '::' before explicit type arguments");
                     return nullptr;
                 }
                 do {
@@ -5364,11 +5657,29 @@ public:
     // hunting for the offending construct.
     int cgCurLine = 0;
     int cgCurCol = 0;
-    llvm::Value* codegenError(const std::string& msg) {
-        if (cgCurLine > 0)
-            std::cerr << "codegen: " << cgCurLine << ":" << cgCurCol << ": " << msg << "\n";
-        else
-            std::cerr << "codegen: " << msg << "\n";
+    // The file this codegen emits, so a diagnostic can point into it.
+    int fileId = 0;
+
+    // A codegen diagnostic: the same structure as a parse error (the
+    // code, the span, the rendered form), so the terminal, the LSP and
+    // the docs all read one thing.
+    llvm::Value* codegenError(const char* code, const std::string& msg) {
+        Diagnostic d;
+        d.code = code ? code : "";
+        d.level = "error";
+        d.message = msg;
+        if (cgCurLine > 0) {
+            DiagLabel l;
+            l.primary = true;
+            l.span.fileId = fileId;
+            l.span.start.line = cgCurLine;
+            l.span.start.col = cgCurCol;
+            // a single character: the position of the construct
+            l.span.end.line = cgCurLine;
+            l.span.end.col = cgCurCol + 1;
+            d.labels.push_back(l);
+        }
+        emitDiagnostic(d);
         cgHadError = true;
         return nullptr;
     }
@@ -7168,7 +7479,7 @@ public:
             parser->setCodegen(this, true);
             parser->parseBlockEmit();
             if (parser->hadError()) {
-                llvm::errs() << "FLINT COMPILE ERROR: " << parser->errorMsg() << "\n";
+                // The diagnostic is already printed (emitDiagnostic).
                 parser->setPos(savedPos);
                 return false;
             }
@@ -7332,18 +7643,18 @@ public:
                         // special case.
                         llvm::Value* fv = namedFnValue(v->name);
                         if (fv) return fv;
-                        return codegenError("function '" + v->name + "' cannot be used as a value here; bind a lambda or pass it in a direct call");
+                        return codegenError("E0082", "function '" + v->name + "' cannot be used as a value here; bind a lambda or pass it in a direct call");
                     }
                     if (genericFunctions.count(v->name))
-                        return codegenError("generic function '" + v->name +
+                        return codegenError("E0085", "generic function '" + v->name +
                             "' cannot be used as a value yet; instantiate it first");
                     if (functionDefs.count(v->name))
-                        return codegenError("function '" + v->name +
+                        return codegenError("E0082", "function '" + v->name +
                             "' cannot be used as a value here; bind a lambda or pass it in a direct call");
-                    return codegenError(std::string("undefined var '") + v->name + "'");
+                    return codegenError("E0006", std::string("undefined var '") + v->name + "'");
                 }
                 if (sym->moved) {
-                    return codegenError(std::string("use of moved variable '") + v->name + "'");
+                    return codegenError("E0006", std::string("use of moved variable '") + v->name + "'");
                 }
                 // First-class fn value (M4): the binding IS an env box
                 // {fnptr, cap0, cap1, ...} allocated in the defining frame.
@@ -7356,7 +7667,7 @@ public:
                         v->name + "_fnval");
                 }
                 if (sym->borrowCount > 0 && !sym->type.isCopyType()) {
-                    return codegenError(std::string("cannot move '") + v->name + "' while borrowed");
+                    return codegenError("E0009", std::string("cannot move '") + v->name + "' while borrowed");
                 }
                 llvm::Value* ptr = sym->alloca ? (llvm::Value*)sym->alloca : (llvm::Value*)sym->global;
                 return builder->CreateLoad(llvmType(sym->type, *ctx, mod.get()), ptr, v->name.c_str());
@@ -7426,10 +7737,10 @@ public:
                 if (!sym) {
                     auto git = globalSymTable.find(a->varName);
                     if (git == globalSymTable.end()) {
-                        return codegenError(std::string("undefined var '") + a->varName + "'");
+                        return codegenError("E0006", std::string("undefined var '") + a->varName + "'");
                     }
                     if (!git->second.isMutable) {
-                        return codegenError(std::string("cannot assign to immutable global '") + a->varName + "'");
+                        return codegenError("E0006", std::string("cannot assign to immutable global '") + a->varName + "'");
                     }
                     // M4: a global outlives every frame; storing an env box
                     // pointer (its captures live in some frame's static area)
@@ -7443,26 +7754,26 @@ public:
                     if (a->rhs->kind == NodeKind::Lambda) {
                         auto* lamRhs = static_cast<LambdaExprAST*>(a->rhs.get());
                         if (!lamRhs->captures.empty())
-                            return codegenError("cannot store a lambda into global '" + a->varName + "': it would escape its defining frame");
+                            return codegenError("E0046", "cannot store a lambda into global '" + a->varName + "': it would escape its defining frame");
                     }
                     if (a->rhs->kind == NodeKind::Variable) {
                         auto* vn = static_cast<VariableExprAST*>(a->rhs.get());
                         auto* srcSym = symTable.lookup(vn->name);
                         if (Symbol::isFunctionValue(srcSym) && !functionValueIsStatic(srcSym))
-                            return codegenError("cannot store a function value into global '" + a->varName + "': it would escape its defining frame");
+                            return codegenError("E0045", "cannot store a function value into global '" + a->varName + "': it would escape its defining frame");
                     }
                     auto* val = emitExpr(a->rhs.get());
                     if (!val) return nullptr;
                     git->second.knownArrayLenValue = nullptr;
                     return builder->CreateStore(val, git->second.global);
                 }
-                if (!sym->isMutable) { return codegenError(std::string("cannot assign to immutable '") + a->varName + "'"); }
+                if (!sym->isMutable) { return codegenError("E0006", std::string("cannot assign to immutable '") + a->varName + "'"); }
                 // Lambda names cannot be rebound (P0-6).
                 if (sym->isLambda) {
-                    return codegenError(std::string("cannot rebind lambda '") + a->varName + "'");
+                    return codegenError("E0006", std::string("cannot rebind lambda '") + a->varName + "'");
                 }
                 if (sym->borrowCount > 0) {
-                    return codegenError(std::string("cannot assign to '") + a->varName + "' while borrowed");
+                    return codegenError("E0009", std::string("cannot assign to '") + a->varName + "' while borrowed");
                 }
                 auto* val = emitExpr(a->rhs.get());
                 if (!val) return nullptr;
@@ -7471,7 +7782,7 @@ public:
                     auto* srcSym = symTable.lookup(varRhs->name);
                     if (srcSym && !srcSym->type.isCopyType()) {
                         if (srcSym->borrowCount > 0) {
-                            return codegenError(std::string("cannot move '") + varRhs->name + "' while borrowed");
+                            return codegenError("E0009", std::string("cannot move '") + varRhs->name + "' while borrowed");
                         }
                         srcSym->moved = true;
                     }
@@ -7507,7 +7818,7 @@ public:
                 if (b->op == '+' && l->getType()->isPointerTy() && r->getType()->isPointerTy()) {
                     auto it = functionMap.find("flint_str_concat");
                     if (it != functionMap.end()) return builder->CreateCall(it->second, {l, r});
-                    return codegenError("flint_str_concat not linked");
+                    return codegenError("E0071", "flint_str_concat not linked");
                 }
                 // Mixed str + i64/f64: convert scalar to string first
                 if (b->op == '+' && l->getType()->isPointerTy() && r->getType()->isIntegerTy(64)) {
@@ -7515,28 +7826,28 @@ public:
                     auto iti = functionMap.find("flint_i64_to_string");
                     if (itc != functionMap.end() && iti != functionMap.end())
                         return builder->CreateCall(itc->second, {l, builder->CreateCall(iti->second, {r})});
-                    return codegenError("flint_str_concat/flint_i64_to_string not linked");
+                    return codegenError("E0073", "flint_str_concat/flint_i64_to_string not linked");
                 }
                 if (b->op == '+' && l->getType()->isIntegerTy(64) && r->getType()->isPointerTy()) {
                     auto itc = functionMap.find("flint_str_concat");
                     auto iti = functionMap.find("flint_i64_to_string");
                     if (itc != functionMap.end() && iti != functionMap.end())
                         return builder->CreateCall(itc->second, {builder->CreateCall(iti->second, {l}), r});
-                    return codegenError("flint_str_concat/flint_i64_to_string not linked");
+                    return codegenError("E0073", "flint_str_concat/flint_i64_to_string not linked");
                 }
                 if (b->op == '+' && l->getType()->isPointerTy() && r->getType()->isDoubleTy()) {
                     auto itc = functionMap.find("flint_str_concat");
                     auto itf = functionMap.find("flint_f64_to_string");
                     if (itc != functionMap.end() && itf != functionMap.end())
                         return builder->CreateCall(itc->second, {l, builder->CreateCall(itf->second, {r})});
-                    return codegenError("flint_str_concat/flint_f64_to_string not linked");
+                    return codegenError("E0072", "flint_str_concat/flint_f64_to_string not linked");
                 }
                 if (b->op == '+' && l->getType()->isDoubleTy() && r->getType()->isPointerTy()) {
                     auto itc = functionMap.find("flint_str_concat");
                     auto itf = functionMap.find("flint_f64_to_string");
                     if (itc != functionMap.end() && itf != functionMap.end())
                         return builder->CreateCall(itc->second, {builder->CreateCall(itf->second, {l}), r});
-                    return codegenError("flint_str_concat/flint_f64_to_string not linked");
+                    return codegenError("E0072", "flint_str_concat/flint_f64_to_string not linked");
                 }
                 // Mixed f64/i64: promote i64 to f64
                 if ((l->getType()->isDoubleTy() && r->getType()->isIntegerTy(64)) ||
@@ -7570,7 +7881,7 @@ public:
                             return builder->CreateZExt(result, i64Ty, "fandExt");
                         }
                         default:
-                            return codegenError(std::string("unsupported f64 operator '") + b->op + "'");
+                            return codegenError("E0006", std::string("unsupported f64 operator '") + b->op + "'");
                     }
                 }
                 if (b->op == '+' || b->op == '-' || b->op == '*') {
@@ -7653,7 +7964,7 @@ public:
                 } else if (b->op == '@') {
                     auto it = functionMap.find("fao_matmul");
                     if (it != functionMap.end()) return builder->CreateCall(it->second, {l, r});
-                    return codegenError("fao_matmul not linked");
+                    return codegenError("E0061", "fao_matmul not linked");
                 } else if (b->op == '|') {
                     auto* lZero = l->getType()->isPointerTy()
                         ? (llvm::Value*)llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(l->getType()))
@@ -7830,7 +8141,7 @@ public:
     // function; direct calls to `name` pass user args + frozen captures.
     // Every other use of `name` is an error (Variable/Assign/Ref cases).
     void emitLambdaDef(const std::string& name, LambdaExprAST* lam) {
-        if (!lam->body) { codegenError("empty lambda body"); return; }
+        if (!lam->body) { codegenError("E0048", "empty lambda body"); return; }
         static int lamCounter = 0;
         std::string lamName = "__lam_" + name + "_" + std::to_string(lamCounter++);
         // 1. Resolve captures in the defining scope (by value, snapshot now).
@@ -7839,15 +8150,15 @@ public:
         std::vector<CapVal> caps;
         for (auto& cn : lam->captures) {
             auto* sym = symTable.lookup(cn);
-            if (!sym) { codegenError("cannot capture unknown variable '" + cn + "'"); return; }
-            if (sym->isLambda) { codegenError("cannot capture lambda '" + cn + "'"); return; }
-            if (sym->moved) { codegenError("cannot capture moved variable '" + cn + "'"); return; }
+            if (!sym) { codegenError("E0036", "cannot capture unknown variable '" + cn + "'"); return; }
+            if (sym->isLambda) { codegenError("E0034", "cannot capture lambda '" + cn + "'"); return; }
+            if (sym->moved) { codegenError("E0035", "cannot capture moved variable '" + cn + "'"); return; }
             llvm::Type* ct = llvmType(sym->type, *ctx, mod.get());
             llvm::Value* ptr = sym->alloca ? (llvm::Value*)sym->alloca : (llvm::Value*)sym->global;
-            if (!ptr) { codegenError("cannot capture '" + cn + "'"); return; }
+            if (!ptr) { codegenError("E0032", "cannot capture '" + cn + "'"); return; }
             auto* v = builder->CreateLoad(ct, ptr, cn + "_cap");
             if (!sym->type.isCopyType()) {
-                if (sym->borrowCount > 0) { codegenError("cannot capture '" + cn + "' while borrowed"); return; }
+                if (sym->borrowCount > 0) { codegenError("E0033", "cannot capture '" + cn + "' while borrowed"); return; }
                 sym->moved = true;
             }
             caps.push_back({cn, sym->type, v});
@@ -7921,7 +8232,7 @@ public:
         entry.lambdaEnv = envBox;
         entry.lambdaBoxTy = envTy;
         if (!symTable.declare(name, entry)) {
-            codegenError("cannot rebind '" + name + "' as lambda");
+            codegenError("E0042", "cannot rebind '" + name + "' as lambda");
             return;
         }
         // 5. Verify the body only references params/captures/globals/functions.
@@ -7933,13 +8244,13 @@ public:
             std::vector<std::string> uses;
             std::string werr;
             Parser::lambdaUses(lam->body.get(), bound, uses, &werr);
-            if (!werr.empty()) { codegenError(werr); return; }
+            if (!werr.empty()) { codegenError("E0139", werr); return; }
             for (auto& u : uses) {
                 if (bound.count(u)) continue;
                 if (globalSymTable.count(u)) continue;
                 if (functionMap.count(u)) continue;
                 if (externFunctions.count(u)) continue;
-                codegenError("unknown variable '" + u + "' in lambda body");
+                codegenError("E0129", "unknown variable '" + u + "' in lambda body");
                 return;
             }
         }
@@ -8006,7 +8317,7 @@ public:
                 if (rv->getType()->isIntegerTy(64) && retTy->isDoubleTy())
                     rv = builder->CreateSIToFP(rv, retTy, "lamret");
                 else {
-                    codegenError("lambda body type mismatch");
+                    codegenError("E0090", "lambda body type mismatch");
                     rv = llvm::Constant::getNullValue(retTy);
                 }
             }
@@ -8058,12 +8369,12 @@ public:
                     Type ann = resolveType(decl->varType);
                     if (ann.kind == TypeKind::Func) {
                         if (!(ann == fnTy)) {
-                            codegenError("cannot bind function '" + vn->name +
+                            codegenError("E0028", "cannot bind function '" + vn->name +
                                 "': declared signature differs from the function's signature");
                             return;
                         }
                     } else if (ann.kind != TypeKind::I64 && ann.kind != TypeKind::Void) {
-                        codegenError("cannot bind a function value to a non-fn type");
+                        codegenError("E0027", "cannot bind a function value to a non-fn type");
                         return;
                     }
                     rt = fnTy;
@@ -8074,12 +8385,12 @@ public:
                 Type ann = resolveType(decl->varType);
                 if (ann.kind == TypeKind::Func) {
                     if (!(ann == cs->type)) {
-                        codegenError("cannot bind function value '" + vn->name +
+                        codegenError("E0029", "cannot bind function value '" + vn->name +
                             "': declared signature differs from the value's fn type");
                         return;
                     }
                 } else if (ann.kind != TypeKind::I64 && ann.kind != TypeKind::Void) {
-                    codegenError("cannot bind a function value to a non-fn type");
+                    codegenError("E0027", "cannot bind a function value to a non-fn type");
                     return;
                 }
                 rt = cs->type;
@@ -8238,7 +8549,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             if (ret->value->kind == NodeKind::Lambda) {
                 auto* lamR = static_cast<LambdaExprAST*>(ret->value.get());
                 if (!lamR->captures.empty()) {
-                    codegenError("cannot return a lambda: it would escape its defining frame");
+                    codegenError("E0044", "cannot return a lambda: it would escape its defining frame");
                     return;
                 }
             }
@@ -8250,7 +8561,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 if (gvit != globalSymTable.end()) gs = &gvit->second;
                 const Symbol* cs = srcSym ? srcSym : gs;
                 if (Symbol::isFunctionValue(cs) && !functionValueIsStatic(cs)) {
-                    codegenError("cannot return a function value: it would escape its defining frame");
+                    codegenError("E0043", "cannot return a function value: it would escape its defining frame");
                     return;
                 }
             }
@@ -8351,12 +8662,12 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         bool thenVoid = thenVal && thenVal->getType()->isVoidTy();
         bool elseVoid = elseVal && elseVal->getType()->isVoidTy();
         if ((thenVoid && eTy) || (elseVoid && tTy)) {
-            return codegenError("if branches must yield the same type");
+            return codegenError("E0086", "if branches must yield the same type");
         }
         llvm::Type* phiTy = tTy ? tTy : eTy;
         if (!phiTy) return llvm::ConstantInt::get(i64Ty, 0);
         if (tTy && eTy && tTy != eTy) {
-            return codegenError("if branches must yield the same type");
+            return codegenError("E0086", "if branches must yield the same type");
         }
         auto* phi = builder->CreatePHI(phiTy, 2, "ifval");
         llvm::Value* tIn = tTy ? thenVal : llvm::Constant::getNullValue(phiTy);
@@ -8707,7 +9018,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         auto itNew = functionMap.find("flint_map_new");
         auto itSet = functionMap.find("flint_map_set");
         if (itNew == functionMap.end() || itSet == functionMap.end()) {
-            return codegenError("map runtime not registered");
+            return codegenError("E0096", "map runtime not registered");
         }
         llvm::Value* m = builder->CreateCall(itNew->second, {}, "map_new");
         for (size_t i = 0; i < ml->keys.size(); i++) {
@@ -8715,7 +9026,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             if (!val) return nullptr;
             // Ensure i64 (bool is i64-typed already)
             if (val->getType()->isDoubleTy()) {
-                return codegenError("map values must be i64 (got f64)");
+                return codegenError("E0097", "map values must be i64 (got f64)");
             }
             llvm::Value* keyStr = builder->CreateGlobalString(ml->keys[i], "mapkey");
             builder->CreateCall(itSet->second, {m, keyStr, val});
@@ -8742,14 +9053,14 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         bool wantF64 = c->target.kind == TypeKind::F64;
         bool wantI64 = c->target.kind == TypeKind::I64;
         if (!wantF64 && !wantI64)
-            return codegenError("as-cast target must be 'i64' or 'f64'");
+            return codegenError("E0017", "as-cast target must be 'i64' or 'f64'");
         llvm::Type* t = v->getType();
         auto* dblTy = llvm::Type::getDoubleTy(*ctx);
         if (wantF64) {
             if (t->isDoubleTy()) return v;
             if (t->isIntegerTy(64))
                 return builder->CreateSIToFP(v, dblTy, "as_f64");
-            return codegenError("as f64 needs an i64 or f64 value");
+            return codegenError("E0015", "as f64 needs an i64 or f64 value");
         }
         if (t->isIntegerTy(64)) return v;
         if (t->isDoubleTy()) {
@@ -8788,7 +9099,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             }
             return builder->CreateFPToSI(v, i64Ty, "as_i64");
         }
-        return codegenError("as i64 needs an i64 or f64 value");
+        return codegenError("E0016", "as i64 needs an i64 or f64 value");
     }
 
     // Phase-2 tensor literal codegen: desugar to the existing builtins
@@ -8799,7 +9110,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         auto itSet = functionMap.find("flt_set");
         if (itC1 == functionMap.end() || itC2 == functionMap.end() ||
             itSet == functionMap.end())
-            return codegenError("tensor runtime not registered");
+            return codegenError("E0115", "tensor runtime not registered");
         llvm::Value* ten = nullptr;
         auto* dblTy = llvm::Type::getDoubleTy(*ctx);
         if (t->rank == 1) {
@@ -8869,7 +9180,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             // error. Both emit paths must agree, or the same program compiles
             // under one and fails under the other.
             if (val->getType() != i64Ty) {
-                return codegenError("array literals must hold i64 values, but element " +
+                return codegenError("E0014", "array literals must hold i64 values, but element " +
                                     std::to_string(i + 1) + " is " +
                                     llvmTypeToString(val->getType()) +
                                     " (arrays of other types are not supported yet)");
@@ -8985,10 +9296,10 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         // flint_set_err exactly like the method form.
         if (index->getType()->isPointerTy()) {
             if (base->getType()->isStructTy())
-                return codegenError("array index needs i64 (got str; map keys are strings)");
+                return codegenError("E0013", "array index needs i64 (got str; map keys are strings)");
             auto it = functionMap.find("flint_map_get");
             if (it == functionMap.end())
-                return codegenError("map runtime not registered");
+                return codegenError("E0096", "map runtime not registered");
             return builder->CreateCall(it->second, {base, index}, "map_get");
         }
         // D1: string vs array — array is {ptr,i64}, string is ptr.
@@ -9015,18 +9326,18 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             // with no diagnostic. The AST type system has no tensor kind,
             // so refuse on the flag the binding carries instead.
             if (sym && sym->isTensor) {
-                return codegenError("tensor values cannot be indexed with []; use flt_get(t, i)");
+                return codegenError("E0116", "tensor values cannot be indexed with []; use flt_get(t, i)");
             }
             auto gsym2 = globalSymTable.find(bv->name);
             if (gsym2 != globalSymTable.end() && gsym2->second.isTensor)
-                return codegenError("tensor values cannot be indexed with []; use flt_get(t, i)");
+                return codegenError("E0116", "tensor values cannot be indexed with []; use flt_get(t, i)");
             // The known length, when the compiler has it (Phase 2 / 2A.1).
             if (sym && sym->knownArrayLenValue) knownLenValue = sym->knownArrayLenValue;
             else if (gsym2 != globalSymTable.end() && gsym2->second.knownArrayLenValue)
                 knownLenValue = gsym2->second.knownArrayLenValue;
         }
         if (index->getType()->isIntegerTy(64) && baseIsMap)
-            return codegenError("map index needs a str key (map keys are strings)");
+            return codegenError("E0095", "map index needs a str key (map keys are strings)");
         bool isArray = base->getType()->isStructTy();
         if (isArray) {
             llvm::Value* dataPtr = builder->CreateExtractValue(base, {0}, "arr_ptr");
@@ -9091,7 +9402,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
 
         // Call flint_array_slice(data, len, start, end) -> FlintVec*
         auto* sliceFn = functionMap["flint_array_slice"];
-        if (!sliceFn) { return codegenError("flint_array_slice not linked"); }
+        if (!sliceFn) { return codegenError("E0069", "flint_array_slice not linked"); }
         return builder->CreateCall(sliceFn, {dataPtr, len, start, end}, "slice_vec");
     }
 
@@ -9105,12 +9416,12 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             }
             // Variable reference (borrow)
             auto* sym = symTable.lookup(var->name);
-            if (!sym) { return codegenError(std::string("undefined var '") + var->name + "'"); }
+            if (!sym) { return codegenError("E0006", std::string("undefined var '") + var->name + "'"); }
                 if (sym->moved) {
-                    return codegenError(std::string("cannot borrow moved variable '") + var->name + "'");
+                    return codegenError("E0006", std::string("cannot borrow moved variable '") + var->name + "'");
                 }
             if (sym->isLambda) {
-                return codegenError(std::string("cannot borrow lambda '") + var->name + "'");
+                return codegenError("E0006", std::string("cannot borrow lambda '") + var->name + "'");
             }
             sym->borrowCount++;
             symTable.recordBorrow(var->name);
@@ -9130,11 +9441,11 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
     llvm::Value* emitStructLiteral(StructLiteralAST* sl) {
         auto it = structRegistry.find(sl->structName);
         if (it == structRegistry.end()) {
-            return codegenError(std::string("unknown struct '") + sl->structName + "'");
+            return codegenError("E0006", std::string("unknown struct '") + sl->structName + "'");
         }
         auto& def = it->second;
         llvm::Type* st = llvmType(Type::struct_(sl->structName), *ctx, mod.get());
-        if (!st) { return codegenError(std::string("struct type not found '") + sl->structName + "'"); }
+        if (!st) { return codegenError("E0006", std::string("struct type not found '") + sl->structName + "'"); }
         // Build struct via undef + insertvalue for each field
         llvm::Value* s = llvm::UndefValue::get(st);
         for (unsigned i = 0; i < def.fields.size(); i++) {
@@ -9149,7 +9460,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 }
             }
             if (!found) {
-                return codegenError(std::string("missing field '") + def.fields[i].name + "' in struct literal");
+                return codegenError("E0008", std::string("missing field '") + def.fields[i].name + "' in struct literal");
             }
         }
         return s;
@@ -9167,15 +9478,15 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                         return builder->CreateExtractValue(base, {i}, fa->fieldName);
                     }
                 }
-                return codegenError(std::string("struct '") + name + "' has no field '" + fa->fieldName + "'");
+                return codegenError("E0007", std::string("struct '") + name + "' has no field '" + fa->fieldName + "'");
             }
         }
-        return codegenError("cannot access field '" + fa->fieldName + "' on non-struct type");
+        return codegenError("E0023", "cannot access field '" + fa->fieldName + "' on non-struct type");
     }
 
     llvm::Value* emitEnumConstruct(EnumConstructAST* ec) {
         auto it = enumRegistry.find(ec->enumName);
-        if (it == enumRegistry.end()) { return codegenError(std::string("unknown enum '") + ec->enumName + "'"); }
+        if (it == enumRegistry.end()) { return codegenError("E0006", std::string("unknown enum '") + ec->enumName + "'"); }
         auto& ed = it->second;
         llvm::Type* enumTy = llvmType(Type::enum_(ec->enumName), *ctx, mod.get());
         // Find variant index
@@ -9183,7 +9494,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         for (size_t i = 0; i < ed.variants.size(); i++) {
             if (ed.variants[i].name == ec->variantName) { tag = (int)i; break; }
         }
-        if (tag < 0) { return codegenError(std::string("unknown variant '") + ec->variantName + "'"); }
+        if (tag < 0) { return codegenError("E0006", std::string("unknown variant '") + ec->variantName + "'"); }
 
         auto* alloca = createEntryAlloca(enumTy, ec->enumName + "_tmp");
         // Store tag byte
@@ -9335,7 +9646,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         // Field-by-field recurses so nested structs compare structurally.
         if (l->getType()->isStructTy() || r->getType()->isStructTy()) {
             if (op != "==" && op != "!=") {
-                return codegenError("'" + op +
+                return codegenError("E0003", "'" + op +
                     "' is not defined for structs or enums; use == or !=");
             }
             llvm::Value* eq = emitAggregateEqual(l, r, 0);
@@ -9350,7 +9661,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         else if (op == ">")  pred = llvm::CmpInst::ICMP_SGT;
         else if (op == "<=") pred = llvm::CmpInst::ICMP_SLE;
         else if (op == ">=") pred = llvm::CmpInst::ICMP_SGE;
-        else return codegenError("unknown operator '" + op + "'");
+        else return codegenError("E0126", "unknown operator '" + op + "'");
         // String content comparison: ptr == ptr compares contents
         // via flint_str_compare (same convention as `+` -> concat).
         if (l->getType()->isPointerTy() && r->getType()->isPointerTy()) {
@@ -9403,7 +9714,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         if (!f) return nullptr;
         if (llvm::FunctionType* fty = f->getFunctionType()) {
             if (fty->getNumParams() != args.size()) {
-                return codegenError("'" + displayName + "' expects " +
+                return codegenError("E0001", "'" + displayName + "' expects " +
                     std::to_string(fty->getNumParams()) + " argument(s), got " +
                     std::to_string(args.size()));
             }
@@ -9413,7 +9724,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 llvm::Type* got = args[i]->getType();
                 bool bothPointers = want->isPointerTy() && got->isPointerTy();
                 if (want == got || bothPointers) continue;
-                return codegenError("argument " + std::to_string(i + 1) + " of '" +
+                return codegenError("E0012", "argument " + std::to_string(i + 1) + " of '" +
                     displayName + "' has type " + llvmTypeToString(got) +
                     (instantiationMsg ? ", but this instantiation expects "
                                       : ", but '" + displayName + "' expects ") +
@@ -9440,7 +9751,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             auto it = functionMap.find("flint_println_str");
             if (it != functionMap.end()) return builder->CreateCall(it->second, {arg});
         }
-        return codegenError("print() of unsupported type");
+        return codegenError("E0104", "print() of unsupported type");
     }
 
     // P0-NEW-1: array-builtin cores. Values in; the struct guard lives HERE
@@ -9456,7 +9767,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                                   llvm::Value* knownLen = nullptr) {
         if (!arr || !idx) return nullptr;
         if (!arr->getType()->isStructTy()) {
-            return codegenError("flint_array_get needs an array");
+            return codegenError("E0064", "flint_array_get needs an array");
         }
         auto* dataPtr = builder->CreateExtractValue(arr, {0}, "arr_data");
         auto* len = builder->CreateExtractValue(arr, {1}, "arr_len");
@@ -9469,7 +9780,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                                   llvm::Value* val, llvm::Value* knownLen = nullptr) {
         if (!arr || !idx || !val) return nullptr;
         if (!arr->getType()->isStructTy()) {
-            return codegenError("flint_array_set needs an array");
+            return codegenError("E0067", "flint_array_set needs an array");
         }
         auto* dataPtr = builder->CreateExtractValue(arr, {0}, "arr_data");
         auto* len = builder->CreateExtractValue(arr, {1}, "arr_len");
@@ -9510,7 +9821,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 auto eit = enumRegistry.find(st->getName().str());
                 if (eit != enumRegistry.end()) {
                     if (r->getType() != t)
-                        return codegenError("cannot compare enum '" + st->getName().str() + "' with a value of a different type");
+                        return codegenError("E0037", "cannot compare enum '" + st->getName().str() + "' with a value of a different type");
                     return emitEnumEqual(l, r, eit->second, depth);
                 }
             }
@@ -9562,7 +9873,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         // Get enum definition from first arm
         if (mn->arms.empty()) return nullptr;
         auto eit = enumRegistry.find(mn->arms[0].enumName);
-        if (eit == enumRegistry.end()) { return codegenError("unknown enum in match"); }
+        if (eit == enumRegistry.end()) { return codegenError("E0123", "unknown enum in match"); }
         auto& ed = eit->second;
 
         // Create BBs: one per arm + merge
@@ -9611,7 +9922,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 // on a two-payload variant compiled with `a` bound to nothing
                 // and failed later with a confusing "undefined var".
                 if (arm.bindNames.size() != vt.payloadTypes.size()) {
-                    return codegenError("pattern " + arm.enumName + "." + arm.variantName +
+                    return codegenError("E0102", "pattern " + arm.enumName + "." + arm.variantName +
                         " binds " + std::to_string(arm.bindNames.size()) +
                         " value(s) but the variant has " +
                         std::to_string(vt.payloadTypes.size()));
@@ -9681,7 +9992,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             if (!phiTy) phiTy = v->getType();
             else if (v->getType() != phiTy) { mixed = true; break; }
         }
-        if (mixed) { return codegenError("match arms must yield the same type"); }
+        if (mixed) { return codegenError("E0098", "match arms must yield the same type"); }
         if (!phiTy) return llvm::ConstantInt::get(i64Ty, 0);
         auto* phi = builder->CreatePHI(phiTy, (unsigned)armVals.size() + 1, "matchval");
         for (size_t i = 0; i < armVals.size(); i++) {
@@ -9874,9 +10185,9 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 Symbol* Lsym = lsym ? lsym : glsym;
                 bool selfRecurse = (Lsym->lambdaFn == currentFunc);
                 if (Lsym->lambdaDefinedIn != currentFunc && !selfRecurse)
-                    return codegenError("cannot call lambda '" + call->callee + "' from a different function");
+                    return codegenError("E0031", "cannot call lambda '" + call->callee + "' from a different function");
                 if (call->args.size() != Lsym->lambdaParamTypes.size())
-                    return codegenError("lambda '" + call->callee + "' expects " +
+                    return codegenError("E0089", "lambda '" + call->callee + "' expects " +
                         std::to_string(Lsym->lambdaParamTypes.size()) + " argument(s), got " +
                         std::to_string(call->args.size()));
                 std::vector<llvm::Value*> largs;
@@ -9890,7 +10201,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                         if (v->getType()->isIntegerTy(64) && want->isDoubleTy())
                             v = builder->CreateSIToFP(v, want, "lamarg");
                         else
-                            return codegenError("lambda '" + call->callee + "' argument type mismatch");
+                            return codegenError("E0088", "lambda '" + call->callee + "' argument type mismatch");
                     }
                     largs.push_back(v);
                 }
@@ -9921,7 +10232,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             if (!cs && gvs) { glCopy = *gvs; cs = &glCopy; }
             if (cs && !cs->isLambda && cs->type.kind == TypeKind::Func && cs->type.funcRet) {
                 if (call->args.size() != cs->type.funcParams.size())
-                    return codegenError("function value '" + call->callee + "' expects " +
+                    return codegenError("E0084", "function value '" + call->callee + "' expects " +
                         std::to_string(cs->type.funcParams.size()) + " argument(s), got " +
                         std::to_string(call->args.size()));
                 VariableExprAST cvNode(call->callee);
@@ -9941,7 +10252,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                         if (v->getType()->isIntegerTy(64) && want->isDoubleTy())
                             v = builder->CreateSIToFP(v, want, "fnarg");
                         else if (!(v->getType()->isPointerTy() && want->isPointerTy()))
-                            return codegenError("function value '" + call->callee +
+                            return codegenError("E0083", "function value '" + call->callee +
                                 "' argument type mismatch (parameter " + std::to_string(i + 1) + ")");
                     }
                     avals.push_back(v);
@@ -9961,13 +10272,13 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             // parameter would have nothing to resolve to.
             if (!call->typeArgs.empty()) {
                 if (call->typeArgs.size() != generic->typeParams.size())
-                    return codegenError("'" + call->callee + "' expects " +
+                    return codegenError("E0002", "'" + call->callee + "' expects " +
                         std::to_string(generic->typeParams.size()) +
                         " type argument(s), got " +
                         std::to_string(call->typeArgs.size()));
                 for (auto& ta : call->typeArgs)
                     if (ta.kind == TypeKind::TypeParam)
-                        return codegenError("the explicit type argument for '" +
+                        return codegenError("E0118", "the explicit type argument for '" +
                             call->callee + "' must be a concrete type");
                 llvm::Function* ef = nullptr;
                 auto ecit = genericCache.find(mangle(call->callee, call->typeArgs));
@@ -9976,7 +10287,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 } else {
                     ef = specialize(generic, call->typeArgs);
                 }
-                if (!ef) return codegenError(std::string("failed to specialize '") + call->callee + "'");
+                if (!ef) return codegenError("E0006", std::string("failed to specialize '") + call->callee + "'");
                 std::vector<llvm::Value*> eargs;
                 for (auto& a : call->args) {
                     auto* v = emitExpr(a.get());
@@ -9987,7 +10298,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                         auto* srcSym = symTable.lookup(varArg->name);
                         if (srcSym && !srcSym->type.isCopyType()) {
                             if (srcSym->borrowCount > 0)
-                                return codegenError("cannot move while borrowed");
+                                return codegenError("E0040", "cannot move while borrowed");
                             srcSym->moved = true;
                         }
                     }
@@ -10051,7 +10362,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 typeArgs.push_back(inferred);
             }
             if (inferenceFailed) {
-                return codegenError("cannot infer type parameter '" + failedParam +
+                return codegenError("E0038", "cannot infer type parameter '" + failedParam +
                     "' for '" + call->callee +
                     "'; the argument's type could not be determined");
             }
@@ -10064,7 +10375,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             } else {
                 f = specialize(generic, typeArgs);
             }
-            if (!f) { return codegenError(std::string("failed to specialize '") + call->callee + "'"); }
+            if (!f) { return codegenError("E0006", std::string("failed to specialize '") + call->callee + "'"); }
 
             // Emit args and call
             std::vector<llvm::Value*> args;
@@ -10077,7 +10388,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                     auto* srcSym = symTable.lookup(varArg->name);
                     if (srcSym && !srcSym->type.isCopyType()) {
                         if (srcSym->borrowCount > 0) {
-                            return codegenError("cannot move while borrowed");
+                            return codegenError("E0040", "cannot move while borrowed");
                         }
                         srcSym->moved = true;
                     }
@@ -10090,18 +10401,18 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         }
 
         if (!call->typeArgs.empty())
-            return codegenError("explicit type arguments are only allowed on a generic function; '" +
+            return codegenError("E0059", "explicit type arguments are only allowed on a generic function; '" +
                 call->callee + "' is not generic");
 
         if (call->callee == "print") {
-            if (call->args.empty()) { return codegenError("print() needs an arg"); }
+            if (call->args.empty()) { return codegenError("E0103", "print() needs an arg"); }
             auto* arg = emitExpr(call->args[0].get());
             // P0-NEW-1: shared print dispatch (both paths).
             return emitPrintCall(arg);
         }
 
         if (call->callee == "flint_array_get") {
-            if (call->args.size() != 2) { return codegenError("flint_array_get needs 2 args"); }
+            if (call->args.size() != 2) { return codegenError("E0063", "flint_array_get needs 2 args"); }
             auto* arrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
             // Phase 2 / 2C: the loop-range fact for this access.
@@ -10111,7 +10422,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         }
 
         if (call->callee == "flint_array_set") {
-            if (call->args.size() != 3) { return codegenError("flint_array_set needs 3 args"); }
+            if (call->args.size() != 3) { return codegenError("E0066", "flint_array_set needs 3 args"); }
             auto* arrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
             auto* valVal = emitExpr(call->args[2].get());
@@ -10122,14 +10433,14 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         }
 
         if (call->callee == "flint_array_data") {
-            if (call->args.size() != 1) { return codegenError("flint_array_data needs 1 arg"); }
+            if (call->args.size() != 1) { return codegenError("E0062", "flint_array_data needs 1 arg"); }
             auto* arrVal = emitExpr(call->args[0].get());
             // P0-NEW-1: shared core (both paths).
             return emitArrayDataCore(arrVal);
         }
 
         if (call->callee == "flint_array_get_ptr") {
-            if (call->args.size() != 2) { return codegenError("flint_array_get_ptr needs 2 args"); }
+            if (call->args.size() != 2) { return codegenError("E0065", "flint_array_get_ptr needs 2 args"); }
             auto* ptrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
             // P0-NEW-1: shared core (both paths).
@@ -10137,7 +10448,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         }
 
         if (call->callee == "flint_array_set_ptr") {
-            if (call->args.size() != 3) { return codegenError("flint_array_set_ptr needs 3 args"); }
+            if (call->args.size() != 3) { return codegenError("E0068", "flint_array_set_ptr needs 3 args"); }
             auto* ptrVal = emitExpr(call->args[0].get());
             auto* idxVal = emitExpr(call->args[1].get());
             auto* valVal = emitExpr(call->args[2].get());
@@ -10146,18 +10457,18 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         }
 
         if (call->callee == "flint_thread_spawn") {
-            if (call->args.size() != 2) { return codegenError("flint_thread_spawn needs 2 args: func_name, arg"); }
-            if (call->args[0]->kind != NodeKind::String) { return codegenError("flint_thread_spawn first arg must be a string literal (function name)"); }
+            if (call->args.size() != 2) { return codegenError("E0077", "flint_thread_spawn needs 2 args: func_name, arg"); }
+            if (call->args[0]->kind != NodeKind::String) { return codegenError("E0076", "flint_thread_spawn first arg must be a string literal (function name)"); }
             auto* nameLit = static_cast<StringExprAST*>(call->args[0].get());
             auto* argVal = emitExpr(call->args[1].get());
             if (!argVal) return nullptr;
             auto fIt = functionMap.find(nameLit->value);
-            if (fIt == functionMap.end()) { return codegenError(std::string("flint_thread_spawn: unknown function '") + nameLit->value + "'"); }
+            if (fIt == functionMap.end()) { return codegenError("E0006", std::string("flint_thread_spawn: unknown function '") + nameLit->value + "'"); }
             auto* targetFn = fIt->second;
             auto* wrapperTy = llvm::FunctionType::get(i8PtrTy, {i8PtrTy}, false);
             auto* wrapperPtr = builder->CreateBitCast(targetFn, llvm::PointerType::get(*ctx, 0), "thread_fn");
             auto* createFn = functionMap["flint_thread_create"];
-            if (!createFn) { return codegenError("flint_thread_spawn: runtime function 'flint_thread_create' not found"); }
+            if (!createFn) { return codegenError("E0078", "flint_thread_spawn: runtime function 'flint_thread_create' not found"); }
             auto* voidArg = builder->CreateIntToPtr(argVal, i8PtrTy, "thread_arg");
             return builder->CreateCall(createFn, {wrapperPtr, voidArg}, "thread_id");
         }
@@ -10166,7 +10477,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             hasPython = true; markUsesPython();
             const bool wantFloat = (call->callee == "py_eval_float");
             if (call->args.size() != 1) {
-                return codegenError(call->callee + "() needs one string arg");
+                return codegenError("E0005", call->callee + "() needs one string arg");
             }
             auto* arg = emitExpr(call->args[0].get());
             if (!arg) return nullptr;
@@ -10289,7 +10600,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         // No new syntax; dispatch on static kind + LLVM struct fallback.
         if (call->callee == "len") {
             if (call->args.size() != 1)
-                return codegenError("len() needs 1 argument");
+                return codegenError("E0094", "len() needs 1 argument");
             ExprAST* a0 = call->args[0].get();
             // Static kind: 4=array,3=str,6=map,0=unknown (self-host ETYPE codes).
             int lenKind = 0;
@@ -10335,14 +10646,14 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             if (lenKind == 6) {
                 auto lit = functionMap.find("flint_map_len");
                 if (lit != functionMap.end()) return builder->CreateCall(lit->second, {aval});
-                return codegenError("flint_map_len not linked");
+                return codegenError("E0070", "flint_map_len not linked");
             }
             if (lenKind == 3) {
                 auto lit = functionMap.find("flint_str_length");
                 if (lit != functionMap.end()) return builder->CreateCall(lit->second, {aval});
-                return codegenError("flint_str_length not linked");
+                return codegenError("E0074", "flint_str_length not linked");
             }
-            return codegenError("len needs array, str or map");
+            return codegenError("E0093", "len needs array, str or map");
         }
 
         auto it = functionMap.find(call->callee);
@@ -10356,12 +10667,12 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 std::string diag;
                 FunctionAST* impl = resolveUfcsImpl(call->callee.substr(3),
                     call->args.size(), recv, recvKnown, diag);
-                if (!impl) return codegenError(diag);
+                if (!impl) return codegenError("E0140", diag);
                 it = functionMap.find(impl->name);
                 if (it == functionMap.end())
-                    return codegenError("no type in scope implements '" + impl->name + "'");
+                    return codegenError("E0100", "no type in scope implements '" + impl->name + "'");
             } else
-                return codegenError(std::string("undefined function '") + call->callee + "'");
+                return codegenError("E0006", std::string("undefined function '") + call->callee + "'");
         }
         bool isExtern = externFunctions.count(call->callee) > 0;
         std::vector<llvm::Value*> args;
@@ -10382,10 +10693,10 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                     for (auto& lp : lam->params) lamPs.push_back(lp.second);
                     Type lamTy = Type::fn_(std::move(lamPs), lam->retType);
                     if (wantTy.kind != TypeKind::Func)
-                        return codegenError("cannot pass a lambda to parameter '" + fit->second->params[ai].first +
+                        return codegenError("E0041", "cannot pass a lambda to parameter '" + fit->second->params[ai].first +
                             "' of '" + call->callee + "': the parameter is not a fn type");
                     if (!(wantTy == lamTy))
-                        return codegenError("lambda does not match the fn type of parameter '" + fit->second->params[ai].first + "' of '" + call->callee + "'");
+                        return codegenError("E0091", "lambda does not match the fn type of parameter '" + fit->second->params[ai].first + "' of '" + call->callee + "'");
                 }
             }
             llvm::Value* v = nullptr;
@@ -10504,8 +10815,8 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
         std::string name = peek().lexeme;
         auto* sym = cg->symTable.lookup(name);
         if (sym) {
-            if (!sym->isMutable) { advance(); advance(); parseError("cannot assign to immutable '" + name + "'"); return nullptr; }
-            if (sym->borrowCount > 0) { advance(); advance(); parseError("cannot assign to '" + name + "' while borrowed"); return nullptr; }
+            if (!sym->isMutable) { advance(); advance(); parseError("E0025", "cannot assign to immutable '" + name + "'"); return nullptr; }
+            if (sym->borrowCount > 0) { advance(); advance(); parseError("E0024", "cannot assign to '" + name + "' while borrowed"); return nullptr; }
             advance(); advance();
             auto val = parseExpressionEmit();
             if (!val) return nullptr;
@@ -10515,13 +10826,13 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
         }
         auto git = cg->globalSymTable.find(name);
         if (git != cg->globalSymTable.end()) {
-            if (!git->second.isMutable) { advance(); advance(); parseError("cannot assign to immutable global '" + name + "'"); return nullptr; }
+            if (!git->second.isMutable) { advance(); advance(); parseError("E0026", "cannot assign to immutable global '" + name + "'"); return nullptr; }
             advance(); advance();
             auto val = parseExpressionEmit();
             if (!val) return nullptr;
             return cg->builder->CreateStore(val, git->second.global);
         }
-        parseError("variable '" + name + "' not declared");
+        parseError("E0134", "variable '" + name + "' not declared");
         return nullptr;
     }
     // Compound assignment (emit-mode): `x += e` → load x, apply op, store.
@@ -10533,12 +10844,12 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
         auto* sym = cg->symTable.lookup(name);
         auto git = cg->globalSymTable.find(name);
         if (!sym && git == cg->globalSymTable.end()) {
-            parseError("variable '" + name + "' not declared");
+            parseError("E0134", "variable '" + name + "' not declared");
             return nullptr;
         }
         bool isGlobal = !sym;
         bool isMut = isGlobal ? git->second.isMutable : sym->isMutable;
-        if (!isMut) { advance(); advance(); parseError("cannot assign to immutable '" + name + "'"); return nullptr; }
+        if (!isMut) { advance(); advance(); parseError("E0025", "cannot assign to immutable '" + name + "'"); return nullptr; }
         Token nameTok = advance();
         Token opTok = advance(); // '+=' etc.
         TokenType binTy = TokenType::PLUS;
@@ -10579,7 +10890,7 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
                 exprStartTok.type == TokenType::IDENTIFIER) {
                 auto mit = varTypeMap.find(exprStartTok.lexeme);
                 if (mit != varTypeMap.end() && mit->second.kind == TypeKind::Map) {
-                    parseError("map index needs a str key (map keys are strings)");
+                    parseError("E0095", "map index needs a str key (map keys are strings)");
                     return nullptr;
                 }
             }
@@ -10591,7 +10902,7 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
             if (exprStartTok.type == TokenType::IDENTIFIER) {
                 auto* thsym = cg->symTable.lookup(exprStartTok.lexeme);
                 if (thsym && thsym->isTensor) {
-                    parseError("tensor values cannot be indexed with []; use flt_get(t, i)");
+                    parseError("E0116", "tensor values cannot be indexed with []; use flt_get(t, i)");
                     return nullptr;
                 }
             }
@@ -10645,9 +10956,9 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
                 (void)asTok;
                 if (tk < 0) {
                     if (notYet)
-                        parseError("as-cast to '" + tyTok.lexeme + "' is not yet supported (only 'i64' and 'f64'; f64->i64 truncates toward zero)");
+                        parseError("E0018", "as-cast to '" + tyTok.lexeme + "' is not yet supported (only 'i64' and 'f64'; f64->i64 truncates toward zero)");
                     else
-                        parseError("as-casts support only 'i64' and 'f64' (got '" + tyTok.lexeme + "')");
+                        parseError("E0019", "as-casts support only 'i64' and 'f64' (got '" + tyTok.lexeme + "')");
                     return nullptr;
                 }
                 bool wantF64 = (tk == 2);
@@ -10658,7 +10969,7 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
                     else if (lt->isIntegerTy(64))
                         left = cg->builder->CreateSIToFP(left, dblTy, "as_f64");
                     else {
-                        parseError("as f64 needs an i64 or f64 value");
+                        parseError("E0015", "as f64 needs an i64 or f64 value");
                         return nullptr;
                     }
                 } else {
@@ -10704,7 +11015,7 @@ llvm::Value* Parser::parseExpressionEmit(int minPrec) {
                         left = cg->builder->CreateFPToSI(left, cg->i64Ty, "as_i64");
                     }
                     else {
-                        parseError("as i64 needs an i64 or f64 value");
+                        parseError("E0016", "as i64 needs an i64 or f64 value");
                         return nullptr;
                     }
                 }
@@ -10737,7 +11048,7 @@ int Parser::parseTensorNumEmit(double& out, bool& isF) {
     for (int i = 0; i < depth; i++)
         if (!match(TokenType::RPAREN)) return 0;
     if (check(TokenType::IDENTIFIER) && isTensorDtypeSuffix(peek().lexeme)) {
-        parseError("numeric dtype suffix '" + peek().lexeme + "' is not yet supported (tensor literals are f64-only; convert with `as f64` / `as i64`)");
+        parseError("E0101", "numeric dtype suffix '" + peek().lexeme + "' is not yet supported (tensor literals are f64-only; convert with `as f64` / `as i64`)");
         return -1;
     }
     std::string lit = nt.lexeme;
@@ -10776,7 +11087,7 @@ int Parser::tryParseTensorEmit(TensorLiteralAST& t) {
         return 0;
     };
     auto hard = [&](const std::string& m) -> int {
-        parseError(m);
+        parseError("E0141", m);
         int depth = 1;
         while (depth > 0 && !isAtEnd()) {
             if (check(TokenType::LBRACKET)) depth++;
@@ -10872,7 +11183,7 @@ llvm::Value* Parser::emitTensorLiteralEmit(TensorLiteralAST& t) {
     auto itSet = cg->functionMap.find("flt_set");
     if (itC1 == cg->functionMap.end() || itC2 == cg->functionMap.end() ||
         itSet == cg->functionMap.end()) {
-        parseError("tensor runtime not registered");
+        parseError("E0115", "tensor runtime not registered");
         return nullptr;
     }
     auto* dblTy = llvm::Type::getDoubleTy(*cg->ctx);
@@ -10952,7 +11263,7 @@ llvm::Value* Parser::parseNudEmit() {
         auto itNew = cg->functionMap.find("flint_map_new");
         auto itSet = cg->functionMap.find("flint_map_set");
         if (itNew == cg->functionMap.end() || itSet == cg->functionMap.end()) {
-            parseError("map runtime not registered"); return nullptr;
+            parseError("E0096", "map runtime not registered"); return nullptr;
         }
         llvm::Value* m = cg->builder->CreateCall(itNew->second, {}, "map_new");
         if (!check(TokenType::RBRACE)) {
@@ -10972,7 +11283,7 @@ llvm::Value* Parser::parseNudEmit() {
     if (match(TokenType::IDENTIFIER)) return parseIdentEmit();
     // Lambdas need closure conversion (AST path only) — reject cleanly here.
     if (check(TokenType::PIPE)) {
-        parseError("lambdas are not supported in generic functions");
+        parseError("E0092", "lambdas are not supported in generic functions");
         return nullptr;
     }
     if (match(TokenType::LPAREN)) {
@@ -11015,13 +11326,13 @@ llvm::Value* Parser::parseNudEmit() {
             }
             // Variable reference (borrow)
             auto* sym = cg->symTable.lookup(vname);
-            if (!sym) { parseError("undefined variable '" + vname + "'"); return nullptr; }
-            if (sym->moved) { parseError("cannot borrow moved variable '" + vname + "'"); return nullptr; }
+            if (!sym) { parseError("E0121", "undefined variable '" + vname + "'"); return nullptr; }
+            if (sym->moved) { parseError("E0030", "cannot borrow moved variable '" + vname + "'"); return nullptr; }
             sym->borrowCount++;
             cg->symTable.recordBorrow(vname);
             return sym->alloca;
         }
-        parseError("can only reference variables");
+        parseError("E0022", "can only reference variables");
         return nullptr;
     }
     if (match(TokenType::STAR)) {
@@ -11029,7 +11340,7 @@ llvm::Value* Parser::parseNudEmit() {
         if (!target) return nullptr;
         return cg->builder->CreateLoad(cg->i64Ty, target, "deref");
     }
-    parseError("expected expression");
+    parseError("E0054", "expected expression");
     return nullptr;
 }
 
@@ -11047,7 +11358,7 @@ llvm::Value* Parser::parseIdentEmit() {
         // Special case: flint_thread_spawn needs function name from token stream
         if (name == "flint_thread_spawn") {
             if (!check(TokenType::STRING_LITERAL)) {
-                parseError("flint_thread_spawn first arg must be a string literal");
+                parseError("E0075", "flint_thread_spawn first arg must be a string literal");
                 return nullptr;
             }
             Token funcNameTok = advance(); // consume the string literal
@@ -11056,19 +11367,19 @@ llvm::Value* Parser::parseIdentEmit() {
             if (funcName.size() >= 2 && funcName.front() == '"' && funcName.back() == '"')
                 funcName = funcName.substr(1, funcName.size() - 2);
             if (!match(TokenType::COMMA)) {
-                parseError("flint_thread_spawn needs 2 args: func_name, arg");
+                parseError("E0077", "flint_thread_spawn needs 2 args: func_name, arg");
                 return nullptr;
             }
             auto* argVal = parseExpressionEmit();
             if (!argVal) return nullptr;
             consume(TokenType::RPAREN, "expected ')' after arguments");
             auto fIt = cg->functionMap.find(funcName);
-            if (fIt == cg->functionMap.end()) { parseError("flint_thread_spawn: unknown function '" + funcName + "'"); return nullptr; }
+            if (fIt == cg->functionMap.end()) { parseError("E0080", "flint_thread_spawn: unknown function '" + funcName + "'"); return nullptr; }
             auto* targetFn = fIt->second;
             auto* wrapperTy = llvm::FunctionType::get(cg->i8PtrTy, {cg->i8PtrTy}, false);
             auto* wrapperPtr = cg->builder->CreateBitCast(targetFn, llvm::PointerType::get(*cg->ctx, 0), "thread_fn");
             auto* createFn = cg->functionMap["flint_thread_create"];
-            if (!createFn) { parseError("flint_thread_spawn: runtime function not found"); return nullptr; }
+            if (!createFn) { parseError("E0079", "flint_thread_spawn: runtime function not found"); return nullptr; }
             auto* voidArg = cg->builder->CreateIntToPtr(argVal, cg->i8PtrTy, "thread_arg");
             return cg->builder->CreateCall(createFn, {wrapperPtr, voidArg}, "thread_id");
         }
@@ -11079,7 +11390,7 @@ llvm::Value* Parser::parseIdentEmit() {
             advance(); // ':'
             advance(); // ':'
             if (!match(TokenType::LT)) {
-                parseError("expected '<' after '::' before explicit type arguments");
+                parseError("E0049", "expected '<' after '::' before explicit type arguments");
                 return nullptr;
             }
             do {
@@ -11094,8 +11405,8 @@ llvm::Value* Parser::parseIdentEmit() {
     }
     auto* sym = cg->symTable.lookup(name);
     if (sym) {
-        if (sym->moved) { parseError("use of moved variable '" + name + "'"); return nullptr; }
-        if (sym->borrowCount > 0 && !sym->type.isCopyType()) { parseError("cannot move '" + name + "' while borrowed"); return nullptr; }
+        if (sym->moved) { parseError("E0132", "use of moved variable '" + name + "'"); return nullptr; }
+        if (sym->borrowCount > 0 && !sym->type.isCopyType()) { parseError("E0039", "cannot move '" + name + "' while borrowed"); return nullptr; }
         llvm::Value* ptr = sym->alloca ? (llvm::Value*)sym->alloca : (llvm::Value*)sym->global;
         return cg->builder->CreateLoad(cg->resolvedLlvmType(sym->type), ptr, name.c_str());
     }
@@ -11103,7 +11414,7 @@ llvm::Value* Parser::parseIdentEmit() {
     if (git != cg->globalSymTable.end()) {
         return cg->builder->CreateLoad(cg->resolvedLlvmType(git->second.type), git->second.global, name.c_str());
     }
-    parseError("undefined variable '" + name + "'");
+    parseError("E0121", "undefined variable '" + name + "'");
     return nullptr;
 }
 
@@ -11167,14 +11478,14 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
     if (tt == TokenType::AT) {
         auto it = cg->functionMap.find("fao_matmul");
         if (it != cg->functionMap.end()) return cg->builder->CreateCall(it->second, {l, r});
-        parseError("fao_matmul not linked");
+        parseError("E0061", "fao_matmul not linked");
         return nullptr;
     }
     // String concatenation: str + str
     if (tt == TokenType::PLUS && l->getType()->isPointerTy() && r->getType()->isPointerTy()) {
         auto it = cg->functionMap.find("flint_str_concat");
         if (it != cg->functionMap.end()) return cg->builder->CreateCall(it->second, {l, r});
-        parseError("flint_str_concat not linked");
+        parseError("E0071", "flint_str_concat not linked");
         return nullptr;
     }
     // Mixed str + i64/f64: convert scalar to string first
@@ -11183,7 +11494,7 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
         auto iti = cg->functionMap.find("flint_i64_to_string");
         if (itc != cg->functionMap.end() && iti != cg->functionMap.end())
             return cg->builder->CreateCall(itc->second, {l, cg->builder->CreateCall(iti->second, {r})});
-        parseError("flint_str_concat/flint_i64_to_string not linked");
+        parseError("E0073", "flint_str_concat/flint_i64_to_string not linked");
         return nullptr;
     }
     if (tt == TokenType::PLUS && l->getType()->isIntegerTy(64) && r->getType()->isPointerTy()) {
@@ -11191,7 +11502,7 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
         auto iti = cg->functionMap.find("flint_i64_to_string");
         if (itc != cg->functionMap.end() && iti != cg->functionMap.end())
             return cg->builder->CreateCall(itc->second, {cg->builder->CreateCall(iti->second, {l}), r});
-        parseError("flint_str_concat/flint_i64_to_string not linked");
+        parseError("E0073", "flint_str_concat/flint_i64_to_string not linked");
         return nullptr;
     }
     if (tt == TokenType::PLUS && l->getType()->isPointerTy() && r->getType()->isDoubleTy()) {
@@ -11199,7 +11510,7 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
         auto itf = cg->functionMap.find("flint_f64_to_string");
         if (itc != cg->functionMap.end() && itf != cg->functionMap.end())
             return cg->builder->CreateCall(itc->second, {l, cg->builder->CreateCall(itf->second, {r})});
-        parseError("flint_str_concat/flint_f64_to_string not linked");
+        parseError("E0072", "flint_str_concat/flint_f64_to_string not linked");
         return nullptr;
     }
     if (tt == TokenType::PLUS && l->getType()->isDoubleTy() && r->getType()->isPointerTy()) {
@@ -11207,7 +11518,7 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
         auto itf = cg->functionMap.find("flint_f64_to_string");
         if (itc != cg->functionMap.end() && itf != cg->functionMap.end())
             return cg->builder->CreateCall(itc->second, {cg->builder->CreateCall(itf->second, {l}), r});
-        parseError("flint_str_concat/flint_f64_to_string not linked");
+        parseError("E0072", "flint_str_concat/flint_f64_to_string not linked");
         return nullptr;
     }
     if (tt == TokenType::PLUS || tt == TokenType::MINUS || tt == TokenType::STAR || tt == TokenType::SLASH || tt == TokenType::MODULO) {
@@ -11278,7 +11589,7 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
         auto* andVal = cg->builder->CreateAnd(lBool, rBool, "and");
         return cg->builder->CreateZExt(andVal, cg->i64Ty, "and_ext");
     }
-    parseError("unknown operator '" + opTok.lexeme + "'");
+    parseError("E0126", "unknown operator '" + opTok.lexeme + "'");
     return nullptr;
 }
 
@@ -11287,12 +11598,12 @@ llvm::Value* Parser::emitIndexEmit(llvm::Value* base, llvm::Value* index) {
     // (ptr) on a ptr base is `m["k"]` -> flint_map_get, same as `m.get(k)`.
     if (index->getType()->isPointerTy()) {
         if (base->getType()->isStructTy()) {
-            parseError("array index needs i64 (got str; map keys are strings)");
+            parseError("E0013", "array index needs i64 (got str; map keys are strings)");
             return nullptr;
         }
         auto it = cg->functionMap.find("flint_map_get");
         if (it == cg->functionMap.end()) {
-            parseError("map runtime not registered");
+            parseError("E0096", "map runtime not registered");
             return nullptr;
         }
         return cg->builder->CreateCall(it->second, {base, index}, "map_get");
@@ -11307,7 +11618,7 @@ llvm::Value* Parser::emitIndexEmit(llvm::Value* base, llvm::Value* index) {
 llvm::Value* Parser::emitIndexStoreEmit(llvm::Value* base, llvm::Value* index, llvm::Value* val) {
     if (!base || !index || !val) return nullptr;
     if (!base->getType()->isStructTy()) {
-        parseError("index assignment requires an array variable");
+        parseError("E0087", "index assignment requires an array variable");
         return nullptr;
     }
     llvm::Value* dataPtr = cg->builder->CreateExtractValue(base, {0}, "arr_ptr");
@@ -11327,11 +11638,11 @@ llvm::Value* Parser::emitFieldAccessEmit(llvm::Value* base, const std::string& f
                 if (def.fields[i].name == field)
                     return cg->builder->CreateExtractValue(base, {i}, field);
             }
-            parseError("struct '" + name + "' has no field '" + field + "'");
+            parseError("E0111", "struct '" + name + "' has no field '" + field + "'");
             return nullptr;
         }
     }
-    parseError("cannot access field '" + field + "' on non-struct type");
+    parseError("E0023", "cannot access field '" + field + "' on non-struct type");
     return nullptr;
 }
 
@@ -11347,7 +11658,7 @@ llvm::Value* Parser::emitArrayLiteralEmit(const std::vector<llvm::Value*>& elems
     // change; until then the language refuses instead of lying.
     for (size_t i = 0; i < count; i++) {
         if (elems[i] && elems[i]->getType() != cg->i64Ty) {
-            parseError("array literals must hold i64 values, but element " +
+            parseError("E0014", "array literals must hold i64 values, but element " +
                        std::to_string(i + 1) + " is " +
                        llvmTypeToString(elems[i]->getType()) +
                        " (arrays of other types are not supported yet)");
@@ -11373,10 +11684,10 @@ llvm::Value* Parser::emitArrayLiteralEmit(const std::vector<llvm::Value*>& elems
 
 llvm::Value* Parser::emitStructLiteralEmit(const std::string& name) {
     auto it = structRegistry.find(name);
-    if (it == structRegistry.end()) { parseError("unknown struct '" + name + "'"); return nullptr; }
+    if (it == structRegistry.end()) { parseError("E0127", "unknown struct '" + name + "'"); return nullptr; }
     auto& def = it->second;
     auto* st = cg->resolvedLlvmType(Type::struct_(name));
-    if (!st) { parseError("struct type not found '" + name + "'"); return nullptr; }
+    if (!st) { parseError("E0112", "struct type not found '" + name + "'"); return nullptr; }
     llvm::Value* s = llvm::UndefValue::get(st);
     for (unsigned i = 0; i < def.fields.size(); i++) {
         Token fName = consume(TokenType::IDENTIFIER, "expected field name");
@@ -11392,13 +11703,13 @@ llvm::Value* Parser::emitStructLiteralEmit(const std::string& name) {
 
 llvm::Value* Parser::emitEnumConstructEmit(const std::string& enumName, const std::string& variantName) {
     auto eit = enumRegistry.find(enumName);
-    if (eit == enumRegistry.end()) { parseError("unknown enum '" + enumName + "'"); return nullptr; }
+    if (eit == enumRegistry.end()) { parseError("E0122", "unknown enum '" + enumName + "'"); return nullptr; }
     auto& ed = eit->second;
     auto* enumTy = cg->resolvedLlvmType(Type::enum_(enumName));
     int tag = -1;
     for (size_t i = 0; i < ed.variants.size(); i++)
         if (ed.variants[i].name == variantName) { tag = (int)i; break; }
-    if (tag < 0) { parseError("unknown variant '" + variantName + "'"); return nullptr; }
+    if (tag < 0) { parseError("E0130", "unknown variant '" + variantName + "'"); return nullptr; }
 
     std::vector<llvm::Value*> args;
     if (match(TokenType::LPAREN)) {
@@ -11446,57 +11757,57 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
             : callee == "fa_get" ? "flint_map_get" : "flint_map_set";
         auto it = cg->functionMap.find(target);
         if (it != cg->functionMap.end()) return cg->builder->CreateCall(it->second, args);
-        parseError("map runtime not registered");
+        parseError("E0096", "map runtime not registered");
         return nullptr;
     }
     if (callee == "py_eval") {
         cg->hasPython = true; markUsesPython();
-        if (args.size() != 1) { parseError("py_eval() needs one string arg"); return nullptr; }
+        if (args.size() != 1) { parseError("E0105", "py_eval() needs one string arg"); return nullptr; }
         auto it = cg->functionMap.find("flint_py_eval_int");
         if (it != cg->functionMap.end()) return cg->builder->CreateCall(it->second, {args[0]});
-        parseError("py_eval_int not declared");
+        parseError("E0106", "py_eval_int not declared");
         return nullptr;
     }
 
     if (callee == "print") {
-        if (args.empty()) { parseError("print() needs an arg"); return nullptr; }
+        if (args.empty()) { parseError("E0103", "print() needs an arg"); return nullptr; }
         // P0-NEW-1: shared dispatch — key on the VALUE type, and unsupported
         // types now get a diagnostic instead of a silent wrong branch.
         return cg->emitPrintCall(args[0]);
     }
 
     if (callee == "flint_array_get") {
-        if (args.size() != 2) { parseError("flint_array_get needs 2 args"); return nullptr; }
+        if (args.size() != 2) { parseError("E0063", "flint_array_get needs 2 args"); return nullptr; }
         // P0-NEW-1: shared core — the struct guard now applies here too.
         return cg->emitArrayGetCore(args[0], args[1]);
     }
 
     if (callee == "flint_array_set") {
-        if (args.size() != 3) { parseError("flint_array_set needs 3 args"); return nullptr; }
+        if (args.size() != 3) { parseError("E0066", "flint_array_set needs 3 args"); return nullptr; }
         // P0-NEW-1: shared core — the struct guard now applies here too.
         return cg->emitArraySetCore(args[0], args[1], args[2]);
     }
 
     if (callee == "flint_array_data") {
-        if (args.size() != 1) { parseError("flint_array_data needs 1 arg"); return nullptr; }
+        if (args.size() != 1) { parseError("E0062", "flint_array_data needs 1 arg"); return nullptr; }
         // P0-NEW-1: shared core (both paths).
         return cg->emitArrayDataCore(args[0]);
     }
 
     if (callee == "flint_array_get_ptr") {
-        if (args.size() != 2) { parseError("flint_array_get_ptr needs 2 args"); return nullptr; }
+        if (args.size() != 2) { parseError("E0065", "flint_array_get_ptr needs 2 args"); return nullptr; }
         // P0-NEW-1: shared core (both paths).
         return cg->emitArrayGetPtrCore(args[0], args[1]);
     }
 
     if (callee == "flint_array_set_ptr") {
-        if (args.size() != 3) { parseError("flint_array_set_ptr needs 3 args"); return nullptr; }
+        if (args.size() != 3) { parseError("E0068", "flint_array_set_ptr needs 3 args"); return nullptr; }
         // P0-NEW-1: shared core (both paths).
         return cg->emitArraySetPtrCore(args[0], args[1], args[2]);
     }
 
     if (!explicitTypeArgs.empty()) {
-        parseError("explicit type arguments are only allowed on a generic function; '" +
+        parseError("E0059", "explicit type arguments are only allowed on a generic function; '" +
             callee + "' is not generic");
         return nullptr;
     }
@@ -11514,7 +11825,7 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
         // exactly as in the AST path.
         if (!explicitTypeArgs.empty()) {
             if (explicitTypeArgs.size() != genFn->typeParams.size()) {
-                parseError("'" + callee + "' expects " +
+                parseError("E0002", "'" + callee + "' expects " +
                     std::to_string(genFn->typeParams.size()) + " type argument(s), got " +
                     std::to_string(explicitTypeArgs.size()));
                 cg->typeSubstMap.clear();
@@ -11522,14 +11833,14 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
             }
             for (auto& ta : explicitTypeArgs) {
                 if (ta.kind == TypeKind::TypeParam) {
-                    parseError("the explicit type argument for '" + callee + "' must be a concrete type");
+                    parseError("E0118", "the explicit type argument for '" + callee + "' must be a concrete type");
                     cg->typeSubstMap.clear();
                     return nullptr;
                 }
             }
             auto* espec = cg->specialize(genFn, explicitTypeArgs);
             cg->typeSubstMap.clear();
-            if (!espec) { parseError("failed to specialize '" + callee + "'"); return nullptr; }
+            if (!espec) { parseError("E0060", "failed to specialize '" + callee + "'"); return nullptr; }
             return cg->createCallChecked(callee, espec, args, /*instantiationMsg=*/true);
         }
         // P0-NEW-1: the by-PARAMETER rule, matching the AST path: a type
@@ -11629,16 +11940,16 @@ llvm::Value* Parser::emitDirectCall(const std::string& callee, std::vector<llvm:
         else if (lt->isDoubleTy()) { recv = Type::f64(); recvKnown = true; }
         std::string diag;
         FunctionAST* impl = cg->resolveUfcsImpl(mName, args.size(), recv, recvKnown, diag);
-        if (!impl) { parseError(diag); return nullptr; }
+        if (!impl) { parseError("E0142", diag); return nullptr; }
         auto fit = cg->functionMap.find(impl->name);
         if (fit == cg->functionMap.end()) {
-            parseError("no type in scope implements '" + impl->name + "'");
+            parseError("E0100", "no type in scope implements '" + impl->name + "'");
             return nullptr;
         }
         // P0-NEW-1: shared call guard (both paths).
         return cg->createCallChecked(impl->name, fit->second, args);
     }
-    parseError("call to unknown function '" + callee + "'");
+    parseError("E0021", "call to unknown function '" + callee + "'");
     return nullptr;
 }
 
@@ -11693,7 +12004,7 @@ llvm::Value* Parser::parseMatchEmit() {
 
     if (arms.empty()) return llvm::ConstantInt::get(cg->i64Ty, 0);
     auto eit = enumRegistry.find(arms[0].enumName);
-    if (eit == enumRegistry.end()) { parseError("unknown enum '" + arms[0].enumName + "'"); return nullptr; }
+    if (eit == enumRegistry.end()) { parseError("E0122", "unknown enum '" + arms[0].enumName + "'"); return nullptr; }
     auto& ed = eit->second;
 
     std::vector<llvm::BasicBlock*> armBBs;
@@ -11729,7 +12040,7 @@ llvm::Value* Parser::parseMatchEmit() {
             // A mismatch used to be silently ignored, so `Node(a)` on a
             // two-payload variant compiled with `a` bound to nothing.
             if (arm.bindNames.size() != vt.payloadTypes.size()) {
-                parseError("pattern " + arm.enumName + "." + arm.variantName + " binds " +
+                parseError("E0102", "pattern " + arm.enumName + "." + arm.variantName + " binds " +
                            std::to_string(arm.bindNames.size()) + " value(s) but the variant has " +
                            std::to_string(vt.payloadTypes.size()));
                 cg->symTable.exitScope();
@@ -11793,7 +12104,7 @@ llvm::Value* Parser::parseMatchEmit() {
         if (!phiTyEmit) phiTyEmit = v->getType();
         else if (v->getType() != phiTyEmit) { mixedEmit = true; break; }
     }
-    if (mixedEmit) { parseError("match arms must yield the same type"); return nullptr; }
+    if (mixedEmit) { parseError("E0098", "match arms must yield the same type"); return nullptr; }
     if (!phiTyEmit) return llvm::ConstantInt::get(cg->i64Ty, 0);
     auto* phiEmit = cg->builder->CreatePHI(phiTyEmit, (unsigned)armValsEmit.size() + 1, "matchval");
     for (size_t i = 0; i < armValsEmit.size(); i++) {
@@ -11860,7 +12171,7 @@ void Parser::parseBlockEmit() {
 void Parser::parseVarDeclEmit(bool isMutable) {
     Token nameTok = advance();
     if (cg->symTable.lookup(nameTok.lexeme)) {
-        parseError("variable '" + nameTok.lexeme + "' already declared");
+        parseError("E0133", "variable '" + nameTok.lexeme + "' already declared");
     }
     Type varType = Type::i64();
     bool hasTypeAnnotation = match(TokenType::COLON);
@@ -11870,7 +12181,7 @@ void Parser::parseVarDeclEmit(bool isMutable) {
     }
     size_t exprStart = getPos();
     auto initExpr = parseExpressionEmit();
-    if (!initExpr) { parseError("expected expression after '='"); return; }
+    if (!initExpr) { parseError("E0055", "expected expression after '='"); return; }
     if (!hasTypeAnnotation) {
         // Syntactic Map inference: opaque ptrs are LLVM-indistinguishable
         // from strings, so `map {...}` is detected positionally.
@@ -11920,7 +12231,7 @@ void Parser::parseVarDeclEmit(bool isMutable) {
         auto* srcSym = cg->symTable.lookup(srcName);
         if (srcSym && !srcSym->type.isCopyType()) {
             if (srcSym->borrowCount > 0)
-                parseError("cannot move '" + srcName + "' while borrowed");
+                parseError("E0039", "cannot move '" + srcName + "' while borrowed");
             else
                 srcSym->moved = true;
         }
@@ -11955,14 +12266,14 @@ void Parser::parseReturnEmit() {
 }
 
 void Parser::parseBreakEmit() {
-    if (cg->breakStack.empty()) { parseError("break outside loop"); return; }
+    if (cg->breakStack.empty()) { parseError("E0020", "break outside loop"); return; }
     cg->builder->CreateBr(cg->breakStack.back());
     match(TokenType::SEMICOLON);
     match(TokenType::NEWLINE);
 }
 
 void Parser::parseContinueEmit() {
-    if (cg->continueStack.empty()) { parseError("continue outside loop"); return; }
+    if (cg->continueStack.empty()) { parseError("E0047", "continue outside loop"); return; }
     cg->builder->CreateBr(cg->continueStack.back());
     match(TokenType::SEMICOLON);
     match(TokenType::NEWLINE);
@@ -12054,7 +12365,7 @@ void Parser::parseForStmtEmit() {
             startVal = rargs[0];
             endVal = rargs[1];
         } else {
-            parseError("range() takes 1 or 2 arguments: range(n) or range(start, end)");
+            parseError("E0109", "range() takes 1 or 2 arguments: range(n) or range(start, end)");
             return;
         }
         if (!startVal || !endVal) return;
@@ -12137,7 +12448,7 @@ void Parser::parseForStmtEmit() {
     llvm::Value* collVal = firstVal;
     bool isArray = collVal->getType()->isStructTy();
     if (!isArray && !collVal->getType()->isPointerTy()) {
-        parseError("for-in needs an array or str collection");
+        parseError("E0081", "for-in needs an array or str collection");
         return;
     }
     // string vs vec are both ptr; treat ptr collections as string for now
@@ -12228,7 +12539,7 @@ void Parser::parseForStmtEmit() {
 void Parser::parseParallelForStmtEmit() {
     // B6 migration: see parseParallelForStmt. Same removal, same advice, on
     // the emit path.
-    parseError("'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce");
+    parseError("E0004", "'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce");
 }
 
 void Parser::parsePythonBlockEmit() {
@@ -12582,15 +12893,23 @@ static void processFile(const std::string& path, std::unique_ptr<ProgramAST>& co
     seen.insert(absPath);
 
     auto fileBuf = llvm::MemoryBuffer::getFile(path);
-    if (!fileBuf) { firstError = "error: cannot open '" + path + "'"; return; }
+    if (!fileBuf) {
+        emitFileError("E9001", "cannot open '" + path + "'");
+        firstError = "cannot open '" + path + "'";
+        return;
+    }
     llvm::StringRef sourceRef = fileBuf.get()->getBuffer();
     recordImportHash(absPath, sourceRef);
 
+    int importFileId = gSourceMap.addFile(path, sourceRef.str());
     Lexer lexer(sourceRef);
     Parser parser(lexer);
+    parser.fileId = importFileId;
     auto prog = parser.parseProgram();
 
     if (parser.hadError()) {
+        // The diagnostic is already printed. The summary goes into the
+        // import chain's error so the caller can say WHICH import failed.
         firstError = parser.errorMsg();
         return;
     }
@@ -13933,6 +14252,21 @@ int main(int argc, char* argv[]) {
             gPrintSizeJsonPath = arg.substr(std::strlen("--print-size-json="));
         } else if (arg == "--check-bce") {
             checkBce = true; // diagnostic only: report check counts, change nothing
+        } else if (arg == "--error-format" && i + 1 < argc) {
+            // "human" (the default) or "json" (one JSON object per line --
+            // the LSP's input, and the shape rustc's --error-format json
+            // uses). The JSON stream is printed at the end of the run.
+            gDiagFormat = argv[++i];
+            if (gDiagFormat != "human" && gDiagFormat != "json") {
+                std::cerr << "error: --error-format expects 'human' or 'json'\n";
+                return 1;
+            }
+        } else if (arg.rfind("--error-format=", 0) == 0) {
+            gDiagFormat = arg.substr(std::strlen("--error-format="));
+            if (gDiagFormat != "human" && gDiagFormat != "json") {
+                std::cerr << "error: --error-format expects 'human' or 'json'\n";
+                return 1;
+            }
         } else if (arg == "--loop-opt") {
             loopOpt = true; // C1: loop-friendly check attrs (off by default)
         } else if (arg == "--run") {
@@ -13992,6 +14326,7 @@ int main(int argc, char* argv[]) {
             << "  --safe, --release        Explicit safety posture (no-ops, compat)\n\n"
             << "DIAGNOSTICS AND MODES\n"
             << "  --check-bce              Report bounds-check counts (changes nothing)\n"
+            << "  --error-format FORMAT    Diagnostic output: human (default) or json\n"
             << "  --print-size             Report the artifact's size attribution after linking\n"
             << "  --print-size-json=PATH   Write the same attribution as JSON to PATH\n"
             << "  --test                   Run test_ functions after JIT compile\n"
@@ -14041,7 +14376,7 @@ int main(int argc, char* argv[]) {
         Parser parser(lexer);
         parser.setSkipBodies(true);
         auto combined = parser.parseProgram();
-        if (parser.hadError()) { std::cerr << parser.errorMsg() << "\n"; return 1; }
+        if (parser.hadError()) return 1;   // the diagnostic is already printed
         if (!emitInterface(*combined, outputPath, targetTripleSpec)) {
             std::cerr << "error: failed to emit interface\n";
             return 1;
@@ -14173,22 +14508,27 @@ int main(int argc, char* argv[]) {
     Lexer lexer(sourceRef);
     PROFILE_END(); // lex (lexing is now lazy, happens during parse_decls)
 
+    // The main file's id in the source map, so a diagnostic can quote
+    // the source line it is about.
+    int mainFileId = gSourceMap.addFile(inputPath, sourceRef.str());
+
     // Phase 2 / 2A: the compiler is constructed BEFORE the parse, so the
     // registry of builtin TYPES exists when the parser infers. The parser
     // and the codegen then read ONE registry and cannot drift on a
     // builtin's type.
     PROFILE_BEGIN("codegen_setup");
     Codegen codegen(targetTripleSpec);
+    codegen.fileId = mainFileId;
     PROFILE_END(); // codegen_setup
 
     PROFILE_BEGIN("parse_decls");
     Parser parser(lexer);
+    parser.fileId = mainFileId;
     parser.setSkipBodies(false);
     auto combined = parser.parseProgram();
     PROFILE_BEGIN("parse_error_check");
     if (parser.hadError()) {
-        std::cerr << parser.errorMsg() << "\n";
-        return 1;
+        return 1;   // the diagnostic is already printed
     }
     PROFILE_END(); // parse_error_check
     PROFILE_END(); // parse_decls
@@ -14215,7 +14555,10 @@ int main(int argc, char* argv[]) {
                 auto buf = llvm::MemoryBuffer::getFile(impPath);
                 if (!buf) {
                     std::lock_guard<std::mutex> lock(importMutex);
-                    if (firstError.empty()) firstError = "error: cannot open '" + impPath + "'";
+                    if (firstError.empty()) {
+                        emitFileError("E9001", "cannot open '" + impPath + "'");
+                        firstError = "cannot open '" + impPath + "'";
+                    }
                     return;
                 }
                 llvm::StringRef src = buf.get()->getBuffer();
@@ -14246,7 +14589,8 @@ int main(int argc, char* argv[]) {
         }
         pool.wait();
         if (!firstError.empty()) {
-            std::cerr << firstError << "\n";
+            // The diagnostic is already printed; the summary is only the
+            // bookkeeping that says WHICH import failed.
             return 1;
         }
     } else {
@@ -14255,7 +14599,7 @@ int main(int argc, char* argv[]) {
             auto impPath = resolveImportPath(inputPath, imp, libPaths);
             processFile(impPath, combined, seen, firstError, libPaths);
             if (!firstError.empty()) {
-                std::cerr << firstError << "\n";
+                // The diagnostic is already printed (see above).
                 return 1;
             }
         }
@@ -14282,7 +14626,7 @@ int main(int argc, char* argv[]) {
                 parser.setPos(fn->bodyEnd);
                 parser.setPos(savedPos);
                 if (parser.hadError()) {
-                    std::cerr << parser.errorMsg() << "\n";
+                    return 1;   // the diagnostic is already printed
                     PROFILE_END(); PROFILE_END(); PROFILE_REPORT();
                     return 1;
                 }
@@ -14391,7 +14735,7 @@ int main(int argc, char* argv[]) {
             parser.setPos(fn->bodyEnd);
             parser.setPos(savedPos);
             if (parser.hadError()) {
-                std::cerr << parser.errorMsg() << "\n";
+                return 1;   // the diagnostic is already printed
                 PROFILE_END(); PROFILE_END(); PROFILE_REPORT();
                 return 1;
             }

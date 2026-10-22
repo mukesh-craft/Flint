@@ -1,12 +1,14 @@
-//! Diagnostics: run the real compiler and translate its stderr into LSP
+//! Diagnostics: run the real compiler and translate its diagnostics into LSP
 //! diagnostic objects.
 //!
-//! Ground truth for the compiler's output (verified against this tree):
-//!   parse/analysis : `error at line L:C: message`, then the source line and a
-//!                    caret line. L and C are 1-based.
-//!   emitter        : `codegen: message` with NO position information.
-//! A real editor needs both; inventing a position for emitter errors would be
-//! a lie, so they are reported at the top of the file and labelled `emitter:`.
+//! The compiler is asked for the MACHINE-READABLE form
+//! (`--error-format json`): one JSON object per line, each with the code,
+//! the level, the message and the spans. That is the same structure the
+//! terminal renderer consumes, so the two can never drift.
+//!
+//! Reading the JSON (rather than scraping the human text) is what makes
+//! the editor's positions correct: the old text form carried the codegen
+//! errors WITHOUT a position, so the server had to invent one.
 
 use serde_json::{json, Value};
 use std::io::Write;
@@ -54,6 +56,8 @@ pub struct Diag {
     pub character: usize,
     pub end_character: usize,
     pub message: String,
+    /// The compiler's stable code ("E0042"), empty when it has none.
+    pub code: String,
 }
 
 impl Diag {
@@ -65,54 +69,67 @@ impl Diag {
             },
             "severity": 1,
             "source": "flintc",
-            "message": self.message
+            "message": self.message,
+            "code": self.code
         })
     }
 }
 
-/// Parses compiler stderr into diagnostics. Kept pure so it can be unit-tested
-/// against real captured output.
-pub fn parse_stderr(stderr: &str) -> Vec<Diag> {
+/// Parses the compiler's JSON diagnostic stream (one object per line).
+/// Kept pure so it can be unit-tested against real captured output.
+pub fn parse_diagnostics(stderr: &str) -> Vec<Diag> {
     let mut out = Vec::new();
     for raw in stderr.lines() {
-        let line = raw.trim_end();
-        if let Some(rest) = line.strip_prefix("error at line ") {
-            // `error at line L:C: message`
-            if let Some((l, c, msg)) = parse_error_at(rest) {
+        let line = raw.trim();
+        if !line.starts_with('{') {
+            continue;   // a summary line ("function body emission failed")
+        }
+        let v: Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let message = v.get("message").and_then(|m| m.as_str()).unwrap_or("");
+        let code = v.get("code").and_then(|c| c.as_str()).unwrap_or("").to_string();
+        let mut text = if code.is_empty() {
+            message.to_string()
+        } else {
+            format!("[{}] {}", code, message)
+        };
+        if let Some(help) = v.get("help").and_then(|h| h.as_str()) {
+            text.push_str(&format!("\nhelp: {}", help));
+        }
+        // The primary span carries the position; a diagnostic without one
+        // is reported at the top of the file, honestly.
+        let spans = v.get("spans").and_then(|s| s.as_array());
+        let primary = spans.and_then(|spans| {
+            spans
+                .iter()
+                .find(|s| s.get("is_primary").and_then(|p| p.as_bool()).unwrap_or(false))
+                .or_else(|| spans.first())
+        });
+        match primary {
+            Some(sp) => {
+                let line_no = sp.get("line_start").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                let col_no = sp.get("column_start").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+                let end_col = sp.get("column_end").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 out.push(Diag {
-                    line: l.saturating_sub(1),
-                    character: c.saturating_sub(1),
-                    end_character: c.saturating_sub(1) + 1,
-                    message: msg,
+                    line: line_no.saturating_sub(1),
+                    character: col_no.saturating_sub(1),
+                    end_character: if end_col > col_no { end_col - 1 } else { col_no },
+                    message: text,
+                    code,
                 });
             }
-        } else if let Some(rest) = line.strip_prefix("codegen: ") {
-            // Emitter errors carry no position; report at the top honestly.
-            out.push(Diag {
+            None => out.push(Diag {
                 line: 0,
                 character: 0,
                 end_character: 1,
-                message: format!("emitter: {rest}"),
-            });
-        } else if let Some(rest) = line.strip_prefix("parse error: ") {
-            out.push(Diag {
-                line: 0,
-                character: 0,
-                end_character: 1,
-                message: format!("parser: {rest}"),
-            });
+                message: text,
+                code,
+            }),
         }
     }
     out
-}
-
-/// Parses `L:C: message` and returns 1-based (line, col, message).
-fn parse_error_at(rest: &str) -> Option<(usize, usize, String)> {
-    let (l, tail) = rest.split_once(':')?;
-    let (c, msg) = tail.split_once(':')?;
-    let line_no: usize = l.trim().parse().ok()?;
-    let col_no: usize = c.trim().parse().ok()?;
-    Some((line_no, col_no, msg.trim().to_string()))
 }
 
 /// Compiles `text` with the real compiler and returns its diagnostics.
@@ -127,6 +144,7 @@ pub fn check(flintc: &Path, text: &str) -> Vec<Diag> {
                 character: 0,
                 end_character: 1,
                 message: format!("cannot write scratch file {}: {e}", path.display()),
+                code: String::new(),
             }]
         }
     };
@@ -137,14 +155,35 @@ pub fn check(flintc: &Path, text: &str) -> Vec<Diag> {
             character: 0,
             end_character: 1,
             message: format!("cannot write scratch file {}: {e}", path.display()),
+            code: String::new(),
         }];
     }
-    let output = Command::new(flintc).arg(&path).output();
+    // The machine-readable form: one JSON object per diagnostic.
+    let output = Command::new(flintc)
+        .arg("--error-format")
+        .arg("json")
+        .arg(&path)
+        .output();
     // Always clean up, including on panic: a leaked scratch file per keystroke
     // would fill a phone's storage.
     let _ = std::fs::remove_file(&path);
     match output {
-        Ok(out) => parse_stderr(&String::from_utf8_lossy(&out.stderr)),
+        Ok(out) => {
+            let diags = parse_diagnostics(&String::from_utf8_lossy(&out.stderr));
+            if diags.is_empty() && !out.status.success() {
+                // Never a false all-clear: the compiler failed but produced
+                // nothing we could read (an old compiler, a crash, ...).
+                vec![Diag {
+                    line: 0,
+                    character: 0,
+                    end_character: 1,
+                    message: "the compiler failed without a diagnostic".to_string(),
+                    code: String::new(),
+                }]
+            } else {
+                diags
+            }
+        }
         Err(e) => {
             // Never fake an all-clear: a missing compiler becomes one explicit
             // diagnostic the editor can display.
@@ -156,6 +195,7 @@ pub fn check(flintc: &Path, text: &str) -> Vec<Diag> {
                     "compiler unavailable: cannot run {} ({e}). Set FLINT_LSP_FLINTC or pass --flintc <path>.",
                     flintc.display()
                 ),
+                code: String::new(),
             }]
         }
     }
@@ -165,36 +205,40 @@ pub fn check(flintc: &Path, text: &str) -> Vec<Diag> {
 mod tests {
     use super::*;
 
+    const SAMPLE: &str = r#"{"message":"expected expression after '='","code":"E0049","level":"error","spans":[{"file_name":"main.fl","line_start":3,"line_end":3,"column_start":10,"column_end":11,"is_primary":true,"label":""}]}"#;
+
     #[test]
-    fn parses_positioned_parse_error() {
-        let stderr = "error at line 1:11: expected parameter name\n  fn main( {\n            ^\n";
-        let d = parse_stderr(stderr);
+    fn parses_a_positioned_diagnostic() {
+        let d = parse_diagnostics(SAMPLE);
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].line, 0);
-        assert_eq!(d[0].character, 10);
-        assert_eq!(d[0].message, "expected parameter name");
+        assert_eq!(d[0].line, 2);
+        assert_eq!(d[0].character, 9);
+        assert_eq!(d[0].code, "E0049");
+        assert!(d[0].message.contains("expected expression"));
     }
 
     #[test]
-    fn parses_unpositioned_emitter_error() {
-        let d = parse_stderr("codegen: undefined function 'nope'\nfunction body emission failed\n");
-        // Only the `codegen:` line is a diagnostic; the trailing summary line is not.
-        assert_eq!(d.len(), 1);
-        assert_eq!(d[0].line, 0);
-        assert_eq!(d[0].character, 0);
-        assert!(d[0].message.starts_with("emitter: undefined function"));
+    fn ignores_non_json_lines() {
+        // The compiler's summary lines ("function body emission failed")
+        // are not diagnostics.
+        let stderr = format!("{SAMPLE}\nfunction body emission failed\n");
+        let d = parse_diagnostics(&stderr);
+        assert_eq!(d.len(), 1, "only the JSON object is a diagnostic: {d:?}");
     }
 
     #[test]
-    fn ignores_source_echo_and_caret_lines() {
-        let stderr = "error at line 2:5: bad thing\nfn main() {\n    x = )\n    ^\n";
-        let d = parse_stderr(stderr);
-        assert_eq!(d.len(), 1, "only the header line is a diagnostic: {d:?}");
+    fn a_diagnostic_without_a_span_is_reported_at_the_top() {
+        let d = parse_diagnostics(
+            r#"{"message":"cannot open 'x.fl'","code":"E9001","level":"error","spans":[]}"#,
+        );
+        assert_eq!(d.len(), 1);
+        assert_eq!(d[0].line, 0);
+        assert_eq!(d[0].code, "E9001");
     }
 
     #[test]
     fn clean_output_yields_nothing() {
-        assert!(parse_stderr("").is_empty());
+        assert!(parse_diagnostics("").is_empty());
     }
 
     #[test]

@@ -45,7 +45,9 @@ for c in "${CASES[@]}"; do
     # Count the error lines. The driver's "function body emission failed"
     # banner is a consequence, not a second error; LLVM's verifier output
     # ("... does not match ...") IS a second error and must not appear.
-    n=$(printf '%s\n' "$out" | grep -cE '^(codegen:|error at line|error:|[A-Za-z].*does not match|.*Assertion.*failed)')
+    # The diagnostic's own header is "error[E0042]: message" (the code and
+    # the rendered window follow it).
+    n=$(printf '%s\n' "$out" | grep -cE '^(error\[E[0-9]{4}\]:|error at line|error:|[A-Za-z].*does not match|.*Assertion.*failed)')
     if [ "$n" != "1" ]; then
         echo "FAIL $file (expected exactly 1 error line, got $n)"
         printf '%s\n' "$out" | head -6

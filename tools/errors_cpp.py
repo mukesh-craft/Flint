@@ -93,12 +93,51 @@ def arg_text(src, open_paren_idx):
     return ""
 
 
+def arg_texts(src, open_paren_idx):
+    """Return the texts of every top-level argument of a call.
+
+    A diagnostic call is `codegenError("E0042", "message" + x)`: the first
+    argument is the CODE and the second is the message.
+    """
+    # The scan starts AFTER the opening paren, so the depth is 0 for the
+    # arguments themselves.
+    depth, i, in_str, args, cur = 0, open_paren_idx + 1, False, [], []
+    while i < len(src):
+        c = src[i]
+        if in_str:
+            if c == "\\":
+                cur.append(src[i:i+2]); i += 2; continue
+            if c == '"':
+                in_str = False
+            cur.append(c); i += 1; continue
+        if c == '"':
+            in_str = True; cur.append(c); i += 1; continue
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                args.append("".join(cur)); return args
+            depth -= 1
+        elif c == "," and depth == 0:
+            args.append("".join(cur)); cur = []; i += 1; continue
+        cur.append(c); i += 1
+    args.append("".join(cur))
+    return args
+
+
 def patterns(src):
-    """Yield (kind, pattern) for every diagnostic call site."""
+    """Yield (pattern -> {kinds, codes}) for every diagnostic call site."""
     out = {}
     for kind, call in CALLS:
         for m in re.finditer(r"\b" + call + r"\s*\(", src):
-            text = arg_text(src, m.end() - 1)
+            args = arg_texts(src, m.end() - 1)
+            if len(args) < 2:
+                continue
+            code = args[0].strip()
+            if not (code.startswith('"') and code.endswith('"')):
+                continue
+            code = code[1:-1]
+            text = args[1]
             if not text:
                 continue
             parts = split_top_level_plus(text)
@@ -118,7 +157,9 @@ def patterns(src):
             # with spaces around it.
             pattern = re.sub(r"\s*<\.\.\.>\s*", " <...> ", pattern)
             pattern = re.sub(r"\s{2,}", " ", pattern).strip()
-            out.setdefault(pattern, set()).add(kind)
+            entry = out.setdefault(pattern, {"kinds": set(), "codes": set()})
+            entry["kinds"].add(kind)
+            entry["codes"].add(code)
     return out
 
 
@@ -133,11 +174,14 @@ def main():
             # A pattern that itself contains a backtick needs the double
             # backtick fence, or the code span would end early.
             fence = "``" if "`" in p else "`"
-            print("- %s%s%s" % (fence, p, fence))
+            codes = sorted(pats[p]["codes"])
+            code = codes[0] if codes else ""
+            print("- %s%s%s %s" % (fence, code, fence, fence + p + fence))
         print("\nTotal: %d diagnostics." % len(pats))
     else:
         for p in sorted(pats):
-            print(p)
+            codes = sorted(pats[p]["codes"])
+            print((codes[0] + " ") if codes else "", p)
         print("Total: %d" % len(pats))
 
 
