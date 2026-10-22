@@ -163,7 +163,49 @@ else
   bad "the JSON form is emitted" "no JSON object in the output"
 fi
 
-# --- 5. an unknown format is refused -----------------------------------
+# --- 5. the suggestions: a typo gets a near name ------------------------
+# One fixture each: the compiler reports the FIRST error and stops, so
+# the two cases must not share a program.
+cat > "$WORK/typo_fn.fl" <<'FL'
+fn hello() -> i64 { return 1 }
+fn main() {
+    print(helo())
+}
+FL
+out="$(timeout -s KILL 120 "$FLINTC" "$WORK/typo_fn.fl" 2>&1)"
+if printf '%s' "$out" | grep -q 'there is a name with a similar spelling: `hello`'; then
+  ok "a mistyped function gets a suggestion"
+else
+  bad "a mistyped function gets a suggestion" "$(printf '%s' "$out" | head -2 | tr '\n' ' ')"
+fi
+cat > "$WORK/typo_var.fl" <<'FL'
+fn main() {
+    counter = 1
+    print(countr)
+}
+FL
+outv="$(timeout -s KILL 120 "$FLINTC" "$WORK/typo_var.fl" 2>&1)"
+if printf '%s' "$outv" | grep -q 'there is a name with a similar spelling: `counter`'; then
+  ok "a mistyped variable gets a suggestion"
+else
+  bad "a mistyped variable gets a suggestion" "$(printf '%s' "$outv" | head -2 | tr '\n' ' ')"
+fi
+# a name that is NOT close must NOT get a suggestion (a wrong suggestion
+# is worse than none)
+cat > "$WORK/noty.po" <<'FL'
+fn main() {
+    zzzzzzzz = 1
+    print(qqqqqqqq)
+}
+FL
+out2="$(timeout -s KILL 120 "$FLINTC" "$WORK/noty.po" 2>&1)"
+if printf '%s' "$out2" | grep -q 'similar spelling'; then
+  bad "an unrelated name gets no suggestion" "it suggested something"
+else
+  ok "an unrelated name gets no suggestion"
+fi
+
+# --- 6. an unknown format is refused -----------------------------------
 if timeout -s KILL 120 "$FLINTC" --error-format nope "$WORK/bad.fl" >/dev/null 2>&1; then
   bad "an unknown --error-format is refused" "it was accepted"
 else

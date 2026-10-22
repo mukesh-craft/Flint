@@ -47,3 +47,4 @@ compile_commands.json
 
 # benchmark scratch output (tools/bench_tooling.sh run artifacts)
 bench_out/
+tools/__pycache__/
