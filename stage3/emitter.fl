@@ -317,7 +317,7 @@ fn e_lam_walk(bstart: i64, bend: i64) -> i64 {
                     } else {
                         if w == "lambda" {
                             EERR = EERR + 1
-                            print("emit error: lambdas cannot be passed as values")
+                            print("emit error[E0207]: lambdas cannot be passed as values")
                             e_skip_value()
                         } else {
                             if w == "decl" {
@@ -453,7 +453,7 @@ fn e_decl_lambda(nm: str) -> i64 {
                 }
                 if ptc == 0 {
                     EERR = EERR + 1
-                    print("emit error: bad lambda param type")
+                    print("emit error[E0157]: bad lambda param type")
                     print(pn)
                     ok = 0
                 }
@@ -558,7 +558,7 @@ fn e_decl_lambda(nm: str) -> i64 {
                                 ncap = ncap + 1
                             } else {
                                 EERR = EERR + 1
-                                print("emit error: lambda cannot capture unknown")
+                                print("emit error[E0204]: lambda cannot capture unknown")
                                 print(rnm)
                                 cok = 0
                             }
@@ -577,7 +577,7 @@ fn e_decl_lambda(nm: str) -> i64 {
         cn2 = flint_str_substring(ESIGTEXT, flint_vec_get(ELAMCAPO, capbase + ci), flint_vec_get(ELAMCAPO, capbase + ci) + flint_vec_get(ELAMCAPL, capbase + ci))
         if e_lam_mem(ELAMASSIGN, cn2) == 1 {
             EERR = EERR + 1
-            print("emit error: lambda cannot assign to captured")
+            print("emit error[E0203]: lambda cannot assign to captured")
             print(cn2)
             return 0
         }
@@ -653,7 +653,7 @@ fn e_lambda_call(name: str) -> str {
     }
     if samefn == 0 {
         EERR = EERR + 1
-        print("emit error: lambda cannot leave its function")
+        print("emit error[E0205]: lambda cannot leave its function")
         print(name)
         return ""
     }
@@ -687,14 +687,14 @@ fn e_lambda_call(name: str) -> str {
                     flint_sb_append(sb, e_llvm_typecode(want) + " " + cv)
                     ne = ne + 1
                 } else {
-                    print("emit error: lambda arg mismatch calling")
+                    print("emit error[E0202]: lambda arg mismatch calling")
                     print(name)
                     ok = 0
                 }
             } else {
                 e_skip_value()
                 EERR = EERR + 1
-                print("emit error: too many args calling lambda")
+                print("emit error[E0259]: too many args calling lambda")
                 print(name)
                 ok = 0
             }
@@ -709,7 +709,7 @@ fn e_lambda_call(name: str) -> str {
         off = flint_vec_get(EFPOFF, base + ui)
         if off == -1 {
             EERR = EERR + 1
-            print("emit error: missing arg, no default calling lambda")
+            print("emit error[E0221]: missing arg, no default calling lambda")
             print(name)
             ok = 0
             ui = nuser
@@ -724,7 +724,7 @@ fn e_lambda_call(name: str) -> str {
                 flint_sb_append(sb, e_llvm_typecode(want2) + " " + dv)
                 ne = ne + 1
             } else {
-                print("emit error: default type mismatch calling lambda")
+                print("emit error[E0177]: default type mismatch calling lambda")
                 print(name)
                 ok = 0
             }
@@ -1414,7 +1414,7 @@ fn e_array() -> str {
                     e_emit("  store i64 " + v + ", ptr " + ep + "\n")
                 } else {
                     EERR = EERR + 1
-                    print("emit error: only i64 arrays in G3")
+                    print("emit error[E0229]: only i64 arrays in G3")
                     ok = 0
                 }
                 i = i + 1
@@ -1467,7 +1467,7 @@ fn e_array_dynamic() -> str {
                         chunk = se
                     } else {
                         EERR = EERR + 1
-                        print("emit error: spread needs an array")
+                        print("emit error[E0247]: spread needs an array")
                         ok = 0
                     }
                 } else {
@@ -1487,7 +1487,7 @@ fn e_array_dynamic() -> str {
                         chunk = ws1
                     } else {
                         EERR = EERR + 1
-                        print("emit error: only i64 arrays in G7")
+                        print("emit error[E0230]: only i64 arrays in G7")
                         ok = 0
                     }
                 }
@@ -1583,7 +1583,7 @@ fn e_tensor_num() -> str {
                 e_adv()
                 if flint_str_length(raw) == 0 {
                     EERR = EERR + 1
-                    print("emit error: bad tensor number")
+                    print("emit error[E0164]: bad tensor number")
                     ""
                 } else {
                     if flint_str_char_at(raw, flint_str_length(raw) - 1) == 100 {
@@ -1593,7 +1593,7 @@ fn e_tensor_num() -> str {
                 }
             } else {
                 EERR = EERR + 1
-                print("emit error: bad tensor number")
+                print("emit error[E0164]: bad tensor number")
                 ""
             }
         } else {
@@ -1609,18 +1609,18 @@ fn e_tensor_num() -> str {
                     }
                 } else {
                     EERR = EERR + 1
-                    print("emit error: bad tensor negation")
+                    print("emit error[E0163]: bad tensor negation")
                     ""
                 }
             } else {
                 EERR = EERR + 1
-                print("emit error: tensor literals support only f64 numbers and rank<=2 rows")
+                print("emit error[E0256]: tensor literals support only f64 numbers and rank<=2 rows")
                 ""
             }
         }
     } else {
         EERR = EERR + 1
-        print("emit error: tensor literals support only f64 numbers and rank<=2 rows")
+        print("emit error[E0256]: tensor literals support only f64 numbers and rank<=2 rows")
         ""
     }
 }
@@ -1711,12 +1711,12 @@ fn e_tensor() -> str {
                                 e_adv()
                             } else {
                                 EERR = EERR + 1
-                                print("emit error: bad tensor row")
+                                print("emit error[E0165]: bad tensor row")
                                 return ""
                             }
                             if rc == 0 {
                                 EERR = EERR + 1
-                                print("emit error: tensor literal rows must be non-empty all-numeric f64 literal lists")
+                                print("emit error[E0255]: tensor literal rows must be non-empty all-numeric f64 literal lists")
                                 return ""
                             }
                             rows = rows + 1
@@ -1764,12 +1764,12 @@ fn e_tensor() -> str {
                                     e_adv()
                                 } else {
                                     EERR = EERR + 1
-                                    print("emit error: bad tensor row")
+                                    print("emit error[E0165]: bad tensor row")
                                     return ""
                                 }
                                 if rc2 == 0 {
                                     EERR = EERR + 1
-                                    print("emit error: tensor literal rows must be non-empty all-numeric f64 literal lists")
+                                    print("emit error[E0255]: tensor literal rows must be non-empty all-numeric f64 literal lists")
                                     return ""
                                 }
                                 rows = rows + 1
@@ -1785,7 +1785,7 @@ fn e_tensor() -> str {
                                 }
                             } else {
                                 EERR = EERR + 1
-                                print("emit error: tensor literals support only f64 numbers and rank<=2 rows")
+                                print("emit error[E0256]: tensor literals support only f64 numbers and rank<=2 rows")
                                 return ""
                             }
                         }
@@ -1797,24 +1797,24 @@ fn e_tensor() -> str {
     if flatOk == 1 {
         if anyF == 0 {
             EERR = EERR + 1
-            print("emit error: tensor literal needs at least one f64 element")
+            print("emit error[E0254]: tensor literal needs at least one f64 element")
             return ""
         }
         rank = 1
     } else {
         if rowsOk == 0 {
             EERR = EERR + 1
-            print("emit error: tensor literal is neither a flat f64 list nor equal-length f64 rows")
+            print("emit error[E0253]: tensor literal is neither a flat f64 list nor equal-length f64 rows")
             return ""
         } else {
             if rowsEqual == 0 {
                 EERR = EERR + 1
-                print("emit error: ragged tensor literal: all rows must have the same length")
+                print("emit error[E0237]: ragged tensor literal: all rows must have the same length")
                 return ""
             } else {
                 if rowsF == 0 {
                     EERR = EERR + 1
-                    print("emit error: tensor literal needs at least one f64 element")
+                    print("emit error[E0254]: tensor literal needs at least one f64 element")
                     return ""
                 } else {
                     rank = 2
@@ -1901,7 +1901,7 @@ fn e_cast() -> str {
     }
     if want == 0 {
         EERR = EERR + 1
-        print("emit error: bad cast type")
+        print("emit error[E0150]: bad cast type")
         print(ty)
         ""
     } else {
@@ -1917,7 +1917,7 @@ fn e_cast() -> str {
                     t
                 } else {
                     EERR = EERR + 1
-                    print("emit error: bad cast")
+                    print("emit error[E0149]: bad cast")
                     ""
                 }
             } else {
@@ -1966,12 +1966,12 @@ fn e_cast() -> str {
                         f
                     } else {
                         EERR = EERR + 1
-                        print("emit error: bad cast")
+                        print("emit error[E0149]: bad cast")
                         ""
                     }
                 } else {
                     EERR = EERR + 1
-                    print("emit error: as-cast needs i64 or f64 value")
+                    print("emit error[E0147]: as-cast needs i64 or f64 value")
                     ""
                 }
             }
@@ -2014,18 +2014,18 @@ fn e_index() -> str {
             t
         } else {
             EERR = EERR + 1
-            print("emit error: index needs i64")
+            print("emit error[E0201]: index needs i64")
             ""
         }
     } else {
         if ic != 1 {
             EERR = EERR + 1
-            print("emit error: index needs i64")
+            print("emit error[E0201]: index needs i64")
             return ""
         }
         if ac == 6 {
             EERR = EERR + 1
-            print("emit error: map index needs a str key (map keys are strings)")
+            print("emit error[E0211]: map index needs a str key (map keys are strings)")
             return ""
         }
         if ac == 4 {
@@ -2055,7 +2055,7 @@ fn e_index() -> str {
                 t2
             } else {
                 EERR = EERR + 1
-                print("emit error: index needs array or str")
+                print("emit error[E0200]: index needs array or str")
                 ""
             }
         }
@@ -2071,17 +2071,17 @@ fn e_idx_set() -> str {
     vc = ETYPE
     if ac != 4 {
         EERR = EERR + 1
-        print("emit error: idx-set needs array (strings are immutable)")
+        print("emit error[E0195]: idx-set needs array (strings are immutable)")
         return ""
     }
     if ic != 1 {
         EERR = EERR + 1
-        print("emit error: idx-set needs i64 index")
+        print("emit error[E0196]: idx-set needs i64 index")
         return ""
     }
     if vc != 1 {
         EERR = EERR + 1
-        print("emit error: idx-set needs i64 value in G3")
+        print("emit error[E0197]: idx-set needs i64 value in G3")
         return ""
     }
     dp = e_fresh()
@@ -2147,7 +2147,7 @@ fn e_conv(val: str, from: i64, want: i64) -> str {
                             t4
                         } else {
                             EERR = EERR + 1
-                            print("emit error: bad int conversion")
+                            print("emit error[E0156]: bad int conversion")
                             ""
                         }
                     }
@@ -2178,7 +2178,7 @@ fn e_conv(val: str, from: i64, want: i64) -> str {
                                 u3
                             } else {
                                 EERR = EERR + 1
-                                print("emit error: bad to-int conversion")
+                                print("emit error[E0166]: bad to-int conversion")
                                 ""
                             }
                         }
@@ -2193,7 +2193,7 @@ fn e_conv(val: str, from: i64, want: i64) -> str {
                             val
                         } else {
                             EERR = EERR + 1
-                            print("emit error: bad str conversion")
+                            print("emit error[E0161]: bad str conversion")
                             ""
                         }
                     }
@@ -2206,7 +2206,7 @@ fn e_conv(val: str, from: i64, want: i64) -> str {
                                 val
                             } else {
                                 EERR = EERR + 1
-                                print("emit error: bad map conversion")
+                                print("emit error[E0158]: bad map conversion")
                                 ""
                             }
                         }
@@ -2219,13 +2219,13 @@ fn e_conv(val: str, from: i64, want: i64) -> str {
                                     val
                                 } else {
                                     EERR = EERR + 1
-                                    print("emit error: bad handle conversion")
+                                    print("emit error[E0155]: bad handle conversion")
                                     ""
                                 }
                             }
                         } else {
                             EERR = EERR + 1
-                            print("emit error: bad conversion")
+                            print("emit error[E0152]: bad conversion")
                             ""
                         }
                     }
@@ -2243,14 +2243,14 @@ fn e_struct_lit() -> str {
     code = e_ent_lookup(nm)
     if code == -1 {
         EERR = EERR + 1
-        print("emit error: unknown struct")
+        print("emit error[E0272]: unknown struct")
         print(nm)
         return ""
     }
     kk = flint_vec_get(ENTKind, code - 100)
     if kk != 0 {
         EERR = EERR + 1
-        print("emit error: not a struct")
+        print("emit error[E0226]: not a struct")
         print(nm)
         return ""
     }
@@ -2278,14 +2278,14 @@ fn e_struct_lit() -> str {
                 fx = e_ent_field(code, fn2)
                 if fx == -1 {
                     EERR = EERR + 1
-                    print("emit error: unknown field")
+                    print("emit error[E0266]: unknown field")
                     print(fn2)
                     ok = 0
                 } else {
                     dup = e_cov_has(cov0, fx)
                     if dup == 1 {
                         EERR = EERR + 1
-                        print("emit error: duplicate field")
+                        print("emit error[E0179]: duplicate field")
                         print(fn2)
                         ok = 0
                     } else {
@@ -2314,13 +2314,13 @@ fn e_struct_lit() -> str {
                                 matched = matched + 1
                             } else {
                                 EERR = EERR + 1
-                                print("emit error: field type mismatch")
+                                print("emit error[E0187]: field type mismatch")
                                 print(fn2)
                                 ok = 0
                             }
                         } else {
                             EERR = EERR + 1
-                            print("emit error: field type mismatch")
+                            print("emit error[E0187]: field type mismatch")
                             print(fn2)
                             ok = 0
                         }
@@ -2355,7 +2355,7 @@ fn e_struct_lit() -> str {
     } else {
         if matched != n {
             EERR = EERR + 1
-            print("emit error: struct literal missing fields")
+            print("emit error[E0249]: struct literal missing fields")
             print(nm)
             ETYPE = 0
             ""
@@ -2388,19 +2388,19 @@ fn e_field() -> str {
     fn2 = e_word()
     if bc < 100 {
         EERR = EERR + 1
-        print("emit error: field needs a struct")
+        print("emit error[E0186]: field needs a struct")
         return ""
     }
     kk = flint_vec_get(ENTKind, bc - 100)
     if kk != 0 {
         EERR = EERR + 1
-        print("emit error: field needs a struct")
+        print("emit error[E0186]: field needs a struct")
         return ""
     }
     fx = e_ent_field(bc, fn2)
     if fx == -1 {
         EERR = EERR + 1
-        print("emit error: unknown field")
+        print("emit error[E0266]: unknown field")
         print(fn2)
         return ""
     }
@@ -2419,21 +2419,21 @@ fn e_enum_lit() -> str {
     code = e_ent_lookup(en)
     if code == -1 {
         EERR = EERR + 1
-        print("emit error: unknown enum")
+        print("emit error[E0265]: unknown enum")
         print(en)
         return ""
     }
     kk = flint_vec_get(ENTKind, code - 100)
     if kk == 0 {
         EERR = EERR + 1
-        print("emit error: not an enum")
+        print("emit error[E0227]: not an enum")
         print(en)
         return ""
     }
     vx = e_ent_field(code, vn)
     if vx == -1 {
         EERR = EERR + 1
-        print("emit error: unknown variant")
+        print("emit error[E0273]: unknown variant")
         print(vn)
         return ""
     }
@@ -2459,7 +2459,7 @@ fn e_enum_lit_payload(code: i64, kk: i64, vx: i64, vn: str) -> str {
     pb = flint_vec_get(ENFPB, base + vx)
     if kk != 2 {
         EERR = EERR + 1
-        print("emit error: variant takes no payload")
+        print("emit error[E0279]: variant takes no payload")
         print(vn)
         return ""
     }
@@ -2488,14 +2488,14 @@ fn e_enum_lit_payload(code: i64, kk: i64, vx: i64, vn: str) -> str {
                     e_emit("  " + pp + " = getelementptr " + vty + ", ptr " + ev + ", i32 0, i32 " + flint_i64_to_string(j + 1) + "\n")
                     e_emit("  store " + e_llvm_typecode(want) + " " + cv + ", ptr " + pp + "\n")
                 } else {
-                    print("emit error: payload type mismatch")
+                    print("emit error[E0234]: payload type mismatch")
                     print(vn)
                     ok = 0
                 }
                 j = j + 1
             } else {
                 EERR = EERR + 1
-                print("emit error: too many payload args")
+                print("emit error[E0261]: too many payload args")
                 print(vn)
                 ok = 0
                 e_skip_value()
@@ -2509,7 +2509,7 @@ fn e_enum_lit_payload(code: i64, kk: i64, vx: i64, vn: str) -> str {
     } else {
         if j != np {
             EERR = EERR + 1
-            print("emit error: payload count mismatch")
+            print("emit error[E0233]: payload count mismatch")
             print(vn)
             ETYPE = 0
             ""
@@ -2528,7 +2528,7 @@ fn e_match_bind(code: i64, vx: i64, vn: str, nm: str, sa: str) -> i64 {
     np = flint_vec_get(ENFNP, base + vx)
     if np == 0 {
         EERR = EERR + 1
-        print("emit error: cannot bind empty variant")
+        print("emit error[E0171]: cannot bind empty variant")
         print(vn)
         0
     } else {
@@ -2558,7 +2558,7 @@ fn e_unwrap() -> str {
         kk = flint_vec_get(ENTKind, xc - 100)
         if kk == 0 {
             EERR = EERR + 1
-            print("emit error: unwrap needs an enum")
+            print("emit error[E0276]: unwrap needs an enum")
             ""
         } else {
             if kk == 1 {
@@ -2568,12 +2568,12 @@ fn e_unwrap() -> str {
                 cp = e_enum_payload_sig(xc, 1)
                 if np != 1 {
                     EERR = EERR + 1
-                    print("emit error: unwrap needs uniform single payload")
+                    print("emit error[E0277]: unwrap needs uniform single payload")
                     ""
                 } else {
                     if cp == -1 {
                         EERR = EERR + 1
-                        print("emit error: unwrap needs uniform single payload")
+                        print("emit error[E0277]: unwrap needs uniform single payload")
                         ""
                     } else {
                         body = e_llvm_typecode(xc)
@@ -2637,13 +2637,13 @@ fn e_match() -> str {
     sc = ETYPE
     if sc < 100 {
         EERR = EERR + 1
-        print("emit error: match needs an enum in G5")
+        print("emit error[E0216]: match needs an enum in G5")
         return ""
     }
     kk = flint_vec_get(ENTKind, sc - 100)
     if kk == 0 {
         EERR = EERR + 1
-        print("emit error: match needs an enum in G5")
+        print("emit error[E0216]: match needs an enum in G5")
         return ""
     }
     # Tag value: direct for tag enums, extracted for payload enums.
@@ -2671,7 +2671,7 @@ fn e_match() -> str {
     aw = e_word()
     if aw != "arms" {
         EERR = EERR + 1
-        print("emit error: match needs arms")
+        print("emit error[E0217]: match needs arms")
         return ""
     }
     # Pre-create arm + check labels (names only; bodies emit in order).
@@ -2714,7 +2714,7 @@ fn e_match() -> str {
                     pw = e_word()
                     if pw != "pat-var" {
                         EERR = EERR + 1
-                        print("emit error: bad match pattern")
+                        print("emit error[E0159]: bad match pattern")
                         ok = 0
                     }
                     pen = e_word()
@@ -2729,21 +2729,21 @@ fn e_match() -> str {
                     }
                     if pen != ename {
                         EERR = EERR + 1
-                        print("emit error: match arm enum mismatch")
+                        print("emit error[E0214]: match arm enum mismatch")
                         print(pen)
                         ok = 0
                     }
                     vx = e_ent_field(sc, pvn)
                     if vx == -1 {
                         EERR = EERR + 1
-                        print("emit error: unknown variant")
+                        print("emit error[E0273]: unknown variant")
                         print(pvn)
                         ok = 0
                     } else {
                         dup = e_cov_has(cov0, vx)
                         if dup == 1 {
                             EERR = EERR + 1
-                            print("emit error: duplicate match arm")
+                            print("emit error[E0181]: duplicate match arm")
                             print(pvn)
                             ok = 0
                         } else {
@@ -2753,7 +2753,7 @@ fn e_match() -> str {
                     if pbd != "-" {
                         if kk != 2 {
                             EERR = EERR + 1
-                            print("emit error: cannot bind tag-only variant")
+                            print("emit error[E0172]: cannot bind tag-only variant")
                             print(pvn)
                             ok = 0
                         }
@@ -2824,7 +2824,7 @@ fn e_match() -> str {
                                     flint_vec_push(EMATCHD, flint_str_length(inb))
                                 } else {
                                     EERR = EERR + 1
-                                    print("emit error: match arms must agree in type")
+                                    print("emit error[E0215]: match arms must agree in type")
                                     ok = 0
                                 }
                             }
@@ -2866,7 +2866,7 @@ fn e_match() -> str {
         covn = flint_vec_len(EMATCHCOV) - cov0
         if covn != nv {
             EERR = EERR + 1
-            print("emit error: non-exhaustive match")
+            print("emit error[E0225]: non-exhaustive match")
             print(ename)
             ETYPE = 0
             ""
@@ -3288,7 +3288,7 @@ fn e_rt_call(name: str, sig: str) -> str {
                 }
             } else {
                 EERR = EERR + 1
-                print("emit error: too many args calling runtime")
+                print("emit error[E0260]: too many args calling runtime")
                 print(name)
                 ok = 0
             }
@@ -3306,7 +3306,7 @@ fn e_rt_call(name: str, sig: str) -> str {
                 if er2 == esv {
                     flint_sb_append(sb, e_llvm_typecode(want) + " " + cv)
                 } else {
-                    print("emit error: runtime arg mismatch calling")
+                    print("emit error[E0244]: runtime arg mismatch calling")
                     print(name)
                     ok = 0
                 }
@@ -3322,7 +3322,7 @@ fn e_rt_call(name: str, sig: str) -> str {
             qi = qi + 1
         } else {
             EERR = EERR + 1
-            print("emit error: too few args calling runtime")
+            print("emit error[E0257]: too few args calling runtime")
             print(name)
             ok = 0
             qi = n
@@ -3368,12 +3368,12 @@ fn e_map_lit() -> str {
                     e_emit("  call void @flint_map_set(ptr " + m + ", ptr " + k + ", i64 " + v + ")\n")
                 } else {
                     EERR = EERR + 1
-                    print("emit error: map values need i64 in G6")
+                    print("emit error[E0213]: map values need i64 in G6")
                     ok = 0
                 }
             } else {
                 EERR = EERR + 1
-                print("emit error: map keys need str in G6")
+                print("emit error[E0212]: map keys need str in G6")
                 ok = 0
             }
         }
@@ -3417,11 +3417,11 @@ fn e_method_trait(b: str, bc: i64, mn: str) -> str {
     if idx == -1 {
         if ETRMETH.has(mn) == 1 {
             EERR = EERR + 1
-            print("emit error: no type in scope implements")
+            print("emit error[E0223]: no type in scope implements")
             print(mn)
         } else {
             EERR = EERR + 1
-            print("emit error: unknown method")
+            print("emit error[E0269]: unknown method")
             print(mn)
         }
         ETYPE = 0
@@ -3443,7 +3443,7 @@ fn e_method_trait(b: str, bc: i64, mn: str) -> str {
         } else {
             if e_peek() == -1 {
                 EERR = EERR + 1
-                print("emit error: call needs a closing paren")
+                print("emit error[E0170]: call needs a closing paren")
                 print(mn)
                 ETYPE = 0
                 return ""
@@ -3462,7 +3462,7 @@ fn e_method_trait(b: str, bc: i64, mn: str) -> str {
     # more parameter than the call has arguments
     if fixed != nargs + 1 {
         EERR = EERR + 1
-        print("emit error: no type in scope implements")
+        print("emit error[E0223]: no type in scope implements")
         print(mn)
         ETYPE = 0
         return ""
@@ -3472,7 +3472,7 @@ fn e_method_trait(b: str, bc: i64, mn: str) -> str {
     cv = e_conv(b, bc, want0)
     if EERR != esv {
         EERR = EERR + 1
-        print("emit error: method receiver type mismatch")
+        print("emit error[E0219]: method receiver type mismatch")
         print(mn)
         ETYPE = 0
         return ""
@@ -3497,7 +3497,7 @@ fn e_method_arg(want: i64) -> str {
         a
     } else {
         EERR = EERR + 1
-        print("emit error: method arg mismatch")
+        print("emit error[E0218]: method arg mismatch")
         ""
     }
 }
@@ -3563,7 +3563,7 @@ fn e_method_str(b: str, mn: str) -> str {
                                                 e_method_str1(b, "flint_str_char_at", 1, 1)
                                             } else {
                                                 EERR = EERR + 1
-                                                print("emit error: unknown str method")
+                                                print("emit error[E0271]: unknown str method")
                                                 print(mn)
                                                 ""
                                             }
@@ -3618,7 +3618,7 @@ fn e_method_map(b: str, mn: str) -> str {
                         t5
                     } else {
                         EERR = EERR + 1
-                        print("emit error: unknown map method")
+                        print("emit error[E0268]: unknown map method")
                         print(mn)
                         ""
                     }
@@ -3968,7 +3968,7 @@ fn e_infer_init() -> i64 {
                                                             ETYPEMAP.get(vn)
                                                         } else {
                                                             EERR = EERR + 1
-                                                            print("emit error: unknown name in global init")
+                                                            print("emit error[E0270]: unknown name in global init")
                                                             print(vn)
                                                             0
                                                         }
@@ -3980,7 +3980,7 @@ fn e_infer_init() -> i64 {
                                                             if tag == "field" {
                                                                 e_skip_rest()
                                                                 EERR = EERR + 1
-                                                                print("emit error: field global init needs annotation")
+                                                                print("emit error[E0185]: field global init needs annotation")
                                                                 0
                                                             } else {
                                                                 if tag == "bin" {
@@ -4172,7 +4172,7 @@ fn e_scan_global() -> i64 {
         ac = e_ann_code(ty)
         if ac == 0 {
             EERR = EERR + 1
-            print("emit error: bad global type")
+            print("emit error[E0154]: bad global type")
             print(nm)
             return 0
         }
@@ -4181,7 +4181,7 @@ fn e_scan_global() -> i64 {
     if icode == 0 {
         if ty == "-" {
             EERR = EERR + 1
-            print("emit error: void global init")
+            print("emit error[E0281]: void global init")
             print(nm)
             return 0
         }
@@ -4219,7 +4219,7 @@ fn e_emit_prologue_globals() -> i64 {
             if er2 == esv {
                 e_emit("  store " + e_llvm_typecode(gc) + " " + cv + ", ptr @" + gnm + "\n")
             } else {
-                print("emit error: global init mismatch")
+                print("emit error[E0194]: global init mismatch")
                 print(gnm)
                 ok = 0
             }
@@ -4252,17 +4252,17 @@ fn e_slice() -> str {
     rc = ETYPE
     if ac != 4 {
         EERR = EERR + 1
-        print("emit error: slice needs an array in G7")
+        print("emit error[E0246]: slice needs an array in G7")
         return ""
     }
     if lc != 1 {
         EERR = EERR + 1
-        print("emit error: slice bounds need i64")
+        print("emit error[E0245]: slice bounds need i64")
         return ""
     }
     if rc != 1 {
         EERR = EERR + 1
-        print("emit error: slice bounds need i64")
+        print("emit error[E0245]: slice bounds need i64")
         return ""
     }
     dp = e_fresh()
@@ -4333,7 +4333,7 @@ fn e_slice() -> str {
 fn e_var_rd(name: str) -> str {
     if ELAMMAP.has(name) == 1 {
         EERR = EERR + 1
-        print("emit error: lambdas cannot be passed as values")
+        print("emit error[E0207]: lambdas cannot be passed as values")
         print(name)
         return ""
     }
@@ -4343,7 +4343,7 @@ fn e_var_rd(name: str) -> str {
         code = ETYPEMAP.get(name)
     } else {
         EERR = EERR + 1
-        print("emit error: undefined variable")
+        print("emit error[E0264]: undefined variable")
         print(name)
         return ""
     }
@@ -4436,7 +4436,7 @@ fn e_instantiate(name: str, tidx: i64, mangled: str) -> i64 {
             }
             if code == 0 {
                 EERR = EERR + 1
-                print("emit error: generic parameter type is not a type")
+                print("emit error[E0192]: generic parameter type is not a type")
                 print(pname)
                 return 0
             }
@@ -4456,7 +4456,7 @@ fn e_instantiate(name: str, tidx: i64, mangled: str) -> i64 {
     }
     if rcode == 0 {
         EERR = EERR + 1
-        print("emit error: generic return type is not a type")
+        print("emit error[E0193]: generic return type is not a type")
         print(name)
         return 0
     }
@@ -4499,7 +4499,7 @@ fn e_call_template(name: str) -> str {
         } else {
             if e_peek() == -1 {
                 EERR = EERR + 1
-                print("emit error: call needs a closing paren")
+                print("emit error[E0170]: call needs a closing paren")
                 print(name)
                 ETYPE = 0
                 return ""
@@ -4554,7 +4554,7 @@ fn e_call_template(name: str) -> str {
     }
     if infok == 0 {
         EERR = EERR + 1
-        print("emit error: cannot infer type parameter")
+        print("emit error[E0173]: cannot infer type parameter")
         print(failed)
         print(name)
         ETYPE = 0
@@ -4595,7 +4595,7 @@ fn e_call_template(name: str) -> str {
             if er2 == esv {
                 flint_sb_append(sb, e_llvm_typecode(want) + " " + cv)
             } else {
-                print("emit error: arg type mismatch calling")
+                print("emit error[E0145]: arg type mismatch calling")
                 print(name)
                 ok = 0
             }
@@ -4604,7 +4604,7 @@ fn e_call_template(name: str) -> str {
                 flint_sb_append(sb, e_llvm_typecode(ac) + " " + av)
             } else {
                 EERR = EERR + 1
-                print("emit error: too many args calling")
+                print("emit error[E0258]: too many args calling")
                 print(name)
                 ok = 0
             }
@@ -4617,7 +4617,7 @@ fn e_call_template(name: str) -> str {
     if varg == 0 {
         if nargs < fixed {
             EERR = EERR + 1
-            print("emit error: generic call is missing arguments")
+            print("emit error[E0191]: generic call is missing arguments")
             print(name)
             return ""
         }
@@ -4660,7 +4660,7 @@ fn e_call(name: str) -> str {
                             e_emit("  call void @flint_println_i64(i64 " + a + ")\n")
                         } else {
                             EERR = EERR + 1
-                            print("emit error: print needs i64/f64/str in G3")
+                            print("emit error[E0236]: print needs i64/f64/str in G3")
                             print(name)
                         }
                     }
@@ -4691,7 +4691,7 @@ fn e_call(name: str) -> str {
                                 lt3
                             } else {
                                 EERR = EERR + 1
-                                print("emit error: len needs array, str or map")
+                                print("emit error[E0208]: len needs array, str or map")
                                 ""
                             }
                         }
@@ -4702,7 +4702,7 @@ fn e_call(name: str) -> str {
                         rs = e_rt_sig(name)
                         if rs == "" {
                             EERR = EERR + 1
-                            print("emit error: unknown function")
+                            print("emit error[E0267]: unknown function")
                             print(name)
                             ""
                         } else {
@@ -4736,7 +4736,7 @@ fn e_call(name: str) -> str {
                                     if er2 == esv {
                                         flint_sb_append(sb, e_llvm_typecode(want) + " " + cv)
                                     } else {
-                                        print("emit error: arg type mismatch calling")
+                                        print("emit error[E0145]: arg type mismatch calling")
                                         print(name)
                                         ok = 0
                                     }
@@ -4744,14 +4744,14 @@ fn e_call(name: str) -> str {
                                     if varg == 1 {
                                         if ac == 0 {
                                             EERR = EERR + 1
-                                            print("emit error: void variadic arg")
+                                            print("emit error[E0283]: void variadic arg")
                                             ok = 0
                                         } else {
                                             flint_sb_append(sb, e_llvm_typecode(ac) + " " + a)
                                         }
                                     } else {
                                         EERR = EERR + 1
-                                        print("emit error: too many args calling")
+                                        print("emit error[E0258]: too many args calling")
                                         print(name)
                                         ok = 0
                                     }
@@ -4767,7 +4767,7 @@ fn e_call(name: str) -> str {
                             off = flint_vec_get(EFPOFF, base + i)
                             if off == -1 {
                                 EERR = EERR + 1
-                                print("emit error: missing arg, no default calling")
+                                print("emit error[E0220]: missing arg, no default calling")
                                 print(name)
                                 ok = 0
                                 i = fixed
@@ -4781,7 +4781,7 @@ fn e_call(name: str) -> str {
                                 if er3 == esv2 {
                                     flint_sb_append(sb, e_llvm_typecode(want2) + " " + dv)
                                 } else {
-                                    print("emit error: default type mismatch calling")
+                                    print("emit error[E0176]: default type mismatch calling")
                                     print(name)
                                     ok = 0
                                 }
@@ -4942,11 +4942,11 @@ fn e_expr_tagged(tag: str) -> str {
                                                                                                             } else {
                                                                                                                 if tag == "lambda" {
                                                                                                                     EERR = EERR + 1
-                                                                                                                    print("emit error: lambda must be bound")
+                                                                                                                    print("emit error[E0206]: lambda must be bound")
                                                                                                                     ""
                                                                                                                 } else {
                                                                                                                     EERR = EERR + 1
-                                                                                                                    print("emit error: node needs a later group")
+                                                                                                                    print("emit error[E0224]: node needs a later group")
                                                                                                                     print(tag)
                                                                                                                     e_skip_balanced()
                                                                                                                     ""
@@ -5063,7 +5063,7 @@ fn e_decl_value(nm: str, ty: str) -> i64 {
     mut code: i64 = ETYPE
     if code == 0 {
         EERR = EERR + 1
-        print("emit error: void initializer")
+        print("emit error[E0282]: void initializer")
         return 0
     }
     if ty == "-" {
@@ -5148,7 +5148,7 @@ fn e_assign() -> i64 {
     nm = e_word()
     if ELAMMAP.has(nm) == 1 {
         EERR = EERR + 1
-        print("emit error: cannot reassign lambda")
+        print("emit error[E0174]: cannot reassign lambda")
         print(nm)
         return 0
     }
@@ -5156,7 +5156,7 @@ fn e_assign() -> i64 {
     code = ETYPE
     if EMAP.has(nm) == 0 {
         EERR = EERR + 1
-        print("emit error: assign to undeclared")
+        print("emit error[E0148]: assign to undeclared")
         print(nm)
         return 0
     }
@@ -5196,7 +5196,7 @@ fn e_compound() -> i64 {
     nm = e_word()
     if EMAP.has(nm) == 0 {
         EERR = EERR + 1
-        print("emit error: assign to undeclared")
+        print("emit error[E0148]: assign to undeclared")
         print(nm)
         return 0
     }
@@ -5206,7 +5206,7 @@ fn e_compound() -> i64 {
     rc = ETYPE
     if lc != rc {
         EERR = EERR + 1
-        print("emit error: mixed-type binop needs conversion")
+        print("emit error[E0222]: mixed-type binop needs conversion")
         return 0
     }
     mut v: str = ""
@@ -5223,7 +5223,7 @@ fn e_compound() -> i64 {
                     v = e_bin_dispatch(op, l, r, 1)
                 } else {
                     EERR = EERR + 1
-                    print("emit error: bad compound operand")
+                    print("emit error[E0151]: bad compound operand")
                     return 0
                 }
             }
@@ -5251,7 +5251,7 @@ fn e_ref() -> str {
             }
             if EMAP.has(nm) == 0 {
                 EERR = EERR + 1
-                print("emit error: ref of undeclared")
+                print("emit error[E0240]: ref of undeclared")
                 print(nm)
                 return ""
             }
@@ -5264,12 +5264,12 @@ fn e_ref() -> str {
             }
         } else {
             EERR = EERR + 1
-            print("emit error: ref needs a variable in G7")
+            print("emit error[E0239]: ref needs a variable in G7")
             ""
         }
     } else {
         EERR = EERR + 1
-        print("emit error: ref needs a variable in G7")
+        print("emit error[E0239]: ref needs a variable in G7")
         ""
     }
 }
@@ -5295,7 +5295,7 @@ fn e_deref() -> str {
     }
     if okp == 0 {
         EERR = EERR + 1
-        print("emit error: deref needs a pointer")
+        print("emit error[E0178]: deref needs a pointer")
         return ""
     }
     t = e_fresh()
@@ -5331,7 +5331,7 @@ fn e_return() -> i64 {
                 1
             } else {
                 EERR = EERR + 1
-                print("emit error: main must return i64 in G2")
+                print("emit error[E0209]: main must return i64 in G2")
                 0
             }
         } else {
@@ -5347,12 +5347,12 @@ fn e_return() -> i64 {
                         1
                     } else {
                         EERR = EERR + 1
-                        print("emit error: return type mismatch")
+                        print("emit error[E0242]: return type mismatch")
                         0
                     }
                 } else {
                     EERR = EERR + 1
-                    print("emit error: return type mismatch")
+                    print("emit error[E0242]: return type mismatch")
                     0
                 }
             }
@@ -5382,7 +5382,7 @@ fn e_bin(op: str) -> str {
     }
     if lc != rc {
         EERR = EERR + 1
-        print("emit error: mixed-type binop needs conversion")
+        print("emit error[E0222]: mixed-type binop needs conversion")
         return ""
     }
     # G3/G6: string/array ops via runtime. Factored for compound-assign.
@@ -5400,11 +5400,11 @@ fn e_bin(op: str) -> str {
                 } else {
                     if lc == 0 {
                         EERR = EERR + 1
-                        print("emit error: void binop operand")
+                        print("emit error[E0280]: void binop operand")
                         ""
                     } else {
                         EERR = EERR + 1
-                        print("emit error: binop needs numeric/str/array")
+                        print("emit error[E0168]: binop needs numeric/str/array")
                         ""
                     }
                 }
@@ -5438,7 +5438,7 @@ fn e_bin_concat(op: str, l: str, r: str, lc: i64) -> str {
                     e_emit_to_i64(t4)
                 } else {
                     EERR = EERR + 1
-                    print("emit error: strings support only +/==/!= in G6")
+                    print("emit error[E0248]: strings support only +/==/!= in G6")
                     ""
                 }
             }
@@ -5451,7 +5451,7 @@ fn e_bin_concat(op: str, l: str, r: str, lc: i64) -> str {
             t5
         } else {
             EERR = EERR + 1
-            print("emit error: arrays support only + in G3")
+            print("emit error[E0146]: arrays support only + in G3")
             ""
         }
     }
@@ -6155,7 +6155,7 @@ fn e_if_expr() -> str {
     ECUR = mb
     if t1c != t2c {
         EERR = EERR + 1
-        print("emit error: if-expr arms must match types in G1")
+        print("emit error[E0199]: if-expr arms must match types in G1")
         return ""
     }
     mut ty: str = "i64"
@@ -6187,7 +6187,7 @@ fn e_block_single_expr() -> str {
             v
         } else {
             EERR = EERR + 1
-            print("emit error: if-expr arms must be single expressions in G1")
+            print("emit error[E0198]: if-expr arms must be single expressions in G1")
             e_skip_balanced()
             ""
         }
@@ -6216,7 +6216,7 @@ fn e_for() -> i64 {
         }
     } else {
         EERR = EERR + 1
-        print("emit error: for needs an iterator")
+        print("emit error[E0189]: for needs an iterator")
         return 0
     }
     cb = e_label("for.cond.")
@@ -6230,12 +6230,12 @@ fn e_for() -> i64 {
         bc = ETYPE
         if ac != 1 {
             EERR = EERR + 1
-            print("emit error: range bounds need i64")
+            print("emit error[E0238]: range bounds need i64")
             return 0
         }
         if bc != 1 {
             EERR = EERR + 1
-            print("emit error: range bounds need i64")
+            print("emit error[E0238]: range bounds need i64")
             return 0
         }
         e_skip()
@@ -6308,7 +6308,7 @@ fn e_for() -> i64 {
         if itc != 4 {
             if itc != 3 {
                 EERR = EERR + 1
-                print("emit error: for needs range, array or str")
+                print("emit error[E0190]: for needs range, array or str")
                 return 0
             }
         }
@@ -6572,7 +6572,7 @@ fn e_scan_struct() -> i64 {
     lk = e_ent_lookup(nm)
     if lk != -1 {
         EERR = EERR + 1
-        print("emit error: duplicate type")
+        print("emit error[E0183]: duplicate type")
         print(nm)
         return 0
     }
@@ -6611,14 +6611,14 @@ fn e_scan_struct() -> i64 {
                 ftc = e_ann_code(ft)
                 if ftc == 0 {
                     EERR = EERR + 1
-                    print("emit error: bad struct field type")
+                    print("emit error[E0162]: bad struct field type")
                     print(fn2)
                     ok = 0
                 }
                 fx = e_ent_field(code, fn2)
                 if fx != -1 {
                     EERR = EERR + 1
-                    print("emit error: duplicate struct field")
+                    print("emit error[E0182]: duplicate struct field")
                     print(fn2)
                     ok = 0
                 }
@@ -6712,7 +6712,7 @@ fn e_scan_enum() -> i64 {
     lk = e_ent_lookup(nm)
     if lk != -1 {
         EERR = EERR + 1
-        print("emit error: duplicate type")
+        print("emit error[E0183]: duplicate type")
         print(nm)
         return 0
     }
@@ -6749,7 +6749,7 @@ fn e_scan_enum() -> i64 {
                 vx = e_ent_field(code, vn)
                 if vx != -1 {
                     EERR = EERR + 1
-                    print("emit error: duplicate variant")
+                    print("emit error[E0184]: duplicate variant")
                     print(vn)
                     ok = 0
                 }
@@ -6764,7 +6764,7 @@ fn e_scan_enum() -> i64 {
                     } else {
                         if e_peek() == 40 {
                             EERR = EERR + 1
-                            print("emit error: bad payload type")
+                            print("emit error[E0160]: bad payload type")
                             print(vn)
                             ok = 0
                             e_skip_balanced()
@@ -6773,7 +6773,7 @@ fn e_scan_enum() -> i64 {
                             ptc = e_ann_code(pt)
                             if ptc == 0 {
                                 EERR = EERR + 1
-                                print("emit error: bad payload type")
+                                print("emit error[E0160]: bad payload type")
                                 print(vn)
                                 ok = 0
                             } else {
@@ -7129,7 +7129,7 @@ fn e_while() -> i64 {
 fn e_break() -> i64 {
     if EBREAK == "" {
         EERR = EERR + 1
-        print("emit error: break outside loop")
+        print("emit error[E0169]: break outside loop")
         return 0
     }
     e_emit("  br label %" + EBREAK + "\n")
@@ -7139,7 +7139,7 @@ fn e_break() -> i64 {
 fn e_continue() -> i64 {
     if ECONT == "" {
         EERR = EERR + 1
-        print("emit error: continue outside loop")
+        print("emit error[E0175]: continue outside loop")
         return 0
     }
     e_emit("  br label %" + ECONT + "\n")
@@ -7349,7 +7349,7 @@ fn e_fn_decl_body() -> i64 {
     idx = e_sig_lookup(nm)
     if idx == -1 {
         EERR = EERR + 1
-        print("emit error: unscanned declaration")
+        print("emit error[E0274]: unscanned declaration")
         print(nm)
         return 0
     }
@@ -7455,7 +7455,7 @@ fn e_form() -> i64 {
                                         r = 1
                                     } else {
                                         EERR = EERR + 1
-                                        print("emit error: bad top-level form")
+                                        print("emit error[E0167]: bad top-level form")
                                         print(tag)
                                         e_skip_balanced_fn()
                                         r = 0
@@ -7487,7 +7487,7 @@ fn e_emit_extern() -> i64 {
     lang = e_word()
     if lang != "\"C\"" {
         EERR = EERR + 1
-        print("emit error: only extern C supported")
+        print("emit error[E0228]: only extern C supported")
         return 0
     }
     mut go: i64 = 1
@@ -7508,7 +7508,7 @@ fn e_emit_extern() -> i64 {
                     }
                 } else {
                     EERR = EERR + 1
-                    print("emit error: bad extern member")
+                    print("emit error[E0153]: bad extern member")
                     ok = 0
                 }
                 ex2 = e_expect(41)
@@ -7542,7 +7542,7 @@ fn e_fn_body() -> i64 {
     idx = e_sig_lookup(nm)
     if idx == -1 {
         EERR = EERR + 1
-        print("emit error: unscanned function")
+        print("emit error[E0275]: unscanned function")
         print(nm)
         return 0
     }
@@ -7613,7 +7613,7 @@ fn e_fn_body() -> i64 {
     if ismain == 1 {
         if n != 0 {
             EERR = EERR + 1
-            print("emit error: main takes no params in G2")
+            print("emit error[E0210]: main takes no params in G2")
             return 0
         }
         EMAINDONE = 1
@@ -7719,7 +7719,7 @@ fn e_fn_body() -> i64 {
                             1
                         } else {
                             EERR = EERR + 1
-                            print("emit error: main must return i64 in G2")
+                            print("emit error[E0209]: main must return i64 in G2")
                             0
                         }
                     } else {
@@ -7742,12 +7742,12 @@ fn e_fn_body() -> i64 {
                                         1
                                     } else {
                                         EERR = EERR + 1
-                                        print("emit error: return type mismatch")
+                                        print("emit error[E0242]: return type mismatch")
                                         0
                                     }
                                 } else {
                                     EERR = EERR + 1
-                                    print("emit error: return type mismatch")
+                                    print("emit error[E0242]: return type mismatch")
                                     0
                                 }
                             }
@@ -7897,14 +7897,14 @@ fn e_scan_param(fnidx: i64) -> i64 {
             1
         } else {
             EERR = EERR + 1
-            print("emit error: variadic must be last param")
+            print("emit error[E0278]: variadic must be last param")
             0
         }
     } else {
         vv = flint_vec_get(EFNVAR, fnidx)
         if vv == 1 {
             EERR = EERR + 1
-            print("emit error: param after variadic")
+            print("emit error[E0231]: param after variadic")
             print(nm)
             0
         } else {
@@ -7915,7 +7915,7 @@ fn e_scan_param(fnidx: i64) -> i64 {
             }
             if tc == 0 {
                 EERR = EERR + 1
-                print("emit error: param type needs G3+")
+                print("emit error[E0232]: param type needs G3+")
                 print(nm)
                 0
             } else {
@@ -8023,7 +8023,7 @@ fn e_scan_template(nm: str, tp: str) -> i64 {
         } else {
             if e_peek() == -1 {
                 EERR = EERR + 1
-                print("emit error: template parameters need a closing paren")
+                print("emit error[E0252]: template parameters need a closing paren")
                 print(nm)
                 return 0
             } else {
@@ -8064,14 +8064,14 @@ fn e_scan_template(nm: str, tp: str) -> i64 {
                         e_adv()
                     } else {
                         EERR = EERR + 1
-                        print("emit error: template parameter needs a closing paren")
+                        print("emit error[E0250]: template parameter needs a closing paren")
                         print(nm)
                         return 0
                     }
                     n = n + 1
                 } else {
                     EERR = EERR + 1
-                    print("emit error: template parameter needs a name")
+                    print("emit error[E0251]: template parameter needs a name")
                     print(nm)
                     return 0
                 }
@@ -8104,7 +8104,7 @@ fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
     nm = e_word()
     if nm == "print" {
         EERR = EERR + 1
-        print("emit error: print is reserved")
+        print("emit error[E0235]: print is reserved")
         return 0
     }
     lk = e_sig_lookup(nm)
@@ -8121,7 +8121,7 @@ fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
             return 1
         }
         EERR = EERR + 1
-        print("emit error: duplicate function")
+        print("emit error[E0180]: duplicate function")
         print(nm)
         return 0
     }
@@ -8178,7 +8178,7 @@ fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
             flint_vec_set(EFNRET, fnidx, 1)
         } else {
             EERR = EERR + 1
-            print("emit error: return annotation needed in G2")
+            print("emit error[E0241]: return annotation needed in G2")
             print(nm)
             return 0
         }
@@ -8186,7 +8186,7 @@ fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
         rc = e_ann_code(ret)
         if rc == 0 {
             EERR = EERR + 1
-            print("emit error: return type needs G3+")
+            print("emit error[E0243]: return type needs G3+")
             print(nm)
             return 0
         }
@@ -8198,7 +8198,7 @@ fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
             e_skip_balanced()
         } else {
             EERR = EERR + 1
-            print("emit error: fn body must be a block")
+            print("emit error[E0188]: fn body must be a block")
             print(nm)
             return 0
         }
@@ -8211,7 +8211,7 @@ fn e_scan_extern() -> i64 {
     lang = e_word()
     if lang != "\"C\"" {
         EERR = EERR + 1
-        print("emit error: only extern C supported")
+        print("emit error[E0228]: only extern C supported")
         return 0
     }
     mut go: i64 = 1
@@ -8231,7 +8231,7 @@ fn e_scan_extern() -> i64 {
                     }
                 } else {
                     EERR = EERR + 1
-                    print("emit error: bad extern member")
+                    print("emit error[E0153]: bad extern member")
                     print(tag)
                     return 0
                 }
@@ -8279,13 +8279,13 @@ fn e_scan_trait() -> i64 {
                         e_adv()
                     } else {
                         EERR = EERR + 1
-                        print("emit error: trait method needs a closing paren")
+                        print("emit error[E0262]: trait method needs a closing paren")
                         return 0
                     }
                     ETRMETH.set(mn, 1)
                 } else {
                     EERR = EERR + 1
-                    print("emit error: trait method needs a name")
+                    print("emit error[E0263]: trait method needs a name")
                     return 0
                 }
             }
@@ -8333,7 +8333,7 @@ fn e_scan_form() -> i64 {
                                         r = e_scan_trait()
                                     } else {
                                         EERR = EERR + 1
-                                        print("emit error: bad top-level form")
+                                        print("emit error[E0167]: bad top-level form")
                                         print(tag)
                                         e_skip_balanced_fn()
                                         r = 0
