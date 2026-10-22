@@ -45,7 +45,7 @@ next action is. It is the first thing to read and the first thing to update.
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
 | last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution** (the pipeline now compiles trait programs) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **§11.4 step 3-5: the suggestions (Levenshtein), the error poisoning, and the same structured diagnostics in the PIPELINE** (the C++ compiler's side landed: spans ✓, codes ✓, labels ✓, the rendered window ✓, the JSON stream ✓, and the LSP reads the JSON ✓). Then the C++ query mode (the last 2E item ✓) and the three cheap items the optimizer / LSP review found (§4.7.1) ✓ | (the first item of the research plan ✓ — cheap ✓, unblocks the LSP ✓, and it is the interface the C→Flint transpiler needs ✓). Then the C++ query mode (the last 2E item: the pipeline should consume the C++ compiler's answers instead of re-deriving them ✓ — see `docs/PIPELINE-GENERICS.md` §5), and the three cheap items the optimizer / LSP review found (§4.7.1): compile the pipeline's IR with `-O2` in the gates and measure; give the LSP the nine missing builtins (`print` among them) and the codegen diagnostic position. The trait form and its resolution are DONE (2E.3/2E.4 ✓); the explicit `::<T>` call syntax is still a stage2 gap ✓. |
+| next action | **the S-expression gets positions** (the last piece of §11.4: the emitter's diagnostics can name the construct but not the LINE ✓ — putting the positions in the S-expression is a format change: both frontends, the goldens, the ladder ✓). Then the error poisoning, the C++ query mode (the last 2E item ✓) and the three cheap items the optimizer / LSP review found (§4.7.1) ✓ | (the first item of the research plan ✓ — cheap ✓, unblocks the LSP ✓, and it is the interface the C→Flint transpiler needs ✓). Then the C++ query mode (the last 2E item: the pipeline should consume the C++ compiler's answers instead of re-deriving them ✓ — see `docs/PIPELINE-GENERICS.md` §5), and the three cheap items the optimizer / LSP review found (§4.7.1): compile the pipeline's IR with `-O2` in the gates and measure; give the LSP the nine missing builtins (`print` among them) and the codegen diagnostic position. The trait form and its resolution are DONE (2E.3/2E.4 ✓); the explicit `::<T>` call syntax is still a stage2 gap ✓. |
 | then | the escape analysis for closures that DO capture (2D.2), and the region work (2D.3) |
 | build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
 | gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
@@ -1423,6 +1423,34 @@ catalog · `46a007e` binary-size fix · `c69d421` assessment ·
 ---
 
 ## 11. The plan from the 2026-10-21 research pass — POINTER
+
+### 11.5a What landed on 2026-10-21/22 (the diagnostics overhaul, §11.4)
+
+The first item of the plan is DONE for both compilers' *codes* and for
+the C++ compiler's *structure*:
+
+| piece | state |
+|---|---|
+| the Diagnostic structure (span, code, level, labels, help, notes) | **done** — one structure, two renderings ✓ |
+| the rendered window (rustc's shape: the header, the `-->`, the gutter, the source line, the `^^^`/`---` underlines) | **done** ✓ |
+| the JSON stream (`--error-format json`, one object per line) | **done** ✓ — rustc's `--error-format json` shape ✓ |
+| the stable codes | **done** — 144 for the C++ compiler, 139 for the emitter, in ONE space (no two diagnostics in the project share a code) ✓ |
+| the code tables | **done** — `docs/error-codes.csv`, `docs/error-codes-pipeline.csv` ✓ |
+| the gate | **done** — `tests/test_diagnostic_codes.sh` (16 checks ✓) ✓ |
+| the suggestions (Levenshtein) | **done** — "there is a name with a similar spelling: `counter`" ✓ (rustc's wording: a statement, not a question ✓) |
+| the LSP reads the JSON | **done** — and it never fakes an all-clear ✓ |
+| the error poisoning | **not done** — the parser reports the FIRST error and stops ✓; the codegen's cascade is not suppressed ✓ |
+| the pipeline's SPANS | **not done** — the parser could have one ✓ (it knows the token's position) but the emitter cannot: the S-expression carries no positions ✓. Putting them in is a format change (both frontends, the goldens, the ladder) ✓ — the next step ✓ |
+| the `help:` with a suggested FIX (a span + a replacement) | **not done** — the help line suggests a NAME ✓, not a patch ✓ |
+
+**The cost, measured:** the compiler's own binary grew ~22 KB ✓; the
+COMPILED program's size is unchanged ✓ (8,048 B raw ✓ — the size story
+is about the artifact ✓).
+
+**What this moves on the score (§12.3):** the DX item (66 → ~72 ✓ —
+the diagnostics overhaul is its biggest part ✓) and the LSP item (42 →
+~48 ✓ — the positions are now correct ✓ and the codes are quotable ✓).
+The ecosystem does not move ✓ (it is not an engineering item ✓).
 
 **The full text is in `memory.md`** ("The 2026-10-21 research pass +
 peer-comparison plan", at the end of the file) ✓.
