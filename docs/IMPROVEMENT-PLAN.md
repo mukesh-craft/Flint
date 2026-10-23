@@ -1,4 +1,11 @@
-# Flint — Research & Improvement Plan
+# Flint — Research & Improvement Plan (ARCHIVE)
+
+> **ARCHIVED 2026-10-23.** This is the measurement report of 2026-10-03,
+> kept because its numbers and root causes are evidence. It is **not the
+> current plan**: the live queue is `STATE.md` §4, the research assessment
+> is `docs/LANGUAGE-ROADMAP.md`, and the historical phase log is
+> `ROADMAP.md`. Several findings below have since been fixed (the link
+> regression, the opaque bounds checks); read them as history, not status.
 
 **Date:** 2026-10-03 · **Device:** Termux AArch64, LLVM 21.1.8, 3.6 GB RAM
 **Method:** every number below was measured or read in this tree. Web claims are cited.

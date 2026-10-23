@@ -10,10 +10,12 @@ Companion documents, and what each is for:
 | file | purpose | read it when |
 |---|---|---|
 | `STATE.md` (this file) | the continuation document: state, recipes, open items, decisions, traps | **always, first** |
-| `memory.md` | the project ledger: the 2026-09/10 audit (bug table B1–B9), milestone specs, per-session addenda | looking up *why* a decision was made |
-| `docs/LANGUAGE-ROADMAP.md` | the 30-section assessment and roadmap (claims tagged [M]/[P]/[D]/…) | planning work; do not edit the evidence in it |
+| `memory.md` | the project ledger: the 2026-09/10 audit (bug table B1–B9), milestone specs, per-session addenda, the full text of the long plans | looking up *why* a decision was made |
+| `docs/INDEX.md` | the map: which document owns which fact (one fact, one home) | before adding or moving documentation |
+| `docs/LANGUAGE-ROADMAP.md` | the 30-section assessment and roadmap (claims tagged [M]/[P]/[D]/…), the score table (§28) | planning work; do not edit the evidence in it |
 | `COMPATIBILITY.md` | C++ vs self-host divergence log (D1–D5) | touching the self-host pipeline |
-| `docs/errors-cpp.md` | the 135 catalogued C++ compiler diagnostics | touching diagnostics |
+| `docs/PIPELINE-GENERICS.md` | the pipeline's generics/trait contract and known deviations | touching stage2/stage3 |
+| `docs/errors-cpp.md`, `docs/errors.md` | the two diagnostic catalogues (C++ and self-hosted) | touching diagnostics |
 
 ---
 
@@ -45,8 +47,8 @@ next action is. It is the first thing to read and the first thing to update.
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
 | last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution** (the pipeline now compiles trait programs) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **the S-expression gets positions** (the last piece of §11.4: the emitter's diagnostics can name the construct but not the LINE ✓ — putting the positions in the S-expression is a format change: both frontends, the goldens, the ladder ✓). Then the error poisoning, the C++ query mode (the last 2E item ✓) and the three cheap items the optimizer / LSP review found (§4.7.1) ✓ | (the first item of the research plan ✓ — cheap ✓, unblocks the LSP ✓, and it is the interface the C→Flint transpiler needs ✓). Then the C++ query mode (the last 2E item: the pipeline should consume the C++ compiler's answers instead of re-deriving them ✓ — see `docs/PIPELINE-GENERICS.md` §5), and the three cheap items the optimizer / LSP review found (§4.7.1): compile the pipeline's IR with `-O2` in the gates and measure; give the LSP the nine missing builtins (`print` among them) and the codegen diagnostic position. The trait form and its resolution are DONE (2E.3/2E.4 ✓); the explicit `::<T>` call syntax is still a stage2 gap ✓. |
-| then | the escape analysis for closures that DO capture (2D.2), and the region work (2D.3) |
+| next action | **finish Phase 2A**: (1) fix the 21-case tensor-literal drift so `--type-audit` is 0/0; (2) land the checker phase (`TypeChecker` between imports and codegen, structured `E0290+` diagnostics, `--no-type-check` for the differential gate); (3) add the resolved-trait and instantiated-type-argument facts to `CallExprAST` and print them from `--type-audit`; (4) gate all of it (§4.2 has the acceptance criteria) |
+| then | the C++ query mode (the last 2E item, `docs/PIPELINE-GENERICS.md` §5), the pipeline's S-expression positions, the escape analysis for capturing closures (2D.2), the region work (2D.3) |
 | build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
 | gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
@@ -65,24 +67,16 @@ toolchain.** The C++ compiler (`src/main.cpp`, ~13K lines) is authoritative;
 a self-hosted Flint pipeline (stage1/2/3) exists as the bootstrap ladder.
 
 Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
-1.99.1, Python 3.14.6) — reproduce with §2.3:
+1.99.1, Python 3.14.6). **The five-language comparison table lives in
+[`docs/LANGUAGE-ROADMAP.md`](docs/LANGUAGE-ROADMAP.md) §0.1** (with the
+controls and the per-workload method); this file does not repeat it.
+Reproduce with §2.3.
 
-| workload | Flint | C | C++ | Rust | Python |
-|---|---|---|---|---|---|
-| sum_array 10M | **12.0 ms** | 8.3 ms | 8.7 ms | 8.2 ms | 178.4 ms |
-| primes 10M | **451 ms** | 191 ms | 184 ms | 193 ms | 2046 ms |
-| fib(45) | 12.9 s | 9.6 s | 9.3 s | 8.9 s | 579 s |
-| pi 100M | 779 ms | 783 ms | 778 ms | 779 ms | 97.8 s |
-| hello-world, stripped | 4,536 B | 4,368 B | 4,416 B | 339,656 B | ~276 MB stdlib |
-| build time (hello, cold) | 144 ms | 439 ms | 404 ms | 674 ms | — |
-| cold start (hello) | 37 ms | 33 ms | 39 ms | 42 ms | 150 ms |
-| dynamic deps (hello) | libc only | libc+libm | libc+libm | libc | — |
-
-All 21 test suites green at HEAD (`bc6b747`): smoke 48, lexdiff 131,
-parse_gate 132, fixpoint 132, errors 128/128, errors-cpp 135/135,
-differential 11/11, generics 7, no-hang 88, AI 26, rust-stdlib 20, rust-ffi
-8, rust-oracle 2, https, python, lsp, fmt, opt-identity, cache,
-fuzz-corpus, aegis, driver, tutorial, registry.
+**The whole battery is green: 36 gates, 764 assertions** (measured
+2026-10-21, HEAD `59c3e65`; the per-gate table is §2.2). The v1 subset runs
+as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 19/19).
+The two frontends are compared by the differential gate (13/13) and the
+bootstrap's fixed point is byte-identical.
 
 ---
 
@@ -284,281 +278,67 @@ still open; "done" is the observable state that closes it.
 
 ### 4.2 P0 — Phase 2: a type checker and a typed HIR (REVISED 2026-10-20)
 
-**Read this before starting Phase 2.** The first draft of this item said
-"add a typed HIR/MIR". The research pass (below) and a red-team pass on
-that draft found it was **vague in a way that would have wasted weeks**:
+**Read this before starting.** The first draft said "add a typed HIR/MIR".
+A red-team pass found that vague in a way that would have wasted weeks:
 
-- Flint has **no type checker**. Types are guessed in ~6 places
+- Flint had **no type checker**. Types were guessed in ~6 places
   (`exprFlintType`, `emitVarDecl`'s ladder, `inferGenericArgType`,
-  `typeMangleTag`, the annotation checks). A "typed HIR" that merely records
-  those guesses would be a typed tree full of lies — and the M2c work
-  (removing the silent i64 defaults) is evidence of how wrong the guesses
-  were. **So the first deliverable is a real type checker, not a data
-  structure.**
-- The **self-host pipeline cannot consume such an HIR yet**: stage2/stage3
-  have no generics at all (measured: 0 `typeParams`), so they cannot even
-  *express* an HIR with generic parameters. The pipeline converges **after**
-  the C++ side, if at all (§4.9).
-- The **LSP is in Rust, the compiler in C++**. "Share the HIR" is not free
-  and not automatic — it is a decision (see §4.7 and the decision list).
-- **Checks are code today**, emitted inline. They must become *data*
-  (IR-level operations) before a profile or an analysis can remove them.
-- A full **SSA MIR is a backend rewrite** — the thing we must not do. A
-  typed HIR plus a side CFG (for region inference only) is enough.
+  `typeMangleTag`, the annotation checks). A "typed HIR" that merely
+  recorded those guesses would be a typed tree full of lies. **The first
+  deliverable is a real checker, not a data structure.**
+- Checks are **code today**, emitted inline. They must become *data*
+  before an analysis can remove them (2B).
+- A full **SSA MIR is a backend rewrite** — the thing we must not do.
+  A typed HIR plus a side CFG (for region inference only) is enough.
 
-**The revised plan, in delivery order** (each step independently gated and
-shippable; the full design is in `docs/LANGUAGE-ROADMAP.md` §13/§27, the
-research behind it in §6.11):
+**The delivery order** (each step independently gated; the long design is
+`docs/LANGUAGE-ROADMAP.md` §13/§27, the research §6.11):
 
-| step | deliverable | gate |
+| step | deliverable | status (2026-10-23) |
 |---|---|---|
-| **2A.0** | a **type checker** for the subset that is decidable today: local variable declarations, function signatures, literal types | it must AGREE with the compiler's current behaviour on the whole corpus (a differential gate) — and the gate must also report where the current guesses are WRONG, which turns it into a bug-finder. **STARTED**: the `flintc --type-audit` half of it is done (see below) |
-| **2A.1** | **types carry facts**: an array's *length* when it is known (literals), the resolved trait for a call, the instantiated type arguments | a fact is only used when it is exact; a wrong fact must be impossible by construction |
-| **2B** | **checks become IR-level operations** (a bounds check and an overflow check as explicit operations, not inline compare+branch) | the profile decides insertion (safe/unsafe), and an analysis can drop an operation that is proven unnecessary |
-| **2C** | **analyses on the HIR**: range/length analysis (static bounds proofs), then escape analysis (Swift's criteria: does not escape + uses post-dominate the allocation) | a check that cannot be proven is KEPT — the safe direction; a failed closure promotion produces a *diagnostic saying why* |
-| **2D** | **regions** (NLL-style, from the CFG) → escaping closures | deferred until 2C's escape analysis exists; they are the same machinery |
-| **2E** | **the pipeline consumes the same semantics** (D5) | only after the language features the HIR needs exist in the pipeline |
+| **2A.0** | a **type checker** for the decidable subset (annotated declarations, function signatures, literal types), with `--type-audit` as its differential instrument | audit + one inference engine landed (`b75e4c7`, `f0441df`); **the checking phase is the remaining 2A item** |
+| **2A.1** | **types carry facts**: an array's exact length, the resolved trait for a call, the instantiated type arguments | length landed (`42b3a04`, `2b45516`); trait/type-arg facts are the remaining 2A item |
+| **2B** | **checks become IR-level operations** (bounds/overflow as explicit ops) | landed (`37d9b8b`): `SafetyPolicy`, counted and gated |
+| **2C** | **analyses**: loop-range facts, then escape analysis | loop-range landed (`a7c6e2b`); escape analysis open (2D.2) |
+| **2D** | **regions** (NLL-style from the CFG) → escaping closures | partial (`57db1a4`): capture-less values may escape; capturing closures still cannot |
+| **2E** | **the pipeline consumes the same semantics** (D5) | mostly (`16adde0`, `48c12d5`, `317566b`): rename, monomorphizer, traits; `::<T>` and the query mode open |
 
-**First slice LANDED (2026-10-20, commit 42b3a04):** step 2A.1's length
-fact. A type may carry FACTS, not just a kind (k2's idea). The fact is
-the EXACT length of an array value, as an SSA value: a constant for a
-literal initializer, and the argument of the `flint_array_alloc` call
-otherwise (the runtime sets `len: n`).
+**What "finish 2A" means** (the acceptance criteria, not a vibe):
 
-- **Win, measured**: the bounds check used to compare the index against
-  the length LOADED FROM THE SLICE while the loop bound was a different
-  value, so LLVM could not relate them and the check survived in every
-  loop (3 of 6 checks survive in `sum_array`). With the fact the check
-  compares against the same value the loop uses, and LLVM folds it: a
-  literal array goes from 4 surviving checks to 0, and a runtime array
-  accessed with `arr[i]` produces **0 bounds-check calls** in the final
-  IR.
-- **Safety**: a fact is used only when its value DOMINATES the use (a
-  DominatorTree check — a value from inside a loop is not available after
-  the loop, and using it would be invalid IR); the R2 BCE-lite proof is
-  implemented for real (a literal index into a literal-length array is
-  provably in bounds); a fact is CLEARED on assignment; and an
-  out-of-range literal index still TRAPS (gate
-  `tests/test_bounds_safety.sh`).
-- **The builtin form was then wired to the fact (commit 2b45516) — and
-  that is where the win came from.** The shared array cores take VALUES,
-  so the fact (which lives on the binding) never reached them; the AST
-  call site now looks the argument up and passes it along. Measured:
+1. **The checker runs as a compiler phase** — after parse + imports, before
+   codegen. It rejects a *provable* type error with a structured diagnostic
+   (span + code + `help`), and it never reaches LLVM verification.
+2. **It never rejects a program the compiler accepts.** The oracle is the
+   compiler on the corpus: the gate runs both paths (`--no-type-check` vs
+   default) over every `.fl` in the tree and requires identical accept/reject
+   decisions.
+3. **The audit's drift is zero.** An annotated declaration is a contract; an
+   inferred one is a guess. `--type-audit` reports both; the corpus must show
+   **0 contract violations and 0 inferred drifts** before 2A is called done.
+4. **The facts are inspectable.** `--type-audit` prints the instantiated type
+   arguments and the resolved trait/impl for the calls that have them, and a
+   gate checks the printed facts against the fixture's source.
 
-  | workload | before | after | gap to C |
-  |---|---|---|---|
-  | sum_array 10M | 19.1 ms | **12.0 ms** (-37 %) | 1.89x -> **1.44x** |
-  | primes 10M | 495 ms | **451 ms** (-9 %) | see the note below |
-  | bounds-check calls in sum_array's final IR | 3 | **0** | - |
+**Landed evidence (the short version; detail is in `memory.md`):**
 
-  primes' relative gap looks worse only because the C baseline moved in
-  that run (220 -> 191 ms); its absolute number improved.
+- **One inference engine** (`f0441df`): each builtin's Flint type is derived
+  at registration (`gBuiltinTypes`), so the parser and the codegen cannot
+  drift on a builtin; the parser learned user-call returns, field access,
+  float arithmetic and a declaration pre-pass. Drift **178 → 21 → 0**
+  (the last 21 were the tensor-literal rule, fixed in 2A's completion).
+- **The length fact** (`42b3a04`, `2b45516`): the bounds check compares the
+  index against the same value the loop uses. `sum_array` 10M **19.1 →
+  12.0 ms** (1.89× → 1.44× of C), **0 bounds-check calls** in the final IR.
+- **The range fact** (`a7c6e2b`): `i*i <= n` hands LLVM an assumption; the
+  surviving checks in `primes` go **7 → 1**.
+- **Three real bugs found by the audit** (`f0441df`): a forward reference's
+  block types were discarded, an explicit `return` did not infer the return
+  type, and a `return "hi"` left a void function returning `ptr`. All three
+  were valid programs that failed with an internal LLVM error.
 
-- **What still does NOT work (measured, not guessed)**: primes improves
-  much less, because its bound is not provable the same way — the loop is
-  `while i * i <= limit`, and LLVM cannot derive `i <= limit + 1` from
-  `i * i <= limit`. That is a **range-analysis** limit (step 2C), not a
-  length-fact limit: the fact gives the compiler the length, but proving
-  the INDEX is below it needs a range analysis over the loop.
-
-  The measurement baseline was re-taken (the old one would have read the
-  improvement as a regression).
-
-**The vectorization question, measured (2026-10-20):** after the fact
-reached the builtins, `sum_array`'s final IR has **0 bounds-check calls**
-and **still 0 vector operations** (C's has 16). The loop is *unrolled 2x*
-instead (the exit condition becomes `2 * n`), and the accumulator is a
-clean phi. So the remaining gap is **not** the checks any more:
-
-| build | sum_array 10M | vs C (8.3 ms) | vector ops |
-|---|---|---|---|
-| safe (default) | 12.0 ms | 1.44x | 0 |
-| `--unsafe` | 9.9 ms | 1.19x | 0 |
-| C -O2 | 8.3 ms | 1.00x | 16 |
-
-`--unsafe` removes the overflow check and recovers 17 %, but the loop
-still does not vectorize: the vectorizer bails and the loop is unrolled
-instead. With the checks gone, the blocker is LLVM's cost model and the
-pointer's provenance (the data pointer comes from a runtime allocation),
-not anything Flint emits. **Do not chase this by hand-writing a
-vectorizer** (the roadmap rejects that): the honest next step is to see
-whether a small, targeted hint (or the loop's shape) makes LLVM's own
-vectorizer take it, and otherwise to accept ~1.2x on this workload.
-
-**Step 2A.0 — the type audit (landed 2026-10-20, commit b75e4c7).**
-Flint infers types in TWO places: the parser's `inferType` and the
-codegen's `exprFlintType` + declaration ladder. Nothing compared them.
-`flintc --type-audit` now does, at every declaration:
-
-- an **annotated** declaration is a CONTRACT (the program states the
-  type) — a disagreement is a BUG;
-- an **inferred** declaration is a GUESS — a disagreement is DRIFT, which
-  is what step 2A must remove.
-
-Measured over the corpus (123 files): **0 contract violations** and **135
-inferred declarations where the two engines still drift**. The drift has
-one shape: the parse-time engine answers **i64** (its default) where the
-codegen engine knows **str** or **f64** — e.g. `benchmarks/pi.fl:9`
-(`denom` parse=i64 codegen=f64), `examples/regex_demo.fl:9` (`replaced`
-parse=i64 codegen=str). So the parse-time engine is the weak one, and it
-is the one a future LSP or checker would inherit. Gate:
-`tests/test_type_audit.sh` (fails on a contract violation, reports the
-drift).
-
-**The NEXT slice, designed (so it is not re-derived): a loop-range
-analysis that feeds LLVM assumptions.**
-
-Why this is the next one: it is the only remaining item that attacks a
-MEASURED gap. `primes` improves 9 % while `sum_array` improves 37 %,
-and the difference is entirely the bound:
-
-- `sum_array`: `while i < n` and the array's length IS `n` -> the check
-  compares the index against the loop's own bound -> LLVM folds it.
-- `primes`: `while i * i <= limit` and the array's length is `limit + 1`
-  -> LLVM cannot derive `i <= limit + 1` from `i * i <= limit`, because
-  `i * i` may overflow in its reasoning. **The missing fact is
-  `0 <= i <= limit`** (for `i >= 0`, `i <= i * i`), and it is a RANGE
-  fact, not a length fact.
-
-Design (bounded, and the soundness conditions are the whole point):
-
-1. Recognise the loop shape: `while (COND) { BODY }` where COND is
-   `i < n`, `i <= n`, or `i * c <= n` (`c` a positive CONSTANT), `i` a
-   local integer variable, and `n` an expression.
-2. Establish the loop's induction variable and its range by checking
-   the PRECONDITION: `i` is initialised to a non-negative constant
-   before the loop; in the body `i` is only ever updated by
-   `i = i + k` with `k` a POSITIVE constant; and `i` is not captured
-   by anything that could change it (no address-of, no closure capture,
-   no other assignment).
-3. Inside the body, the range `[0, n]` (or `[0, n/c]`) holds. Emit it
-   as an LLVM assumption (`llvm.assume(i >= 0 && i <= n)`) so the
-   OPTIMIZER can use it: the bounds check folds, and the vectorizer gets
-   the trip-count range it needs.
-4. If ANY of the preconditions cannot be established, emit nothing.
-   **An unsound assumption is a miscompilation, which is worse than a slow
-   program.** The range analysis is therefore opt-in by construction:
-   it only fires on shapes it fully understands.
-5. Gate it the way the other safety properties are gated: a program whose
-   index is out of range must still trap (the assumption is about the
-   LOOP's own range, not about the array's length — the array's length
-   fact is separate and already tested).
-
-**Explicitly NOT in this slice:** general range analysis, symbolic
-execution, or anything that would need a fixpoint. The loop-range shape
-above is the whole scope.
-
-**Step 2A — ONE inference engine, and the three bugs it exposed
-(landed 2026-10-20, commit f0441df).**
-
-The two engines are now ONE by construction: the compiler derives each
-builtin's Flint type at REGISTRATION (`flintTypeOfLlvm` → `gBuiltinTypes`)
-and the parser's inference reads that map, so a builtin's type cannot
-drift. The parser also learned the shapes it was missing (a call to a user
-function, a field access, float arithmetic), and a declaration PRE-PASS
-records the file's signatures so a forward reference resolves.
-
-**Drift measured over the corpus (123 files): 178 → 21 declarations, 0
-contract violations.** The 21 that remain are forward references to
-functions whose return type is INFERRED (not annotated) — single-pass
-parsing cannot know those, and guessing would be the silent wrongness this
-work removes.
-
-**Three real bugs, all found by the audit, all fixed** — each was a VALID
-program that failed to compile with an internal LLVM error ("Function
-return type does not match operand type of return inst!"):
-
-1. `fn user() { s = later()\n s }` with `later` declared later — the
-   body's variable types were DISCARDED by the block scope restore before
-   the return type was inferred, so `user()` was inferred as returning
-   i64. Fix: the block's types are kept as a snapshot (`lastBlockTypes`)
-   when the scope restores.
-2. The same with an explicit `return s`.
-3. `fn f() { return "hi" }` — a return type inferred from a RETURN
-   STATEMENT had no path at all: the type stayed void and the codegen
-   emitted `ret ptr` from a void function. Fix: infer it from the
-   body's return statement.
-
-Fixture: `tests_manual/t_return_inference.fl` (four shapes).
-
-**Step 2C — the loop-range analysis (landed 2026-10-20, commit a7c6e2b).**
-A recognised loop hands the optimizer a RANGE fact about its induction
-variable, as an LLVM assumption: `i < n` and `i <= n` give the condition
-itself; `i * c <= n` (c a positive constant) gives the DERIVED `i <= n`
-(LLVM cannot derive that itself — the multiply may overflow in its
-reasoning — and the derivation is sound for negative i as well).
-
-Measured: `primes` goes from **7 bounds-check calls in the final IR to 1**.
-
-Soundness: the fact is emitted only when the condition shape is
-recognised exactly, the induction variable is not assigned before the
-access, its address is not taken, and the access reads the variable
-itself. The gate `tests/test_bounds_safety.sh` pins the dangerous case
-(a loop `while i <= limit` over an array of length `limit` — the fact does
-NOT make the access in bounds, so the check must stay and the program must
-trap: it does).
-
-**Step 2D — capture-less function values may ESCAPE (landed 2026-10-20,
-commit 57db1a4).** The rule now follows the box's lifetime instead of a
-blanket ban: a closure that captures nothing has a module-level constant
-box, a named function's value has one too, and a value whose box does not
-depend on the frame may be returned, stored in a global, or handed to a
-callee that keeps it. A closure that CAPTURES still cannot (its box is
-frame-bound) — pinned by `tests_manual/t_capturing_escape.fl` ✓.
-
-**Step 2B — the safety checks are ONE policy (landed 2026-10-20, commit
-37d9b8b).** `Codegen::SafetyPolicy` decides what is inserted (bounds,
-overflow, div-zero) and counts it exactly; the posture was previously two
-switches that could disagree. `--unsafe` removes the two PERFORMANCE checks
-only; the div-zero trap, the ownership rules, the escape rules and the
-one-error contract stay. The gate checks that the policy's counts equal the
-compiler's pre-optimization IR count ✓ (a check emitted without the policy
-knowing is the failure mode this removes).
-
-**Step 2E — the pipeline gap, MEASURED and SPECIFIED (commit 66f85ae).**
-Measured on this device: the stage2 parser ALREADY accepts generic
-functions (it emits `(fn idc (tparams T) ...)`) and the stage3 emitter
-refuses them ("generics need G6"); the parser does not accept traits at
-all (a method signature has no body, which the grammar has no form for).
-The implementation is specified in `docs/PIPELINE-GENERICS.md` -- the
-S-expression contract, the inference rule, the instantiation steps, the
-mangled-name convention (the C++ compiler's, so the differential gate
-compares the two frontends symbol for symbol), the trait-resolution rule
-(the C++ compiler's M3 rule), and the order of work. It is NOT
-implemented: a half-implemented monomorphizer in a 7.6k-line Flint emitter
-would break the bootstrap fixed point, which is the ladder's own oracle.
-
-**Dead ends found while doing it (do not retry):**
-- The vestigial `IndexExprAST::unchecked` flag ("R2 BCE-lite: proven
-  in-bounds") was never set anywhere — a dead field that claimed to
-  implement bounds-check elimination. It is now actually used, but the
-  flag alone was never the missing piece: what was missing was a PROOF.
-- The `--check-bce` COUNT is confounded: LLVM clones loops, so the
-  "surviving checks" number can exceed the "emitted" number (negative
-  "elided"). Measure the real thing instead: the number of
-  `call void @flint_bounds_check` in the final IR, and the runtime.
-- The type audit was SILENT on a cache hit (the cached module skips
-  codegen, so no audit data was collected) — the same trap as
-  `--check-bce`. Both now bypass the cache: a diagnostic that depends on
-  cache state is not a diagnostic.
-- The **self-host artifacts in tmp are cleaned** by the system, which made
-  the differential gate fail with "self binaries" twice for a reason that had
-  nothing to do with the code. The gate now falls back to the STABLE
-  artifacts in `~/flintwork/self` — but ONLY if they are NEWER than the
-  pipeline sources: stale artifacts produce FALSE divergences (last month's
-  pipeline rejects what today's accepts), which looks like a compiler bug
-  and hides real ones.
-- **Absolute timings on this device are not comparable across runs** —
-  the same C binary measured 11.5 ms, 15.4 ms and 23.7 ms in three
-  consecutive runs while the agent's own runtime used ~46 % of a core.
-  Measure the RATIO to a control compiled the same way, interleaved, and
-  report the check/IR counts for anything the optimizer decides. The
-  measurement dashboard (Phase 0) must do this: a control + a ratio, not a
-  raw number.
-- A fact must not be used where its value does not dominate. Flint's
-  block scoping hides the obvious case (a binding declared in a loop is
-  not visible after it), but the general rule still needs the
-  DominatorTree check.
+**What is NOT 2A (do not smuggle it in):** the typed HIR migration (§13.3),
+regions (2D.3), capability types (4.5), and the pipeline's shared semantics
+(2E). 2A delivers the checker and the facts; the HIR consumes them later.
 
 ### 4.3 P1 — Range analysis → check elimination (roadmap Phase 3/5)
 
@@ -766,162 +546,29 @@ re-implementing the semantics. Until then, D5 is the honest record.
 
 **Verify**: `grep -c typeParams stage2/parser.fl` → 0 today.
 
-#### 4.9.1 The 2E design: monomorphization in stage3 (decided 2026-10-21)
+#### 4.9.1 2E status: the pipeline now has generics and traits (2E.1-2E.4)
 
-The rename landed (`16adde0`). The next 2E slice is the monomorphizer —
-the piece that makes `fn idc<T>(x: T) -> T` compile through the pipeline.
-Everything below was read out of the code, not assumed.
+**Landed** (2026-10-21/22): the rename (`16adde0`), the monomorphizer
+(`48c12d5`, the pipeline produces the C++ compiler's own mangled instance
+names), the trait form (2E.3) and its name+arity resolution (2E.4). The
+differential gate is **13/13** and covers a generic and a trait program.
 
-**What the code already gives us (the reason this is tractable):**
+**The design, the S-expression contract and the lessons learned are in
+[`docs/PIPELINE-GENERICS.md`](docs/PIPELINE-GENERICS.md)** — that is their
+single home; do not restate them here. The implementation history is in
+`memory.md`.
 
-| need | what exists | where |
+**The deviations that remain (recorded, not hidden):**
+
+| deviation | scope | fix |
 |---|---|---|
-| a signature table | `EFNMAP`/`EFNN`/`EFNPB`/`EFPTYPE`/`EFNRET`/`EFNVAR` | `stage3/emitter.fl:58-71` |
-| balanced-group text reading | `e_skip_balanced_fn()` returns the group's inner text | `stage3/emitter.fl:6643` |
-| a type code per expression | `ETYPE` (set by every `e_expr` arm) | `stage3/emitter.fl:30` |
-| a type name per struct/enum | `ENTNameOff`/`ENTNameLen` (code − 100) | `stage3/emitter.fl:101-102` |
-| **synthesize a function, register it, emit it later** | the lambda mechanism: `e_decl_lambda` registers the signature, stores the text, `e_drain_lambdas` emits it | `stage3/emitter.fl:285`, `:628` |
+| `bool` mangles as `.i64` | the pipeline has no bool type code; the C++ says `.bool`. Same behaviour, different symbol name | give the pipeline a bool code |
+| arrays are `[i64]` only | an array type argument mangles `.arr`; the element type cannot vary (M7 is deferred) | M7 |
+| one entry per method name in the function table | two implementations of one method name cannot coexist; the C++ keeps a multimap and filters on the receiver | make the table a multimap |
+| no explicit `::<T>` call syntax | the *declaration* form works; stage2 does not parse the call form | add it to stage2 |
 
-The lambda mechanism is the *precedent*: the monomorphizer is the same
-shape, with a type environment instead of capture slots.
-
-**The design (four pieces):**
-
-1. **Template registry (new).** A function whose `tparams` group is
-   non-empty is a TEMPLATE: it is registered in a new `ETPLMAP` (not
-   `EFNMAP`), with its type-parameter names, its parameters' *type words*
-   (text, not codes — a type parameter has no code), its return type word,
-   and the text spans of its parameter group and body.
-2. **Type environment (new).** During an instance's emission, each type
-   parameter is bound to a concrete type code and name. Two hooks
-   consult it: `e_ann_code()` (the type word → code) and the struct-name
-   lookups (`e_struct_lit`, `e_ann_code`'s enum branch). **No textual
-   substitution** — the earlier draft in `docs/PIPELINE-GENERICS.md` §3
-   said "textual over balanced groups"; that is wrong, because a textual
-   pass over the body would also rewrite a *string literal* or a
-   *variable* that happens to be spelled `T`. The environment is the
-   structural version of the same idea, and the emitter already resolves
-   types through exactly these two functions.
-3. **Inference at the call site (by-parameter rule, as the C++ compiler
-   does).** For each type parameter, find the FIRST parameter whose
-   declared type word is that type parameter, and take the type of the
-   argument in that position. Un-inferrable → the C++ compiler's
-   diagnostic (`cannot infer type parameter 'T' for 'f'`), never a guess.
-4. **Instantiate, mangle, register, drain.** The instance's S-expression
-   is `(fn <mangled> (tparams) (params) ret body)`; the mangled name is
-   the C++ compiler's (`idc.i64`, `idc.s:Inner`, `idc.arr` — the
-   injective `typeMangleTag` scheme, `src/main.cpp:9722`). The instance
-   is registered in `EFNMAP` *before* its body is emitted (the C++
-   compiler's recursive-generic bug, `src/main.cpp:9805-9811`), and the
-   queued instances are emitted after the main sweep (`e_drain_lambdas`).
-
-**The two frontends must agree on:** the inference rule, the mangle, the
-diagnostics, and the type-parameter-to-argument mapping. That is what the
-differential gate will check — new cases in `tests/differential/` that
-use generics, with the C++ compiler as the oracle.
-
-**The known deviations (to be recorded, not hidden):**
-
-- `bool` is `i64` in this codegen, so the pipeline mangles a bool
-  instantiation as `.i64` where the C++ compiler says `.bool`. Same
-  behaviour (the C++ `llvmType` maps bool to i64 as well), different
-  symbol name.
-- the pipeline's array type is `[i64]` only (M7 is deferred), so an
-  array type argument is `.arr` and the element type cannot vary.
-
-**Order of work inside 2E:** (1) monomorphization (above); (2) stage2:
-the trait form and method signatures; (3) stage3: trait resolution by
-name + arity; (4) the C++ query mode. The monomorphizer comes first
-because it is the piece the other two depend on (a trait method can be
-generic).
-
-#### 4.9.2 The monomorphizer, as implemented (2026-10-21)
-
-**Landed.** The pipeline now compiles generic functions, and it produces
-the *same symbol names* as the C++ compiler — the strongest parity
-statement available:
-
-| program | C++ compiler | pipeline |
-|---|---|---|
-| `idc(5)`, `idc(2.5)`, `idc("hi")`, `idc(Inner{a:7})` | `idc.i64`, `idc.f64`, `idc.str`, `@"idc.s:Inner"` | the same four |
-| `pair(3,9)`, `pair(2.5,"x")` | `pair.i64.i64`, `pair.f64.str` | the same two |
-| recursion, generic→generic, typed local, default arg | `countdown.i64`, `twice.i64`, `local.i64`, `withdef.i64` | the same four |
-
-Both print `5 3 0 9 11 2` for `tests/differential/t_generic.fl` ✓ (the
-case is in the differential manifest ✓, so the gate checks it from now on).
-
-**Four bugs the implementation exposed (all fixed in the same change):**
-
-1. **The template spans were read from the wrong text.** The instance
-   drain swaps `ESRC` for the instance text, so a template's parameter
-   and body spans (which point into the *program* text) became garbage
-   → "emit failed" with no diagnostic. Fix: a dedicated `ESRC0` holds
-   the original program text ✓.
-2. **The argument scratch was global, so a nested generic call
-   clobbered the outer call's arguments** (`idc(idc(x))` → "too many
-   args calling"). Fix: every call works on its own window of the
-   scratch, starting at `argbase` ✓ (the same base-index discipline the
-   lambda captures already use ✓).
-3. **`main` ending with a void expression emitted `ret i64 0` in an
-   `i32` function** → invalid IR → the program does not link. This is
-   **pre-existing** (the old emitter does it too ✓ — the differential
-   corpus dodged it by ending every `main` with `0` ✓). Fix: `main`
-   returns `i32 0` ✓.
-4. **A struct-typed fall-through return emitted `ret {i64} 0`** →
-   invalid IR (the zero of a struct is `zeroinitializer`). Also
-   pre-existing ✓. Fix: `e_llvm_zero` handles the named types ✓.
-
-**One deliberate restriction (to match the oracle):** a generic call
-must pass every argument — the C++ compiler does not fill a generic's
-default arguments ("'f' expects 2 argument(s), got 1") ✓, so the
-pipeline refuses it too ✓ rather than being more permissive than the
-reference implementation.
-
-**The deviations that remain (recorded, not hidden):** `bool` mangles as
-`.i64` (the pipeline has no bool code) ✓; the explicit `::<T>` call
-syntax is still a stage2 gap ✓ (the *declaration* form works ✓).
-
-#### 4.9.3 The trait form and its resolution (2E.3 + 2E.4)
-
-**Landed.** The pipeline now compiles a trait program, with the same
-output as the C++ compiler (`tests/differential/t_trait.fl` ✓ — the
-differential gate is 13/13 ✓).
-
-**The trait, as the C++ compiler defines it (M3):** a trait carries
-SIGNATURES only; an implementation is an ordinary function with the same
-name; the call site resolves by NAME + ARITY — exactly one → call it;
-none → "no type in scope implements 'm'"; several → "ambiguous". The
-parameter and return types of a signature are parsed and then DROPPED
-(the C++ does the same: `if (match(TokenType::COLON)) parseType();` —
-signatures only).
-
-**stage2 (the parser).** `trait` is a contextual keyword (an identifier
-to the lexer ✓ — the same as the C++ ✓). The new form is
-
-```
-(trait NAME ( (method1 arity) (method2 arity) ))
-```
-
-The parser reads the members as `fn NAME ( params ) [-> Type]` ✓,
-counts the parameters ✓, and drops the types ✓.
-
-**stage3 (the emitter).** A trait emits no IR ✓ — it only records the
-method names (`ETRMETH` ✓) so that a call to an unimplemented one can
-say so ✓. A method call on a user type (`(method BASE NAME args…)` ✓)
-resolves by name + arity ✓: the implementation's first parameter is the
-receiver ✓, so the implementation must take exactly one more parameter
-than the call has arguments ✓, and the receiver is converted to that
-parameter's type ✓.
-
-**The one limitation (recorded, not hidden):** the pipeline's function
-table holds ONE entry per name ✓, so two implementations of the same
-method name cannot coexist ✓ — the C++ compiler keeps a multimap and
-filters the candidates on the receiver's type ✓. A program with two
-implementations of one method name compiles in the C++ and is refused by
-the pipeline ✓ (the pipeline's diagnostic is "no type in scope
-implements" ✓, the C++'s is the ambiguity error ✓). Making the
-pipeline's table a multimap is the fix ✓ — it is a table change, not an
-algorithm change ✓.
+**The last 2E item is the C++ query mode** (the pipeline consumes the C++
+compiler's answers instead of re-deriving them, `PIPELINE-GENERICS.md` §5).
 
 ### 4.10 P3 — Items that need a decision or a different machine
 
@@ -957,30 +604,10 @@ Phase 10 DIFFERENTIATE deterministic+safe+agent-native niche                 ←
 Phase 0 and Phase 8 are independent of everything else and can run in
 parallel with the compiler work. Phase 2 is the long pole.
 
-**§12 is the score plan** (the peer comparison: Flint 6.1/10 today,
-and the arithmetic that says which category is worth the most effort ✓)
-and **§11 is the work plan** (the C→Flint transpiler, the diagnostics
-overhaul, the four selling points, and the positioning/memory-safety
-answers ✓).
-
-**§11 adds the plan that came out of the 2026-10-21 research pass** (the
-C→Flint transpiler, the Rust-like diagnostics, the four "Flint Twist"
-selling points, and the positioning/memory-safety answers). Its first
-item — spans + structured diagnostics + error codes — is cheap, unblocks
-the LSP, and is the interface the transpiler and the LSP both need.
-
-**Domain system — the sharpened design** (evidence from the 2026-10-20
-research pass): a domain is a **policy**, not a compiler variant. The
-precedents are explicit: Reactant.jl lowers Julia to MLIR/XLA and reaches
-cuBLAS-level GEMM but takes *seconds* to compile [P: JuliaCon 2026 / FOSDEM
-2026]; JLIR, a Julia-native dialect IR, does the same class of work in
-<1.5 ms but reaches 1.2 TF/s vs Reactant's 14.8 TF/s because it does not
-generate shared-memory tiling [P: arXiv 2609.04585]. The lesson for Flint:
-*lightweight, data-driven pass selection* (a table, not code paths) with
-*optional* deep integration (XLA-class) for one domain only. MLIR's own
-drawback — "strong compile-time type requirements and a low-level C++
-extension model can be a poor match" [P: arXiv 2609.04585] — is exactly the
-argument for a table-driven Flint policy rather than a dialect framework.
+**§11 is the plan** (transpiler, diagnostics, the four selling points,
+positioning) and **§12 is the score plan**; their full text lives in
+`memory.md`. **The domain design is §6.5** (a policy table, not a compiler
+variant) — that is its single home.
 
 ---
 
@@ -1443,14 +1070,8 @@ the C++ compiler's *structure*:
 | the pipeline's SPANS | **not done** — the parser could have one ✓ (it knows the token's position) but the emitter cannot: the S-expression carries no positions ✓. Putting them in is a format change (both frontends, the goldens, the ladder) ✓ — the next step ✓ |
 | the `help:` with a suggested FIX (a span + a replacement) | **not done** — the help line suggests a NAME ✓, not a patch ✓ |
 
-**The cost, measured:** the compiler's own binary grew ~22 KB ✓; the
-COMPILED program's size is unchanged ✓ (8,048 B raw ✓ — the size story
-is about the artifact ✓).
-
-**What this moves on the score (§12.3):** the DX item (66 → ~72 ✓ —
-the diagnostics overhaul is its biggest part ✓) and the LSP item (42 →
-~48 ✓ — the positions are now correct ✓ and the codes are quotable ✓).
-The ecosystem does not move ✓ (it is not an engineering item ✓).
+**The cost is measured in `memory.md`** (compiler +22 KB, artifact
+unchanged); the score effect is part of §12.3.
 
 **The full text is in `memory.md`** ("The 2026-10-21 research pass +
 peer-comparison plan", at the end of the file) ✓.
@@ -1489,23 +1110,9 @@ Python 6.0. Flint beats C++ on memory safety (78 vs 15) and binary size
 *adoption* is not — and the two multipliers (ecosystem 10 %, tooling
 6 %) are what hold the total at 6.1.
 
-**The arithmetic that decides the order** (§12.1): a point of ecosystem
-score is worth **+4.8**, the capability model **+3.3**, the type system
-**+3.0**, diagnostics + LSP **+3.8**, the regions **+2.1**, the range
-analysis **+2.3**. The biggest line is the one that **cannot** be worked
-on directly — the ecosystem is the *output* of what other people do with
-the language ✓.
-
-**The adoption ladder** (§12.2): type system + capability model →
-diagnostics + a compiler-backed LSP → package manager + registry → the
-ecosystem score moves ✓. It is the §28 weighting's own logic: a package
-manager without a sound compiler and a fast compiler just distributes
-bugs ✓.
-
-**The targets** (§12.5): **6.6** (the diagnostics + the LSP's cheap
-items) = C++ today ✓; **7.3** (the type system + the capability model) =
-Go today ✓; **8.0** (the compiler-backed LSP + the runtime work + the
-cross-platform runs) ✓; **8.6+** (the package manager, the registry) =
-Rust today ✓ — and that last row is not engineerable by us alone ✓.
+**The order, the arithmetic and the targets are memory.md §12.1/§12.2/§12.5**
+(their single home). The short version: type system + capability model →
+diagnostics + a compiler-backed LSP → package manager + registry; the
+ecosystem line is the one that cannot be engineered directly.
 
 ---

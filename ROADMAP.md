@@ -1,4 +1,10 @@
-# Flint Compiler — Phase Roadmap
+# Flint Compiler — Phase Roadmap (historical log)
+
+> **This is the historical phase log** — what shipped in which named phase.
+> It is not the live queue. For current state and next actions read
+> `STATE.md` §1/§4; for the research assessment and the forward phases read
+> `docs/LANGUAGE-ROADMAP.md`; the documentation map is `docs/INDEX.md`.
+> Status counts below are dated and may be stale by design.
 
 ## Legend
 - ✅ **Done** — tested and working

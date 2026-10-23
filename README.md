@@ -31,36 +31,36 @@ bash build.sh
 New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 (`bash tests/run_tutorial.sh ./flintc` checks your answers — 8/8 green).
 
-## Status (2026-10-10, verified on Termux AArch64)
+## Status (2026-10-23, verified on Termux AArch64)
 
-- **V1 gate 12/12 green** (`bash tests/v1_gate_check.sh ./flintc`):
-  self-host bootstrap A/B/C + stable promotion (fixed point
-  byte-identical), stage-3 ladder 21/21, tutorial 8/8, parse-gate 104,
-  sanitizers 10, opt-identity 11, differential, driver, registry, aegis,
-  stdlib — see `memory.md`
-- **Standard library + AI gate 17/17 green**
-  (`bash tests/test_ai.sh ./flintc`): BLAS correctness on both paths,
-  gradient check (f64 + f32 vs finite differences), TOML, YAML, tensor,
-  autograd, optimizers, per-rule gradients, a trained 2-layer net, XOR, NN
-  layers, f32, the utility layer, formatting, and the standard library
-- **Self-hosted** — lexer/parser/emitter are Flint programs
-  (`stage1-3/*.fl`); C++ `flintc` bootstraps them, then they compile
-  themselves
-- **Known gap (P0):** `for x in <array/str>` collection iteration
-  miscompiles on the C++ path (ranges and `range()` are fine) —
-  tracked as ROADMAP Phase J/A2
-- **Known crash:** `examples/enums.fl` — `match` arms written as
-  `{ ... }` blocks abort the compiler (LLVM PHI type assertion).
-  Single-expression arms (as in the Syntax section above and
-  `tutorial/03_flow.fl`) work; block arms do not yet
-- Next work is ordered in **[ROADMAP.md](ROADMAP.md) Phase J** (post-V1
-  plan: lock-in + P0 crash → measure + safety wins → bigger bets)
+- **Working end to end** — compile, JIT, LLVM IR, interface files,
+  content-addressed cache, generics (monomorphization), traits, closures,
+  enums + `match`, `for x in <array>`, C FFI, Python embedding, LSP,
+  formatter, and the standard-library/AI stack. The v1 battery and the full
+  gate suite are green; the counts and the per-gate table live in
+  [`STATE.md`](STATE.md) §2.2 (one home for status counts).
+- **Self-hosted** — the lexer/parser/emitter are Flint programs
+  (`stage1-3/*.fl`); the C++ `flintc` bootstraps them and the bootstrap
+  fixed point is byte-identical. The pipeline compiles generics and traits;
+  the explicit `::<T>` call syntax and the C++ query mode are the remaining
+  2E items ([`COMPATIBILITY.md`](COMPATIBILITY.md) D5,
+  [`docs/PIPELINE-GENERICS.md`](docs/PIPELINE-GENERICS.md)).
+- **In progress** — Phase 2: a real type checker with structured
+  diagnostics and typed facts (the live queue is
+  [`STATE.md`](STATE.md) §4.2).
+- **Honest gaps** — `[T]` containers (M7) are deferred by decision, Windows
+  and macOS are not executed from this device, and the self-host pipeline's
+  function table holds one entry per method name (two trait impls of the
+  same name cannot coexist there).
 
 ## Documentation
 
-- **[REQUIREMENTS.md](REQUIREMENTS.md)** — Full setup and build requirements
-- **[ROADMAP.md](ROADMAP.md)** — Phase-by-phase feature roadmap
-- **[memory.md](memory.md)** — Project memory for agent-assisted development
+- **[STATE.md](STATE.md)** — the live state, the queue, the gates, the traps
+- **[docs/INDEX.md](docs/INDEX.md)** — which document owns which fact
+- **[REQUIREMENTS.md](REQUIREMENTS.md)** — setup and build requirements
+- **[ROADMAP.md](ROADMAP.md)** — the historical phase log (not the live queue)
+- **[docs/LANGUAGE-ROADMAP.md](docs/LANGUAGE-ROADMAP.md)** — research assessment and forward phases
+- **[memory.md](memory.md)** — the project ledger for agent-assisted development
 
 ## Features (all verified below)
 
@@ -69,8 +69,9 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 - **Immutable by default** — variables are immutable unless declared with `mut`
 - **Memory safe** — ownership + borrow checker, generational Aegis leases,
   no null keyword, bounds traps, overflow panics (all loud, never silent)
-- **Small-ish binaries** — hello world AOT is ~141 KB (~111 KB stripped);
-  shrinking this is tracked work, not a current property
+- **Small binaries** — hello-world AOT is **8,048 B raw / 4,536 B
+  stripped**, `libc` only (`STATE.md` §6.1; `--print-size` reports it from
+  the artifact)
 - **Faster builds** — parallel import scanning (`--parallel`), `--fast`
   iteration tier, content-addressed module cache
 - **C FFI** — call any C function via `extern "C"` plus `--link` objects

@@ -1640,44 +1640,28 @@ raise the score. It is a *mitigating factor* for the ecosystem score
 
 ## 29. Final prioritized roadmap
 
-### Phase 2 (started 2026-10-20) — step 2A.1 LANDED
+### Phase 2 (started 2026-10-20) — in progress
 
-**Types carry facts.** The length of an array value is now a fact the
-backend uses: the bounds check compares the index against the same value
-the user's loop compares against, and LLVM folds it.
+Phase 2 is the compiler-unification work; **the live queue and the step
+status are `STATE.md` §4.2**, and the long-form design is §13/§27. The
+phase-exit criteria are below.
 
-- Measured: sum_array 10M **19.1 ms -> 12.0 ms (-37 %)**, the gap to C
-  **1.89× -> 1.44×**, and **0 bounds-check calls** in the final IR.
-- Safety: a fact is used only where its value DOMINATES the use (a
-  DominatorTree check — a value from inside a loop is not available after
-  it), the fact is cleared on assignment, and an out-of-range access still
-  traps. New gate: `tests/test_bounds_safety.sh`.
-- The remaining gap needs **range analysis** (step 2C): the fact gives
-  the compiler the LENGTH, but proving the INDEX is below it is a range
-  analysis over the loop (primes: `i*i <= limit` does not give LLVM
-  `i <= limit+1`).
+| step | goal | exit criterion | status |
+|---|---|---|---|
+| **2A** | a real type checker + facts in types | the checker rejects provable type errors with structured diagnostics, never rejects what the compiler accepts (differential over the corpus), `--type-audit` shows 0 contract violations and 0 drift, and the resolved trait / instantiated type arguments are inspectable | audit and the array-length fact landed; **the checker phase and the call facts are open** |
+| **2B** | checks become IR-level data | bounds/overflow are IR operations with a safety policy, not inline code | landed |
+| **2C** | analyses | loop-range facts (landed) and escape analysis (open) | partial |
+| **2D** | regions | capturing closures escape safely (NLL-style regions) | partial |
+| **2E** | the pipeline consumes the same semantics | the pipeline compiles generics, traits and `::<`; D5 closed | generics + traits landed; `::<` and the query mode open |
 
-### Phase 2 (continued 2026-10-20) — step 2A.0 LANDED: the type audit
+**Phase exit criteria:** the pipeline compiles a program using traits,
+generics and `::<`; D5 is closed; the LSP can query the compiler for types.
 
-Flint infers types in **two** engines (the parser's `inferType` and the
-codegen's `exprFlintType` + declaration ladder) and nothing compared them.
-`flintc --type-audit` now compares them at every declaration: an
-**annotated** declaration is a contract (a disagreement is a bug), an
-**inferred** one is a guess (a disagreement is drift).
-
-Measured over the corpus (123 files): **0 contract violations**, **135
-inferred declarations with drift** — and the drift has one shape: the
-parse-time engine answers **i64** where the codegen engine knows str or
-f64. The parse-time engine is the weak one, and it is the one a future
-LSP or type checker would inherit. Gate: `tests/test_type_audit.sh`.
-
-**Next slice, designed (STATE.md §4.2):** a loop-range analysis that emits
-LLVM assumptions for the shapes it fully understands (`while i < n`,
-`while i <= n`, `while i*c <= n` with a non-negative induction variable
-incremented by a positive constant). It is the only remaining item that
-attacks a *measured* gap: `primes` improves 9 % while `sum_array` improves
-37 %, and the difference is that LLVM cannot derive `i <= limit + 1` from
-`i * i <= limit` — the missing fact is a RANGE fact, not a length fact.
+**The measured reason for the order:** `sum_array` 19.1 → 12.0 ms (-37 %,
+1.89× → 1.44× of C) and 0 bounds-check calls in the final IR came from the
+length fact; `primes` only improves 9 % because LLVM cannot derive
+`i <= limit + 1` from `i * i <= limit` — that is a RANGE fact (2C), not a
+length fact. Measurements and controls: `STATE.md` §4.2/§6.2.
 
 ### Phase 0 — Measurement (4–6 weeks) — **PARTLY DONE (2026-10-20)**
 - **Done**: the harnesses (`tools/bench_compare.sh` with 5 languages,
