@@ -10990,6 +10990,95 @@ static bool emitInterface(ProgramAST& prog, const std::string& outputPath,
     return true;
 }
 
+// ============================================================================
+// PHASE 2E.5 — THE SIGNATURE QUERY MODE
+// ============================================================================
+// The self-hosted pipeline re-derived every function signature from the
+// S-expression, and a parameter declared without a type (`fn show(x)`) has
+// no type there: the pipeline defaulted it to i64 and passed a str as an
+// integer (measured: it printed the pointer's decimal value where the C++
+// compiler printed "hi"). The C++ compiler RESOLVES such a parameter from
+// its call sites (`inferUntypedParams`), so it can hand the pipeline the
+// answer instead of letting it guess.
+//
+// `flintc --emit-signatures in.fl out.sig` writes one line per function:
+//
+//     fn NAME (TPARAMS) (PARAM_TYPES) -> RET
+//
+// with comma-separated type words: i64, f64, str, bool, ptr, map, [T], a
+// struct/enum name, or a type parameter. The query runs the same
+// declaration pass as codegen (so untyped params are resolved exactly as
+// the emitted function will see them) but emits no artifact.
+static std::string signatureTypeName(const Type& t) {
+    switch (t.kind) {
+        case TypeKind::I64: return "i64";
+        case TypeKind::F64: return "f64";
+        case TypeKind::Str: return "str";
+        case TypeKind::Bool: return "bool";
+        case TypeKind::Void: return "void";
+        case TypeKind::Ptr: return "ptr";
+        case TypeKind::Map: return "map";
+        case TypeKind::TypeParam: return t.structName;
+        case TypeKind::Struct: return t.structName;
+        case TypeKind::Enum: return t.structName;
+        case TypeKind::Array:
+            // The pipeline only implements [i64] (M7 is deferred), but the
+            // file must say what the compiler actually resolved: a [f64]
+            // parameter is a loud "not supported here" in the consumer,
+            // never a silent i64.
+            if (t.elemType) return "[" + signatureTypeName(*t.elemType) + "]";
+            return "[i64]";
+        case TypeKind::Ref: return "ref"; // no ref support in the pipeline
+        case TypeKind::Func: return "fn"; // no first-class fn types there
+        default: return "?";
+    }
+}
+
+static bool emitSignatures(ProgramAST& prog, const std::string& outputPath,
+                           const std::string& targetTriple) {
+    // generateDeclarations runs inferUntypedParams (the call-site fixpoint)
+    // and builds the declaration ladder; it is the exact view codegen uses.
+    Codegen cg(targetTriple);
+    if (!cg.generateDeclarations(prog)) return false;
+
+    // A forward declaration can carry a different (unresolved) signature
+    // than the definition; the definition is the truth. Prints one line per
+    // name, in first-occurrence order.
+    std::unordered_set<std::string> defined;
+    for (auto& fn : prog.functions)
+        if (fn && !fn->isDeclaration) defined.insert(fn->name);
+    std::unordered_set<std::string> emitted;
+
+    std::ofstream out(outputPath);
+    if (!out) {
+        std::cerr << "error: cannot write '" << outputPath << "'\n";
+        return false;
+    }
+    out << "flint-signatures 1\n";
+    for (auto& fn : prog.functions) {
+        if (!fn) continue;
+        if (fn->isDeclaration && defined.count(fn->name)) continue;
+        if (!emitted.insert(fn->name).second) continue;
+        out << "fn " << fn->name << " (";
+        for (size_t i = 0; i < fn->typeParams.size(); i++) {
+            if (i) out << ",";
+            out << fn->typeParams[i];
+        }
+        out << ") (";
+        for (size_t i = 0; i < fn->params.size(); i++) {
+            if (i) out << ",";
+            out << signatureTypeName(fn->params[i].second);
+        }
+        out << ") -> " << signatureTypeName(fn->returnType) << "\n";
+    }
+    out.close();
+    if (!out) {
+        std::cerr << "error: cannot write '" << outputPath << "'\n";
+        return false;
+    }
+    return true;
+}
+
 static std::unique_ptr<llvm::Module> loadInterface(const std::string& path, llvm::LLVMContext& ctx) {
     auto buf = llvm::MemoryBuffer::getFile(path);
     if (!buf) return nullptr;
@@ -14993,6 +15082,7 @@ int main(int argc, char* argv[]) {
     if (argc < 2) {
         std::cerr << "usage: flintc [options] <input.fl> [-o <output>] [-- args...]\n";
         std::cerr << "       flintc --emit-interface <input.fl> <output.flint.bc>\n";
+        std::cerr << "       flintc --emit-signatures <input.fl> <output.sig>\n";
         std::cerr << "       flintc --use-interface <file.flint.bc> <input.fl> <output> [--use-interface ...]\n";
         std::cerr << "       flintc --parallel <N> <input.fl> <output> [--link ...]\n";
         std::cerr << "       flintc --opt-level <0|1|2|3> <input.fl> <output> [--link ...]\n";
@@ -15013,6 +15103,7 @@ int main(int argc, char* argv[]) {
     bool helpFlag = false;
     bool versionFlag = false;
     bool emitInterfaceMode = false;
+    bool emitSignaturesMode = false;
     bool runMode = true; // ORC JIT is the default
     std::vector<std::string> useInterfaces;
     int parallelThreads = 1;
@@ -15104,6 +15195,8 @@ int main(int argc, char* argv[]) {
             debugFlag = true; // DWARF line tables (JIT + emit)
         } else if (arg == "--emit-interface") {
             emitInterfaceMode = true;
+        } else if (arg == "--emit-signatures") {
+            emitSignaturesMode = true;
         } else if (arg == "--use-interface" && i + 1 < argc) {
             useInterfaces.push_back(argv[++i]);
         } else if (arg == "--parallel" && i + 1 < argc) {
@@ -15197,6 +15290,7 @@ int main(int argc, char* argv[]) {
             << "USAGE\n"
             << "  flintc [options] <input.fl> [-o <output>] [-- prog args...]\n"
             << "  flintc --emit-interface <input.fl> <out.flint.bc>\n"
+            << "  flintc --emit-signatures <input.fl> <out.sig>\n"
             << "  flintc --use-interface <in.flint.bc> <input.fl> <out> [--link flags]\n\n"
             << "Default mode (no -o) compiles and runs in-memory via the ORC JIT.\n"
             << "With -o, the output extension picks the form: .ll = LLVM IR text,\n"
@@ -15205,6 +15299,7 @@ int main(int argc, char* argv[]) {
             << "  -o, --output <path>      Emit instead of JIT-running\n"
             << "  --link <flags>           Extra linker flags (with -o)\n"
             << "  --emit-interface         Emit a .flint.bc program interface\n"
+            << "  --emit-signatures        Write resolved fn signatures (query mode)\n"
             << "  --use-interface <path>   Reuse an emitted interface (repeatable)\n\n"
             << "CODEGEN\n"
             << "  --opt-level <0|1|2|3>    Optimization level (default 2)\n"
@@ -15263,6 +15358,31 @@ int main(int argc, char* argv[]) {
     // cache in --offline mode) before any parsing/import resolution.
     if (!fetchRegistryDeps(inputPath, libPaths, offlineMode)) return 1;
     PROFILE_END(); // init (argv parsing + registry; LLVM/target init is in codegen_init)
+
+    // --emit-signatures mode: the query mode. Parse the WHOLE file (the
+    // untyped-parameter fixpoint needs the call sites), run the declaration
+    // pass, write the resolved signatures. No artifact, no linking.
+    if (emitSignaturesMode) {
+        if (outputPath.empty()) {
+            std::cerr << "error: --emit-signatures needs an output path "
+                         "(flintc --emit-signatures <input.fl> <out.sig>)\n";
+            return 1;
+        }
+        auto fileBuf = llvm::MemoryBuffer::getFile(inputPath);
+        if (!fileBuf) { std::cerr << "error: cannot open '" << inputPath << "'\n"; return 1; }
+        llvm::StringRef sourceRef = fileBuf.get()->getBuffer();
+        Lexer lexer(sourceRef);
+        Parser parser(lexer);
+        auto combined = parser.parseProgram();
+        if (parser.hadError()) return 1;   // the diagnostic is already printed
+        if (!emitSignatures(*combined, outputPath, targetTripleSpec)) {
+            std::cerr << "error: failed to emit signatures\n";
+            return 1;
+        }
+        PROFILE_END(); // total
+        PROFILE_REPORT();
+        return 0;
+    }
 
     // --emit-interface mode: parse declarations only, emit .flint.bc
     if (emitInterfaceMode) {

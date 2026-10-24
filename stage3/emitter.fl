@@ -69,6 +69,23 @@ EFPLEN = flint_vec_new()
 EFPNOff = flint_vec_new()
 EFPNLen = flint_vec_new()
 mut ESIGTEXT: str = ""
+# ---- 2E.5: the C++ compiler's resolved signatures (query mode) ----
+# `flintc --emit-signatures src.fl out.sig` writes one line per function:
+#   fn NAME (TPARAMS) (PARAM_TYPES) -> RET
+# ESIGMAP name -> index; the three groups' texts live in ESIGTEXT (offset +
+# length per index), comma-separated. An UNLISTED function keeps the scanned
+# signature, so a partial file is safe -- the file is an overlay.
+ESIGMAP = map {
+    "": 0
+}
+ESIGTPO = flint_vec_new()
+ESIGTPL = flint_vec_new()
+ESIGPTO = flint_vec_new()
+ESIGPTL = flint_vec_new()
+ESIGRO = flint_vec_new()
+ESIGRL = flint_vec_new()
+mut ESIGCUR: str = ""
+mut ESIGPOS: i64 = 0
 # ---- G6a: top-level globals (self-hosting) ----
 # EGNAME name->idx; EGCODE/EGOff/EGLen parallel; init S-expr texts in EGTEXT.
 # NOTE: kept up here (not with the G6a code below) — C++ resolves method
@@ -7873,9 +7890,341 @@ fn e_sig_lookup(name: str) -> i64 {
         -1
     }
 }
+# ---- 2E.5: read the C++ compiler's signature file -----------------------
+fn es_is_ws(c: i64) -> i64 {
+    if c == 32 {
+        1
+    } else {
+        if c == 9 {
+            1
+        } else {
+            if c == 10 {
+                1
+            } else {
+                if c == 13 {
+                    1
+                } else {
+                    0
+                }
+            }
+        }
+    }
+}
+# The delimiters of a type word: whitespace, a parenthesis, a comma.
+fn es_is_sep(c: i64) -> i64 {
+    if es_is_ws(c) == 1 {
+        1
+    } else {
+        if c == 40 {
+            1
+        } else {
+            if c == 41 {
+                1
+            } else {
+                if c == 44 {
+                    1
+                } else {
+                    0
+                }
+            }
+        }
+    }
+}
+fn es_skip() -> i64 {
+    mut go: i64 = 1
+    while go == 1 {
+        if ESIGPOS < flint_str_length(ESIGCUR) {
+            if es_is_ws(flint_str_char_at(ESIGCUR, ESIGPOS)) == 1 {
+                ESIGPOS = ESIGPOS + 1
+            } else {
+                go = 0
+            }
+        } else {
+            go = 0
+        }
+    }
+    ESIGPOS
+}
+fn es_word() -> str {
+    es_skip()
+    s0 = ESIGPOS
+    mut go: i64 = 1
+    while go == 1 {
+        if ESIGPOS < flint_str_length(ESIGCUR) {
+            if es_is_sep(flint_str_char_at(ESIGCUR, ESIGPOS)) == 1 {
+                go = 0
+            } else {
+                ESIGPOS = ESIGPOS + 1
+            }
+        } else {
+            go = 0
+        }
+    }
+    flint_str_substring(ESIGCUR, s0, ESIGPOS)
+}
+fn es_trim(s: str) -> str {
+    mut a: i64 = 0
+    mut b: i64 = flint_str_length(s)
+    mut go: i64 = 1
+    while go == 1 {
+        if a < b {
+            if es_is_ws(flint_str_char_at(s, a)) == 1 {
+                a = a + 1
+            } else {
+                go = 0
+            }
+        } else {
+            go = 0
+        }
+    }
+    go = 1
+    while go == 1 {
+        if b > a {
+            if es_is_ws(flint_str_char_at(s, b - 1)) == 1 {
+                b = b - 1
+            } else {
+                go = 0
+            }
+        } else {
+            go = 0
+        }
+    }
+    flint_str_substring(s, a, b)
+}
+fn es_count(g: str) -> i64 {
+    n = flint_str_length(g)
+    if n == 0 {
+        0
+    } else {
+        mut c: i64 = 1
+        mut i: i64 = 0
+        while i < n {
+            if flint_str_char_at(g, i) == 44 {
+                c = c + 1
+            }
+            i = i + 1
+        }
+        c
+    }
+}
+# The k-th comma-separated item of a group ("" when out of range).
+fn es_item(g: str, k: i64) -> str {
+    n = flint_str_length(g)
+    mut start: i64 = 0
+    mut i: i64 = 0
+    mut idx: i64 = 0
+    mut r: str = ""
+    mut go: i64 = 1
+    while go == 1 {
+        if i == n {
+            if idx == k {
+                r = es_trim(flint_str_substring(g, start, n))
+            }
+            go = 0
+        } else {
+            if flint_str_char_at(g, i) == 44 {
+                if idx == k {
+                    r = es_trim(flint_str_substring(g, start, i))
+                    go = 0
+                } else {
+                    idx = idx + 1
+                    start = i + 1
+                    i = i + 1
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    r
+}
+# One `( ... )` group; returns its inside text. The producer emits no
+# nested parens in a type word, so the first ')' closes it.
+fn es_group() -> str {
+    es_skip()
+    if ESIGPOS < flint_str_length(ESIGCUR) {
+        if flint_str_char_at(ESIGCUR, ESIGPOS) == 40 {
+            ESIGPOS = ESIGPOS + 1
+            s0 = ESIGPOS
+            n = flint_str_length(ESIGCUR)
+            mut i: i64 = s0
+            mut go: i64 = 1
+            while go == 1 {
+                if i >= n {
+                    go = 0
+                } else {
+                    if flint_str_char_at(ESIGCUR, i) == 41 {
+                        go = 0
+                    } else {
+                        i = i + 1
+                    }
+                }
+            }
+            if i >= n {
+                EERR = EERR + 1
+                print("emit error[E0286]: malformed signature line")
+                print(ESIGCUR)
+                ""
+            } else {
+                r = flint_str_substring(ESIGCUR, s0, i)
+                ESIGPOS = i + 1
+                es_trim(r)
+            }
+        } else {
+            EERR = EERR + 1
+            print("emit error[E0286]: malformed signature line")
+            print(ESIGCUR)
+            ""
+        }
+    } else {
+        EERR = EERR + 1
+        print("emit error[E0286]: malformed signature line")
+        print(ESIGCUR)
+        ""
+    }
+}
+# One `fn NAME (TP) (PT) -> RET` line. Registers the three groups.
+fn es_line(line: str) -> i64 {
+    ESIGCUR = line
+    ESIGPOS = 0
+    tag = es_word()
+    if tag != "fn" {
+        EERR = EERR + 1
+        print("emit error[E0286]: malformed signature line")
+        print(line)
+        return 0
+    }
+    nm = es_word()
+    if nm == "" {
+        EERR = EERR + 1
+        print("emit error[E0286]: malformed signature line")
+        print(line)
+        return 0
+    }
+    e0 = EERR
+    tp = es_group()
+    if EERR != e0 {
+        return 0
+    }
+    pt = es_group()
+    if EERR != e0 {
+        return 0
+    }
+    ar = es_word()
+    if ar != "->" {
+        EERR = EERR + 1
+        print("emit error[E0286]: malformed signature line")
+        print(line)
+        return 0
+    }
+    ret = es_word()
+    if ret == "" {
+        EERR = EERR + 1
+        print("emit error[E0286]: malformed signature line")
+        print(line)
+        return 0
+    }
+    es_skip()
+    if ESIGPOS < flint_str_length(ESIGCUR) {
+        EERR = EERR + 1
+        print("emit error[E0286]: malformed signature line")
+        print(line)
+        return 0
+    }
+    idx = flint_vec_len(ESIGTPO)
+    toff = flint_str_length(ESIGTEXT)
+    ESIGTEXT = ESIGTEXT + tp
+    flint_vec_push(ESIGTPO, toff)
+    flint_vec_push(ESIGTPL, flint_str_length(tp))
+    poff = flint_str_length(ESIGTEXT)
+    ESIGTEXT = ESIGTEXT + pt
+    flint_vec_push(ESIGPTO, poff)
+    flint_vec_push(ESIGPTL, flint_str_length(pt))
+    roff = flint_str_length(ESIGTEXT)
+    ESIGTEXT = ESIGTEXT + ret
+    flint_vec_push(ESIGRO, roff)
+    flint_vec_push(ESIGRL, flint_str_length(ret))
+    ESIGMAP.set(nm, idx)
+    1
+}
+fn es_line_end(txt: str, pos: i64) -> i64 {
+    n = flint_str_length(txt)
+    mut i: i64 = pos
+    mut go: i64 = 1
+    while go == 1 {
+        if i >= n {
+            go = 0
+        } else {
+            if flint_str_char_at(txt, i) == 10 {
+                go = 0
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    i
+}
+fn es_load(path: str) -> i64 {
+    txt = flint_read_file(path)
+    if flint_err_occurred() == 1 {
+        EERR = EERR + 1
+        print("emit error[E0284]: cannot read the signature file")
+        print(path)
+        return 0
+    }
+    n = flint_str_length(txt)
+    e0 = es_line_end(txt, 0)
+    head = es_trim(flint_str_substring(txt, 0, e0))
+    if head != "flint-signatures 1" {
+        EERR = EERR + 1
+        print("emit error[E0285]: not a signature file (expected flint-signatures 1)")
+        print(path)
+        return 0
+    }
+    mut pos: i64 = e0
+    if pos < n {
+        pos = pos + 1
+    }
+    while pos < n {
+        e1 = es_line_end(txt, pos)
+        line = es_trim(flint_str_substring(txt, pos, e1))
+        pos = e1
+        if pos < n {
+            pos = pos + 1
+        }
+        if flint_str_length(line) > 0 {
+            if flint_str_char_at(line, 0) != 35 {
+                if es_line(line) == 0 {
+                    return 0
+                }
+            }
+        }
+    }
+    1
+}
+fn es_param(si: i64, k: i64) -> str {
+    off = flint_vec_get(ESIGPTO, si)
+    es_item(flint_str_substring(ESIGTEXT, off, off + flint_vec_get(ESIGPTL, si)), k)
+}
+fn es_tparam(si: i64, k: i64) -> str {
+    off = flint_vec_get(ESIGTPO, si)
+    es_item(flint_str_substring(ESIGTEXT, off, off + flint_vec_get(ESIGTPL, si)), k)
+}
+fn es_nparam(si: i64) -> i64 {
+    off = flint_vec_get(ESIGPTO, si)
+    es_count(flint_str_substring(ESIGTEXT, off, off + flint_vec_get(ESIGPTL, si)))
+}
+fn es_ntparam(si: i64) -> i64 {
+    off = flint_vec_get(ESIGTPO, si)
+    es_count(flint_str_substring(ESIGTEXT, off, off + flint_vec_get(ESIGTPL, si)))
+}
+fn es_ret(si: i64) -> str {
+    off = flint_vec_get(ESIGRO, si)
+    flint_str_substring(ESIGTEXT, off, off + flint_vec_get(ESIGRL, si))
+}
 # Scan one (NAME TYPE DEF) param entry; cursor past `(`. Records flat slot.
 # Variadic `(... - -)` must be last. Returns 1 ok, 0 error.
-fn e_scan_param(fnidx: i64) -> i64 {
+fn e_scan_param(fnidx: i64, si: i64, pi: i64) -> i64 {
     e_skip()
     nm = e_word()
     tp = e_word()
@@ -7908,15 +8257,40 @@ fn e_scan_param(fnidx: i64) -> i64 {
             print(nm)
             0
         } else {
-            mut tc: i64 = e_ann_code(tp)
-            if tp == "-" {
-                # Untyped param: i64 like C++ (handles flow via conversions).
-                tc = 1
+            # 2E.5: a signature-file entry OVERRIDES the type word. The
+            # source says `-` for an untyped param and the file carries the
+            # type C++ resolved from the call sites; that is the whole point
+            # of the query mode.
+            mut tw: str = tp
+            mut fromfile: i64 = 0
+            if si >= 0 {
+                fw = es_param(si, pi)
+                if fw != "" {
+                    tw = fw
+                    fromfile = 1
+                }
+            }
+            mut tc: i64 = 0
+            if fromfile == 1 {
+                tc = e_ann_code(tw)
+            } else {
+                if tw == "-" {
+                    # Untyped param: i64 like C++ (handles flow via conversions).
+                    tc = 1
+                } else {
+                    tc = e_ann_code(tw)
+                }
             }
             if tc == 0 {
                 EERR = EERR + 1
-                print("emit error[E0232]: param type needs G3+")
-                print(nm)
+                if fromfile == 1 {
+                    print("emit error[E0289]: signature file type is not supported here")
+                    print(tw)
+                    print(nm)
+                } else {
+                    print("emit error[E0232]: param type needs G3+")
+                    print(nm)
+                }
                 0
             } else {
                 e_skip()
@@ -7988,7 +8362,7 @@ fn e_tparam_words(rest: str) -> i64 {
 # (a type parameter has no type code), the return type word, and the
 # text spans of the parameter group and the body group. The template
 # itself is never emitted: only its instances are.
-fn e_scan_template(nm: str, tp: str) -> i64 {
+fn e_scan_template(nm: str, tp: str, si: i64) -> i64 {
     tidx = flint_vec_len(ETPLN)
     flint_vec_push(ETPLN, 0)
     flint_vec_push(ETPLTB, flint_vec_len(ETPLTPO))
@@ -8008,6 +8382,29 @@ fn e_scan_template(nm: str, tp: str) -> i64 {
         nt = e_tparam_words(flint_str_substring(tp, 7, tl))
     }
     flint_vec_set(ETPLN, tidx, nt)
+    # 2E.5: the file's type parameters must be THIS template's, or the
+    # override would bind names the body never mentions.
+    if si >= 0 {
+        if es_ntparam(si) != nt {
+            EERR = EERR + 1
+            print("emit error[E0288]: signature file type parameters disagree")
+            print(nm)
+            return 0
+        }
+        tb0 = flint_vec_get(ETPLTB, tidx)
+        mut k: i64 = 0
+        while k < nt {
+            woff = flint_vec_get(ETPLTPO, tb0 + k)
+            w = flint_str_substring(ETPLTEXT, woff, woff + flint_vec_get(ETPLTPL, tb0 + k))
+            if flint_str_compare(w, es_tparam(si, k)) != 0 {
+                EERR = EERR + 1
+                print("emit error[E0288]: signature file type parameters disagree")
+                print(nm)
+                return 0
+            }
+            k = k + 1
+        }
+    }
     # the parameters
     pstart = e_pos()
     ex4 = e_expect(40)
@@ -8030,7 +8427,15 @@ fn e_scan_template(nm: str, tp: str) -> i64 {
                 if e_peek() == 40 {
                     e_adv()
                     pn = e_word()
-                    pt = e_word()
+                    mut pt: str = e_word()
+                    # 2E.5: the file's resolved word (an untyped param is
+                    # `-` in the source and concrete in the file).
+                    if si >= 0 {
+                        fw = es_param(si, n)
+                        if fw != "" {
+                            pt = fw
+                        }
+                    }
                     toff = flint_str_length(ETPLTEXT)
                     ETPLTEXT = ETPLTEXT + pt
                     flint_vec_push(ETPLPWO, toff)
@@ -8085,8 +8490,22 @@ fn e_scan_template(nm: str, tp: str) -> i64 {
     flint_vec_set(ETPLNP, tidx, n)
     flint_vec_set(ETPLPO, tidx, pstart)
     flint_vec_set(ETPLPL, tidx, e_pos() - pstart)
+    if si >= 0 {
+        if es_nparam(si) != n {
+            EERR = EERR + 1
+            print("emit error[E0287]: signature file parameter count disagrees")
+            print(nm)
+            return 0
+        }
+    }
     # the return type word
-    ret = e_word()
+    mut ret: str = e_word()
+    if si >= 0 {
+        fr = es_ret(si)
+        if fr != "void" {
+            ret = fr
+        }
+    }
     roff = flint_str_length(ETPLTEXT)
     ETPLTEXT = ETPLTEXT + ret
     flint_vec_set(ETPLREO, tidx, roff)
@@ -8126,10 +8545,29 @@ fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
         return 0
     }
     tp = e_skip_balanced_fn()
+    # 2E.5: the signature file OVERLAYS the scanned table. An extern is not
+    # in the file (it lists program functions), so it never overrides.
+    mut si: i64 = -1
+    if ext == 0 {
+        if ESIGMAP.has(nm) == 1 {
+            si = ESIGMAP.get(nm)
+        }
+    }
     if tp != "tparams" {
         # A TEMPLATE: it is not emitted as-is, only its instances are.
-        e_scan_template(nm, tp)
+        e_scan_template(nm, tp, si)
         return 1
+    }
+    if si >= 0 {
+        # The S-expression and the file must agree on SHAPE. A disagreement
+        # means the file describes a different program; using it would emit
+        # a call that does not match its definition.
+        if es_ntparam(si) != 0 {
+            EERR = EERR + 1
+            print("emit error[E0288]: signature file type parameters disagree")
+            print(nm)
+            return 0
+        }
     }
     fnidx = flint_vec_len(EFNN)
     flint_vec_push(EFNN, 0)
@@ -8155,7 +8593,7 @@ fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
             } else {
                 if e_peek() == 40 {
                     e_adv()
-                    pr = e_scan_param(fnidx)
+                    pr = e_scan_param(fnidx, si, n)
                     if pr == 0 {
                         return 0
                     }
@@ -8172,7 +8610,23 @@ fn e_scan_fn(isdecl: i64, ext: i64) -> i64 {
         return 0
     }
     flint_vec_set(EFNN, fnidx, n)
-    ret = e_word()
+    if si >= 0 {
+        if es_nparam(si) != n {
+            EERR = EERR + 1
+            print("emit error[E0287]: signature file parameter count disagrees")
+            print(nm)
+            return 0
+        }
+    }
+    mut ret: str = e_word()
+    if si >= 0 {
+        # The file's return type is authoritative; `void` keeps the source's
+        # `-` marker so the existing void-return handling stays in one place.
+        fr = es_ret(si)
+        if fr != "void" {
+            ret = fr
+        }
+    }
     if ret == "-" {
         if nm == "main" {
             flint_vec_set(EFNRET, fnidx, 1)
@@ -8381,7 +8835,12 @@ fn e_scan_prog() -> i64 {
             if e_peek() == -1 {
                 go = 0
             } else {
-                e_scan_form()
+                # A form that failed to scan leaves the cursor mid-form; any
+                # later diagnostic would be noise about the wreckage. Stop
+                # at the first one (EERR already says why).
+                if e_scan_form() == 0 {
+                    go = 0
+                }
             }
         }
     }
@@ -8411,11 +8870,24 @@ fn e_eval_default(off: i64, len: i64) -> str {
 # ---- driver ----
 fn main() -> i64 {
     if flint_arg_count() < 3 {
-        print("usage: emitter <prog.sexp> <out.ll>")
+        print("usage: emitter <prog.sexp> <out.ll> [--signatures FILE]")
         return 1
     }
     path = flint_get_arg(1)
     outp = flint_get_arg(2)
+    # 2E.5: the optional signature overlay (the C++ compiler's query mode).
+    mut sigfile: str = ""
+    if flint_arg_count() != 3 {
+        if flint_arg_count() != 5 {
+            print("usage: emitter <prog.sexp> <out.ll> [--signatures FILE]")
+            return 1
+        }
+        if flint_get_arg(3) != "--signatures" {
+            print("usage: emitter <prog.sexp> <out.ll> [--signatures FILE]")
+            return 1
+        }
+        sigfile = flint_get_arg(4)
+    }
     ESRC = flint_read_file(path)
     ESRC0 = ESRC
     if flint_err_occurred() == 1 {
@@ -8437,6 +8909,12 @@ fn main() -> i64 {
     ERTDECL.set("flint_str_length", 1)
     ERTDECL.set("flint_str_concat", 1)
     ERTDECL.set("flint_array_concat", 1)
+    if sigfile != "" {
+        if es_load(sigfile) == 0 {
+            print("emit failed")
+            return 1
+        }
+    }
     # Pass 1: signatures. Pass 2: rewind and emit.
     e_scan_prog()
     if EERR > 0 {

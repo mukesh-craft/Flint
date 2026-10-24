@@ -89,6 +89,15 @@ NOT cover is the FEATURE GAP — the C++ compiler accepts programs the
 self-hosted pipeline cannot parse or emit at all. Those programs are not in
 the differential manifest, so the gate stays green while the gap is real.
 
+The **inference** part of the gap is now closed for a single file (2E.5):
+the C++ compiler's query mode (`flintc --emit-signatures`) prints its
+resolved signatures, and the pipeline consumes them as an overlay instead
+of re-deriving types. Measured: `fn show(x)` called with a str printed the
+pointer's decimal value in the pipeline; with the file it prints the
+string. See `docs/PIPELINE-GENERICS.md` §5.1 and
+`tests/test_signatures.sh`. This does not change the feature table below —
+those are constructs the pipeline still cannot parse or emit.
+
 Features in the C++ compiler that the self-hosted pipeline does not have
 (as of commit 4214082; the generic row was closed in 2E.2):
 
@@ -110,7 +119,9 @@ Features in the C++ compiler that the self-hosted pipeline does not have
   compiler, and the differential gate correctly does not pretend otherwise.
   The first feature to be ported was generics (2E.2): the emitter
   monomorphizes, and the instance names are the C++ compiler's own, so
-  the two frontends agree symbol for symbol.
+  the two frontends agree symbol for symbol. 2E.5 added the query mode,
+  which removes the *inference* drift for the functions a signature file
+  lists (single file; the overlay keeps unlisted functions safe).
 - Follow-up: every feature added to the C++ compiler from now on should
   either land in the self-host pipeline too, or be listed in the table
   above. The table is the checklist.

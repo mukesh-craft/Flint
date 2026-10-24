@@ -171,5 +171,11 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error[E0281]: void global init`
 - `emit error[E0282]: void initializer`
 - `emit error[E0283]: void variadic arg`
+- `emit error[E0284]: cannot read the signature file`
+- `emit error[E0285]: not a signature file (expected flint-signatures 1)`
+- `emit error[E0286]: malformed signature line`
+- `emit error[E0287]: signature file parameter count disagrees`
+- `emit error[E0288]: signature file type parameters disagree`
+- `emit error[E0289]: signature file type is not supported here`
 
-Total: 139 messages.
+Total: 145 messages.

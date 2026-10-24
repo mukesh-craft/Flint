@@ -5214,3 +5214,92 @@ is ✓.
 **Deliberately not here.** The typed HIR, regions, capabilities and the
 pipeline's shared semantics. 2A delivered the checker and the facts; the
 HIR consumes them later.
+
+---
+
+## 2E.5 — the C++ query mode and the pipeline's signature overlay (2026-10-24)
+
+**What it is for.** The self-hosted pipeline re-derived every function
+signature from the S-expression, and an untyped parameter has NO type
+there (`fn show(x)` is `(x - -)`). The emitter defaulted it to i64. The
+C++ compiler resolves it from the call sites (`inferUntypedParams`), so
+the two frontends disagreed measurably:
+
+    fn show(x) -> i64 { print(x) return 0 }
+    fn main() -> i64 { show("hi") return 0 }
+
+C++ prints `hi`; the pipeline printed `379811845520` (the pointer as i64)
+and its IR said `define i64 @show(i64 %x.arg)`. This closes that drift by
+making the pipeline READ the compiler's answer.
+
+**The producer.** `flintc --emit-signatures in.fl out.sig` (a mode next to
+`--emit-interface`, in `src/main.cpp`): parse the WHOLE file (the fixpoint
+needs call sites), run `Codegen::generateDeclarations` (the exact view
+codegen uses), print `prog.functions`. Format v1:
+
+    flint-signatures 1
+    fn show () (str) -> i64
+    fn main () () -> i64
+
+`fn NAME (TPARAMS) (PARAM_TYPES) -> RET`; comma-separated type words
+(`i64 f64 str bool void ptr map [T]`, a struct/enum name, a type
+parameter); `()` empty; `#` comments. Definitions win over forward
+declarations; one line per name in first-occurrence order. `ref` and
+first-class `fn` types print as `ref`/`fn` and `[f64]` prints its element:
+the pipeline rejects those words loudly rather than silently pretending.
+
+**The consumer.** `emit.0 prog.sexp out.ll --signatures FILE`, passed
+through by `driver/flintc.fl ... --signatures FILE`. The file is an
+OVERLAY: an unlisted function keeps its scanned signature, so a partial
+file is safe (verified). Overrides: the param words
+(`e_scan_param`), the return word (`e_scan_fn`), and a template's
+parameter words + return (`e_scan_template`). Shape mismatches are loud:
+`E0287` parameter count, `E0288` type parameters, `E0289` unsupported
+type word; `E0284` unreadable, `E0285` bad header, `E0286` malformed line.
+A `void` return maps back to the source's `-` so the existing `E0241`
+(the pipeline cannot compile void helpers) is unchanged.
+
+**The gate.** `tests/test_signatures.sh` (14 checks): the query file's
+exact content for the untyped fixture and a generic/trait-shaped fixture,
+determinism, the end-to-end fix (`define i64 @show(ptr %x.arg)`, prints
+`hi`), the NO-FILE CONTROL (still `@show(i64 ...)` and a pointer — proof
+the overlay changes the answer), a partial overlay, a C++-vs-pipeline
+differential pair (5/3/7), and one loud failure per E0284-E0289. The
+driver gate gained a `--signatures` case.
+
+**Measured (2026-10-24).**
+
+- `flintc --emit-signatures tests/signatures/untyped.fl` → `fn show () (str) -> i64`.
+- pipeline with the file: `define i64 @show(ptr %x.arg)`, runs `hi`;
+  without it: `define i64 @show(i64 %x.arg)`, prints the pointer.
+- generic fixture: both frontends print 5/3/7; the pipeline emits
+  `@idc.i64` and `@idc.str`.
+- signatures gate 14/14; driver 7/7; errors catalog 145/145 (six new
+  codes); diagnostic-codes 16/16.
+- bootstrap A/B/C after the emitter changes: Phase C fixed point
+  **byte-identical** (the old emitter compiles the new emitter to the same
+  IR — the reader uses only syntax/API the old one knows: nested ifs, no
+  `&&`/`||`, no `::<T>`).
+
+**The traps and the decisions.**
+
+- The C++ compiler's `print` path mis-types a generic call's RESULT:
+  `print(idc("s"))` prints a pointer, and `b = idc("s"); print(b)` does
+  too. That is a separate C++ defect, older than this work; the fixture
+  instantiates `idc("s")` without printing it and the comparison stays
+  about signatures. Do not "fix" the pipeline to match it.
+- `e_scan_prog` used to keep scanning after a form failed, producing
+  `E0167` cascades from the wreckage. It now stops at the first bad form;
+  all six new codes print cleanly.
+- The signature reader scans characters itself instead of using
+  `flint_str_index_of`/`split`: the file must stay compilable by the OLD
+  emitter, whose runtime table has no `split` and only a fixed set of
+  string helpers.
+- A file can only describe the functions of the file passed to the
+  producer. Multi-file builds pass the main file's signatures; imported
+  functions keep scanned signatures (safe by the overlay, but their own
+  untyped params can still drift). Recorded in
+  `docs/PIPELINE-GENERICS.md` §5.1; the fix is to query per file or merge
+  before querying.
+- The driver does NOT auto-run the C++ query mode: `--signatures` is an
+  explicit input, so the driver keeps no new hard dependency on `flintc`.

@@ -19,6 +19,7 @@ gate smoke bash tests/run.sh "$FLINTC"
 gate merge bash tests/test_merge.sh "$FLINTC"
 gate registry bash tests/test_registry.sh "$FLINTC"
 gate differential bash tests/test_differential.sh "$FLINTC"
+gate signatures bash tests/test_signatures.sh "$FLINTC"
 gate driver bash tests/test_driver.sh "$FLINTC"
 if [ -x tools/rust/target/release/flint-tool ]; then
   gate decl-order tools/rust/target/release/flint-tool decl-order stage1/lexer.fl stage2/parser.fl stage3/emitter.fl driver/flintc.fl tools/merge_sexp.fl

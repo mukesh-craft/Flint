@@ -1,0 +1,22 @@
+# 2E.5: the query file carries templates' declared type parameters and
+# type-word signatures, which the pipeline's own monomorphizer consumes.
+# Shaped like tests/differential/t_generic.fl so both frontends agree.
+struct Inner { x: i64 }
+
+fn idc<T>(x: T) -> T { return x }
+
+fn pair<A, B>(a: A, b: B) -> i64 { return 0 }
+
+fn take(s: Inner) -> i64 { return s.x }
+
+fn main() {
+    print(idc(5))
+    # force the str instance too (the C++ print path mis-types a generic
+    # call's result, so this one is not printed; both frontends still
+    # instantiate and mangle it).
+    idc("s")
+    print(idc(Inner { x: 3 }).x)
+    pair(1.5, "x")
+    print(take(Inner { x: 7 }))
+    0
+}
