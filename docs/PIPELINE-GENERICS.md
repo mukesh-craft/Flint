@@ -1,8 +1,9 @@
 # The self-host pipeline: generics and traits
 
-**Status (2026-10-21): the monomorphizer is IMPLEMENTED; the traits are
-not.** This note is the specification, written down so it does not have to
-be re-derived. The measurements below are from this device. What landed:
+**Status (2026-10-24): the monomorphizer, the traits, and the query mode
+are IMPLEMENTED.** This note is the specification, written down so it does
+not have to be re-derived. The measurements below are from this device.
+What landed:
 
 - **2E.1** the pipeline files were renamed to their stage roles
   (`stage1/lexer.fl`, `stage2/parser.fl`, `stage3/emitter.fl`).
@@ -11,9 +12,12 @@ be re-derived. The measurements below are from this device. What landed:
   (`idc.i64`, `idc.f64`, `idc.str`, `@"idc.s:Inner"`, `pair.f64.str`) —
   verified symbol for symbol against the C++ IR, and the differential gate
   now covers a generic program (`tests/differential/t_generic.fl`).
+- **2E.5** the C++ query mode (`flintc --emit-signatures`) and the
+  pipeline's overlay consumer — the pipeline now reads the C++ compiler's
+  resolved signatures instead of re-deriving inference (§5).
 
-What is still open: the C++ query mode (§5), and the explicit `::<T>`
-call syntax (a stage2 gap: the *declaration* form works ✓).
+What is still open: the explicit `::<T>` call syntax (a stage2 gap: the
+*declaration* form works ✓).
 
 **The traits landed too (2E.3/2E.4):** the parser reads
 `trait Name { fn m(self) -> T ... }` into
@@ -148,6 +152,60 @@ compiler's answers instead of re-deriving them:
 That is the "one source of truth" the rest of the project is moving
 towards (see `COMPATIBILITY.md` D5 and the Phase 2 work in `STATE.md`).
 
+### 5.1 The query mode and the overlay — DONE (2E.5)
+
+**The producer.** `flintc --emit-signatures in.fl out.sig` parses the WHOLE
+file (the untyped-parameter fixpoint needs the call sites), runs the
+declaration pass (`inferUntypedParams` + `generateDeclarations`, the exact
+view codegen uses), and writes:
+
+    flint-signatures 1
+    fn NAME (TPARAMS) (PARAM_TYPES) -> RET
+
+Type words are `i64 f64 str bool void ptr map [T]`, a struct/enum name, or
+a type parameter; groups are comma-separated and `()` is empty; `#` starts
+a comment. Definitions win over forward declarations; one line per name,
+in first-occurrence order. No artifact and no linking: the mode exits after
+writing the file.
+
+**The consumer.** `stage3/emitter.fl` takes
+`emit.0 prog.sexp out.ll --signatures FILE`; the driver passes it through
+with `flintc.fl ... --signatures FILE`. The file is an **overlay**: a
+function it does not list keeps its scanned signature, so a partial file is
+safe. It overrides parameter words, the return word, and a template's type
+parameters. A shape mismatch is loud (`E0287` parameter count, `E0288` type
+parameters) and an unsupported type word is loud (`E0289`), never a guess.
+
+**What it fixed (measured).** `fn show(x) { print(x) }` called as
+`show("hi")`: the S-expression says the parameter is untyped (`-`), so the
+pipeline defaulted it to i64 and printed the pointer's decimal value
+(`379811845520`); the C++ compiler resolves it to `str` from the call
+site. With the query file the pipeline emits
+`define i64 @show(ptr %x.arg)` and prints `hi`. `tests/test_signatures.sh`
+is the gate: the file's content and determinism, the end-to-end fix, the
+no-file control (still i64 — proof the overlay is what changes the
+answer), a partial file, a C++-vs-pipeline differential pair, and the six
+error codes.
+
+**Limits, recorded rather than hidden.**
+
+- The query covers ONE file. In a multi-file build the driver passes the
+  main file's signatures; imported functions keep their scanned signatures
+  (safe because the file is an overlay, but they can still drift when
+  their own untyped parameters are resolved from cross-file calls). Run
+  the query per file when that matters.
+- `ref` and first-class function types print as `ref`/`fn`, and an array
+  other than `[i64]` prints its element type: the pipeline rejects those
+  words with `E0289` because it cannot emit them. The file never lies to
+  keep the consumer happy.
+- A `void` return maps back to the source's `-` marker, so the existing
+  loud `E0241` (the pipeline cannot compile void helper functions) is
+  unchanged.
+- Diagnostic codes in the pipeline's space: `E0284` unreadable file,
+  `E0285` wrong header/version, `E0286` malformed line, `E0287` parameter
+  count disagrees, `E0288` type parameters disagree, `E0289` type not
+  supported by the pipeline.
+
 ## 6. Order of work
 
 1. **DONE (2E.2): stage3 monomorphization** — with the C++ mangling names
@@ -155,7 +213,8 @@ towards (see `COMPATIBILITY.md` D5 and the Phase 2 work in `STATE.md`).
    symbol.
 2. **DONE (2E.3): stage2 the trait form + method signatures.**
 3. **DONE (2E.4): stage3 trait resolution** (by name + arity).
-4. The query mode (above), so the two frontends stop re-deriving types.
+4. **DONE (2E.5): the query mode** (`flintc --emit-signatures`) and the
+   pipeline overlay, so the two frontends stop re-deriving types (§5.1).
 
 ### 6.1 What the monomorphizer learned (worth keeping)
 

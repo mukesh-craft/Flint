@@ -45,12 +45,11 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution** (the pipeline now compiles trait programs); **2A the type-checking phase + call facts** (the 2A landing commit: `E0290`–`E0294`, 0 contract violations / 0 drift over the whole tree, 174/174 differential, 74 inspectable call facts) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution** (the pipeline now compiles trait programs); **2A the type-checking phase + call facts** (the 2A landing commit: `E0290`–`E0294`, 0 contract violations / 0 drift over the whole tree, 174/174 differential, 74 inspectable call facts); **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`; the measured `show("hi")` drift is fixed) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **the C++ query mode** — the last 2E item (`docs/PIPELINE-GENERICS.md` §5). Phase 2A is finished and gated (§4.2) |
-| then | the pipeline's S-expression positions, the escape analysis for capturing closures (2D.2), the region work (2D.3) |
+| next action | **the explicit `::<T>` call syntax** — the last 2E gap (stage2 does not lex `::`; `docs/PIPELINE-GENERICS.md`). Then the pipeline's S-expression positions and the escape analysis for capturing closures (2D.2) |
 | build | `bash build.sh` — ~2.5 min; poll at 60-120 s, never with a long sleep |
-| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 24 gates, ~25-30 min; run it detached and poll |
+| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 25 gates, ~25-30 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
 | do not | hand-write a vectorizer (the roadmap rejects it); use `llvm.assume` for range facts instead |
 
@@ -72,13 +71,13 @@ Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
 controls and the per-workload method); this file does not repeat it.
 Reproduce with §2.3.
 
-**The v1 battery is green: 24 gates** (measured 2026-10-24; per-gate counts
+**The v1 battery is green: 25 gates** (measured 2026-10-24; per-gate counts
 in §2.2), and the standalone gates are green with it. The whole battery runs
-as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 24/24). The
+as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 25/25). The
 checker's differential is 174/174 over every `.fl` in the tree, the type
 audit reports **0 contract violations and 0 drift**, the two frontends are
-compared by the differential gate (13/13), and the bootstrap's fixed point
-is byte-identical.
+compared by the differential gate (13/13), the query-mode gate is 14/14,
+and the bootstrap's fixed point is byte-identical.
 
 ---
 
@@ -111,9 +110,10 @@ bash tests/run.sh                  # smoke (56)
 bash tests/test_lexdiff.sh         # token contract
 bash tests/test_parse_gate.sh      # 146/146 — parser contract
 bash tests/test_fixpoint.sh        # 146/146 — self-host byte-identical
-bash tests/test_errors.sh          # 139/139 — stage3 emitter catalog
+bash tests/test_errors.sh          # 145/145 — stage3 emitter catalog
 bash tests/test_errors_cpp.sh      # 141/141 — C++ compiler catalog
 bash tests/test_differential.sh    # 13/13  — C++ vs self-host pipeline
+bash tests/test_signatures.sh      # 14/14  — query mode + pipeline overlay
 bash tests/test_type_check.sh      # 174/174 — checker + differential (whole tree)
 bash tests/test_type_audit.sh      # 139 files clean, 0 drift, 74 facts
 bash tests/test_generics.sh        # 7
@@ -125,9 +125,9 @@ bash tests/test_ai.sh tests/test_rust_stdlib.sh tests/test_rust_ffi.sh \
 bash tools/docs_check.sh           # README counts vs tree
 ```
 
-**The v1 battery (2026-10-24, 24 gates, all green):**
-`bash tests/v1_gate_check.sh ./flintc --full` → **24 passed, 0 failed**.
-Every gate prints its own count; the counts re-measured at the 2A landing:
+**The v1 battery (2026-10-24, 25 gates, all green):**
+`bash tests/v1_gate_check.sh ./flintc --full` → **25 passed, 0 failed**.
+Every gate prints its own count; the counts re-measured at the 2E.5 landing:
 
 | gate | measured 2026-10-24 |
 |---|---|
@@ -136,14 +136,16 @@ Every gate prints its own count; the counts re-measured at the 2A landing:
 | parse-gate | 146/146 |
 | fixpoint | 146/146 |
 | differential | 13/13 (0 known divergences) |
-| driver | 6/6 |
+| signatures (new) | 14/14 — query-file content + determinism, the untyped fix, the no-file control, a partial overlay, a differential pair, E0284–E0289 |
+| driver | 7/7 |
+| errors | 145/145 |
 | errors-cpp | 141/141 |
 | diagnostic-codes | 16/16 |
 | docs | 32 links, 15 documents, 0 duplicate paragraphs |
 
 The gates this work did not touch (smoke, generics, no-hang, the
 Rust/AI/LSP suites, …) keep the counts they print; the pass/fail line is the
-contract. The two diagnostic catalogues are in sync (139 emitter + 141 C++),
+contract. The two diagnostic catalogues are in sync (145 emitter + 141 C++),
 and the three bootstrap phases (`tests/test_selfhost.sh` A/B/C) finish with
 the fixed point byte-identical.
 
@@ -300,7 +302,7 @@ A red-team pass found that vague in a way that would have wasted weeks:
 | **2B** | **checks become IR-level operations** (bounds/overflow as explicit ops) | landed (`37d9b8b`): `SafetyPolicy`, counted and gated |
 | **2C** | **analyses**: loop-range facts, then escape analysis | loop-range landed (`a7c6e2b`); escape analysis open (2D.2) |
 | **2D** | **regions** (NLL-style from the CFG) → escaping closures | partial (`57db1a4`): capture-less values may escape; capturing closures still cannot |
-| **2E** | **the pipeline consumes the same semantics** (D5) | mostly (`16adde0`, `48c12d5`, `317566b`): rename, monomorphizer, traits; `::<T>` and the query mode open |
+| **2E** | **the pipeline consumes the same semantics** (D5) | mostly (`16adde0`, `48c12d5`, `317566b`, 2E.5): rename, monomorphizer, traits, the C++ query mode + overlay; `::<T>` call syntax open |
 
 **What "finish 2A" means** (the acceptance criteria, not a vibe):
 
@@ -557,21 +559,25 @@ two competing systems (§8.3).
 
 ### 4.9 P2 — Close D5: the self-host feature gap
 
-**What**: the self-host pipeline (stage2/stage3) has no traits, no
-generics, no `::<`, no enum equality, while the C++ compiler has all four.
-The differential gate is green (11/11) *because* it does not cover them.
+**What**: the self-host pipeline (stage2/stage3) still lacks explicit
+`::<T>` calls, enum equality, and named function values, while the C++
+compiler has all three. Generics, traits, and the C++ compiler's resolved
+signatures are now shared (2E.2-2E.5). The differential gate is green
+(13/13) but it only covers the programs both frontends can compile.
 
 **Do**: after 4.2, make the pipeline emit the shared HIR rather than
 re-implementing the semantics. Until then, D5 is the honest record.
 
 **Verify**: `grep -c typeParams stage2/parser.fl` → 0 today.
 
-#### 4.9.1 2E status: the pipeline now has generics and traits (2E.1-2E.4)
+#### 4.9.1 2E status: generics, traits, and the query mode (2E.1-2E.5)
 
-**Landed** (2026-10-21/22): the rename (`16adde0`), the monomorphizer
+**Landed** (2026-10-21/24): the rename (`16adde0`), the monomorphizer
 (`48c12d5`, the pipeline produces the C++ compiler's own mangled instance
-names), the trait form (2E.3) and its name+arity resolution (2E.4). The
-differential gate is **13/13** and covers a generic and a trait program.
+names), the trait form (2E.3) and its name+arity resolution (2E.4), and the
+query mode (2E.5: `flintc --emit-signatures` + the emitter's overlay). The
+differential gate is **13/13**, the query-mode gate **14/14**, and both
+cover a generic and a trait program.
 
 **The design, the S-expression contract and the lessons learned are in
 [`docs/PIPELINE-GENERICS.md`](docs/PIPELINE-GENERICS.md)** — that is their
@@ -586,9 +592,12 @@ single home; do not restate them here. The implementation history is in
 | arrays are `[i64]` only | an array type argument mangles `.arr`; the element type cannot vary (M7 is deferred) | M7 |
 | one entry per method name in the function table | two implementations of one method name cannot coexist; the C++ keeps a multimap and filters on the receiver | make the table a multimap |
 | no explicit `::<T>` call syntax | the *declaration* form works; stage2 does not parse the call form | add it to stage2 |
+| the query file covers one file | a multi-file build passes the main file's signatures; imported functions keep their scanned signatures (safe, not invisible) | query each file, or merge the files in the driver |
 
-**The last 2E item is the C++ query mode** (the pipeline consumes the C++
-compiler's answers instead of re-deriving them, `PIPELINE-GENERICS.md` §5).
+**The last open 2E gap is the explicit `::<T>` call syntax** (stage2). The
+query mode landed: the pipeline now consumes the C++ compiler's answers for
+the functions a file lists instead of re-deriving their types
+(`PIPELINE-GENERICS.md` §5.1).
 
 ### 4.10 P3 — Items that need a decision or a different machine
 

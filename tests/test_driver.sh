@@ -36,5 +36,11 @@ if [ -x "$SELF_DIR/emit.1" ]; then
 else
   echo "SKIP driver (self-hosted; no emit.1)"; skip=$((skip+1))
 fi
+# 6. --signatures passes the C++ query file through to the emitter (2E.5).
+# Without it the pipeline defaults the untyped param to i64 and prints the
+# pointer; with it the same source prints the string.
+if timeout -s KILL 300 "$FLINTC" --emit-signatures tests/signatures/untyped.fl "$TMPD/untyped.sig" > /dev/null 2>&1 \
+   && timeout -s KILL 500 "$D" tests/signatures/untyped.fl --parse "$P" --emit "$E" --merge "$M" --rt runtime --signatures "$TMPD/untyped.sig" -o "$TMPD/sig.bin" --no-run > /dev/null 2>&1 \
+   && [ "$("$TMPD/sig.bin")" = hi ]; then pass=$((pass+1)); else echo "FAIL driver (signatures)"; fail=$((fail+1)); fi
 echo "driver: $pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

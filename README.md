@@ -41,9 +41,10 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
   [`STATE.md`](STATE.md) §2.2 (one home for status counts).
 - **Self-hosted** — the lexer/parser/emitter are Flint programs
   (`stage1-3/*.fl`); the C++ `flintc` bootstraps them and the bootstrap
-  fixed point is byte-identical. The pipeline compiles generics and traits;
-  the explicit `::<T>` call syntax and the C++ query mode are the remaining
-  2E items ([`COMPATIBILITY.md`](COMPATIBILITY.md) D5,
+  fixed point is byte-identical. The pipeline compiles generics and traits
+  and consumes the C++ compiler's resolved signatures
+  (`flintc --emit-signatures`); the explicit `::<T>` call syntax is the
+  remaining 2E item ([`COMPATIBILITY.md`](COMPATIBILITY.md) D5,
   [`docs/PIPELINE-GENERICS.md`](docs/PIPELINE-GENERICS.md)).
 - **Type checking (Phase 2A, landed)** — a compiler phase rejects provable
   type errors with structured `E0290`–`E0294` diagnostics before codegen,
@@ -384,6 +385,8 @@ flags plus standalone Python scripts:
 ./flintc --check-bce main.fl         # diagnostic: safety checks emitted
                                      # vs surviving O2 (changes nothing)
 ./flintc --emit-interface a.fl b.flint.bc  # declarations only
+./flintc --emit-signatures a.fl b.sig      # resolved fn signatures (query
+                                     # mode; feeds the self-host emitter)
 ./flintc --use-interface b.flint.bc main.fl -o app  # build against them
 ./flintc --target x86_64-pc-linux-gnu main.fl -o main.x86.ll
                                      # cross-target emit (.ll text or .o
@@ -668,7 +671,7 @@ What exists and how to run it (file lists and line counts verified
 |-------|-------|-------|-----|
 | `tests/` smoke tests | 5 `.fl` (`t_hello` 8, `t_arith` 26, `t_flow` 48, `t_funcs` 15, `t_types` 23) | 120 | `bash tests/run.sh ./flintc` |
 | `tests/` runners | `run.sh` 109, `run_tutorial.sh` 18, `test_registry.sh` 43 | 170 | `bash tests/test_registry.sh` |
-| diagnostic catalogs | `docs/errors-cpp.md` (135 C++ compiler diagnostics) + `docs/errors.md` (self-host emitter) | — | `bash tests/test_errors_cpp.sh` · `bash tests/test_errors.sh` |
+| diagnostic catalogs | `docs/errors-cpp.md` (141 C++ compiler diagnostics) + `docs/errors.md` (self-host emitter) | — | `bash tests/test_errors_cpp.sh` · `bash tests/test_errors.sh` |
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | loop above |
 | `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) + 2 Rust oracle mirrors | 386 | `clang -O2` / `g++` / `python3` / `rustc` |
 | `runtime/rust/` stdlib modules | `no_std` Rust: CSV parser, SHA-256/HMAC/AES-256-CTR/GCM (RustCrypto), SQLite wrapper over libsqlite3 | — | `bash tests/test_rust_stdlib.sh ./flintc` |
