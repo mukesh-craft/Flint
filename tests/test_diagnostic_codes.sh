@@ -76,7 +76,7 @@ echo "  $(grep '^CODES' "$WORK/codes.txt")"
 python3 - <<'PY' > "$WORK/table.txt" 2>&1
 import csv, re, sys
 src = open('src/main.cpp').read()
-live = set(re.findall(r'\b(?:codegenError|parseError)\("(E\d{4})"', src))
+live = set(re.findall(r'\b(?:codegenError|parseError|typeError)\("(E\d{4})"', src))
 try:
     rows = list(csv.DictReader(open('docs/error-codes.csv')))
 except Exception as e:

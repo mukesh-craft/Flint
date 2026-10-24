@@ -1,0 +1,6 @@
+# The checker must reject a declaration whose annotation is contradicted by
+# the initialiser, before LLVM sees invalid IR.
+fn main() -> i64 {
+    x: i64 = "hi"
+    return 0
+}

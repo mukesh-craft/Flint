@@ -1648,7 +1648,7 @@ phase-exit criteria are below.
 
 | step | goal | exit criterion | status |
 |---|---|---|---|
-| **2A** | a real type checker + facts in types | the checker rejects provable type errors with structured diagnostics, never rejects what the compiler accepts (differential over the corpus), `--type-audit` shows 0 contract violations and 0 drift, and the resolved trait / instantiated type arguments are inspectable | audit and the array-length fact landed; **the checker phase and the call facts are open** |
+| **2A** | a real type checker + facts in types | the checker rejects provable type errors with structured diagnostics, never rejects what the compiler accepts (differential over the corpus), `--type-audit` shows 0 contract violations and 0 drift, and the resolved trait / instantiated type arguments are inspectable | **landed**: checker phase (`E0290`–`E0294`), 174/174 differential, 0 drift / 0 contract violations, call facts inspectable |
 | **2B** | checks become IR-level data | bounds/overflow are IR operations with a safety policy, not inline code | landed |
 | **2C** | analyses | loop-range facts (landed) and escape analysis (open) | partial |
 | **2D** | regions | capturing closures escape safely (NLL-style regions) | partial |

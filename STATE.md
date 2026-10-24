@@ -45,12 +45,12 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution** (the pipeline now compiles trait programs) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution** (the pipeline now compiles trait programs); **2A the type-checking phase + call facts** (the 2A landing commit: `E0290`–`E0294`, 0 contract violations / 0 drift over the whole tree, 174/174 differential, 74 inspectable call facts) |
 | in flight | (none — see the git log for the newest commit) |
-| next action | **finish Phase 2A**: (1) fix the 21-case tensor-literal drift so `--type-audit` is 0/0; (2) land the checker phase (`TypeChecker` between imports and codegen, structured `E0290+` diagnostics, `--no-type-check` for the differential gate); (3) add the resolved-trait and instantiated-type-argument facts to `CallExprAST` and print them from `--type-audit`; (4) gate all of it (§4.2 has the acceptance criteria) |
-| then | the C++ query mode (the last 2E item, `docs/PIPELINE-GENERICS.md` §5), the pipeline's S-expression positions, the escape analysis for capturing closures (2D.2), the region work (2D.3) |
-| build | `bash build.sh` — ~2 min; poll at 60-120 s, never with a long sleep |
-| gates | `bash tests/<name>.sh` — the whole set is ~4.5 min; run it detached and poll |
+| next action | **the C++ query mode** — the last 2E item (`docs/PIPELINE-GENERICS.md` §5). Phase 2A is finished and gated (§4.2) |
+| then | the pipeline's S-expression positions, the escape analysis for capturing closures (2D.2), the region work (2D.3) |
+| build | `bash build.sh` — ~2.5 min; poll at 60-120 s, never with a long sleep |
+| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 24 gates, ~25-30 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
 | do not | hand-write a vectorizer (the roadmap rejects it); use `llvm.assume` for range facts instead |
 
@@ -72,11 +72,13 @@ Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
 controls and the per-workload method); this file does not repeat it.
 Reproduce with §2.3.
 
-**The whole battery is green: 36 gates, 764 assertions** (measured
-2026-10-21, HEAD `59c3e65`; the per-gate table is §2.2). The v1 subset runs
-as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 19/19).
-The two frontends are compared by the differential gate (13/13) and the
-bootstrap's fixed point is byte-identical.
+**The v1 battery is green: 24 gates** (measured 2026-10-24; per-gate counts
+in §2.2), and the standalone gates are green with it. The whole battery runs
+as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 24/24). The
+checker's differential is 174/174 over every `.fl` in the tree, the type
+audit reports **0 contract violations and 0 drift**, the two frontends are
+compared by the differential gate (13/13), and the bootstrap's fixed point
+is byte-identical.
 
 ---
 
@@ -106,12 +108,14 @@ and `/usr/bin/env` does not exist on Termux.
 ```bash
 T=/data/data/com.termux/files/usr/tmp/opencode
 bash tests/run.sh                  # smoke (56)
-bash tests/test_lexdiff.sh         # 133  — token contract
-bash tests/test_parse_gate.sh      # 134  — parser contract
-bash tests/test_fixpoint.sh        # 134  — self-host byte-identical
+bash tests/test_lexdiff.sh         # token contract
+bash tests/test_parse_gate.sh      # 146/146 — parser contract
+bash tests/test_fixpoint.sh        # 146/146 — self-host byte-identical
 bash tests/test_errors.sh          # 139/139 — stage3 emitter catalog
-bash tests/test_errors_cpp.sh      # 134/134 — C++ compiler catalog
+bash tests/test_errors_cpp.sh      # 141/141 — C++ compiler catalog
 bash tests/test_differential.sh    # 13/13  — C++ vs self-host pipeline
+bash tests/test_type_check.sh      # 174/174 — checker + differential (whole tree)
+bash tests/test_type_audit.sh      # 139 files clean, 0 drift, 74 facts
 bash tests/test_generics.sh        # 7
 bash tests/test_no_hang.sh         # 88
 bash tests/test_ai.sh tests/test_rust_stdlib.sh tests/test_rust_ffi.sh \
@@ -121,32 +125,27 @@ bash tests/test_ai.sh tests/test_rust_stdlib.sh tests/test_rust_ffi.sh \
 bash tools/docs_check.sh           # README counts vs tree
 ```
 
-**The whole suite, counted (2026-10-21, 36 gates, all green):**
+**The v1 battery (2026-10-24, 24 gates, all green):**
+`bash tests/v1_gate_check.sh ./flintc --full` → **24 passed, 0 failed**.
+Every gate prints its own count; the counts re-measured at the 2A landing:
 
-| gate | count | | gate | count |
-|---|---|---|---|---|
-| smoke | 56 | | print-size | 11 |
-| parse-golden | 2 | | one-error | 6 |
-| parse-gate | 134 | | unsafe-flag | 6 |
-| fixpoint | 134 | | bounds-safety | 5 |
-| lexdiff | 133 | | type-audit | 125 files, 0 violations |
-| differential | 13 | | sanitizers | 10 |
-| generics | 7 | | merge | 6 |
-| no-hang | 88 | | driver | 6 |
-| ai-stdlib | 26 | | emit | 3 |
-| rust-stdlib | 20 | | emit-stage3 (the ladder) | 21 |
-| rust-ffi | 8 | | tutorial | 8 |
-| rust-oracle | 2 | | opt-identity | 11 |
-| aegis | 16 | | dwarf | 16 |
-| https | 4 | | python | 4 |
-| target | 9 | | lsp | 5 |
+| gate | measured 2026-10-24 |
+|---|---|
+| type-check (new, in `--full`) | 174/174 — 12 fixtures + one differential pair per `.fl` in the whole tree |
+| type-audit (widened, in `--full`) | 139 files clean, 23 skipped (deliberate error demos), 0 failed, 74 call facts |
+| parse-gate | 146/146 |
+| fixpoint | 146/146 |
+| differential | 13/13 (0 known divergences) |
+| driver | 6/6 |
+| errors-cpp | 141/141 |
+| diagnostic-codes | 16/16 |
+| docs | 32 links, 15 documents, 0 duplicate paragraphs |
 
-= **764 assertions** across the 36 gates, plus the two diagnostic
-catalogs (139 emitter + 134 C++ messages, both in sync ✓), the
-type-audit over 125 files ✓ and the three bootstrap phases
-(`tests/test_selfhost.sh A/B/C` — Phase C byte-identical ✓). The v1
-battery (`bash tests/v1_gate_check.sh ./flintc --full`) runs 19 of them
-as one command ✓: 19 passed, 0 failed ✓.
+The gates this work did not touch (smoke, generics, no-hang, the
+Rust/AI/LSP suites, …) keep the counts they print; the pass/fail line is the
+contract. The two diagnostic catalogues are in sync (139 emitter + 141 C++),
+and the three bootstrap phases (`tests/test_selfhost.sh` A/B/C) finish with
+the fixed point byte-identical.
 
 Run long gate sequences **detached** with a results file, because a tool
 timeout kills the group mid-run and you lose the whole sequence:
@@ -296,8 +295,8 @@ A red-team pass found that vague in a way that would have wasted weeks:
 
 | step | deliverable | status (2026-10-23) |
 |---|---|---|
-| **2A.0** | a **type checker** for the decidable subset (annotated declarations, function signatures, literal types), with `--type-audit` as its differential instrument | audit + one inference engine landed (`b75e4c7`, `f0441df`); **the checking phase is the remaining 2A item** |
-| **2A.1** | **types carry facts**: an array's exact length, the resolved trait for a call, the instantiated type arguments | length landed (`42b3a04`, `2b45516`); trait/type-arg facts are the remaining 2A item |
+| **2A.0** | a **type checker** for the decidable subset (annotated declarations, function signatures, literal types), with `--type-audit` as its differential instrument | **landed** (2A landing commit): `TypeChecker` runs as a phase, `E0290`–`E0294`, `--no-type-check`, 174/174 differential, 0 drift |
+| **2A.1** | **types carry facts**: an array's exact length, the resolved trait for a call, the instantiated type arguments | **landed**: length (`42b3a04`, `2b45516`); `resolvedImpl` + `instantiatedTypeArgs` (2A landing commit), 74 facts corpus-wide |
 | **2B** | **checks become IR-level operations** (bounds/overflow as explicit ops) | landed (`37d9b8b`): `SafetyPolicy`, counted and gated |
 | **2C** | **analyses**: loop-range facts, then escape analysis | loop-range landed (`a7c6e2b`); escape analysis open (2D.2) |
 | **2D** | **regions** (NLL-style from the CFG) → escaping closures | partial (`57db1a4`): capture-less values may escape; capturing closures still cannot |
@@ -321,6 +320,27 @@ A red-team pass found that vague in a way that would have wasted weeks:
 
 **Landed evidence (the short version; detail is in `memory.md`):**
 
+- **The checker phase** (2A landing commit): `TypeChecker` runs after
+  imports + declaration generation and before any function body is emitted.
+  A provable error stops the compile with a span, a code and a `help` line:
+  `E0290` declaration/global initialiser, `E0291` return, `E0292`
+  assignment, `E0293` call argument, `E0294` mixed `i64`/`f64` comparison —
+  the five shapes where codegen used to retype silently or emit IR LLVM's
+  verifier rejected. `--no-type-check` is the differential oracle, and the
+  cache salt includes it. The checker is deliberately conservative: an
+  expression shape it does not model is *unknown*, never an invented error.
+- **Zero drift, zero contract violations** (2A landing commit): the whole
+  tree — 162 files, including stage1-3/driver/tools/agent-bench — audits
+  clean; the 23 skipped files are the deliberate borrow/move/error demos.
+  The last drifts were named function values (no parser signature table for
+  `h = inc`), `-> ptr` missing from the declaration pre-pass, a void
+  declaration's pre-pass consuming the next signature, and extern
+  signatures. All four are fixed at the source, not waived.
+- **The call facts** (2A.1, 2A landing commit): `CallExprAST` carries the
+  instantiated type arguments and the resolved impl (name + receiver type,
+  `area for Circle`), recorded by codegen and printed by `--type-audit`.
+  The fixture pins `[i64]`, `[f64]` and the impl; explicit `::<T>` calls
+  are covered by `tests_manual/t_explicit_targs.fl` (7 facts).
 - **One inference engine** (`f0441df`): each builtin's Flint type is derived
   at registration (`gBuiltinTypes`), so the parser and the codegen cannot
   drift on a builtin; the parser learned user-call returns, field access,
@@ -1061,7 +1081,7 @@ the C++ compiler's *structure*:
 | the Diagnostic structure (span, code, level, labels, help, notes) | **done** — one structure, two renderings ✓ |
 | the rendered window (rustc's shape: the header, the `-->`, the gutter, the source line, the `^^^`/`---` underlines) | **done** ✓ |
 | the JSON stream (`--error-format json`, one object per line) | **done** ✓ — rustc's `--error-format json` shape ✓ |
-| the stable codes | **done** — 144 for the C++ compiler, 139 for the emitter, in ONE space (no two diagnostics in the project share a code) ✓ |
+| the stable codes | **done** — 149 for the C++ compiler (144 + the checker's `E0290`–`E0294`), 139 for the emitter, in ONE space (no two diagnostics in the project share a code) ✓ |
 | the code tables | **done** — `docs/error-codes.csv`, `docs/error-codes-pipeline.csv` ✓ |
 | the gate | **done** — `tests/test_diagnostic_codes.sh` (16 checks ✓) ✓ |
 | the suggestions (Levenshtein) | **done** — "there is a name with a similar spelling: `counter`" ✓ (rustc's wording: a statement, not a question ✓) |

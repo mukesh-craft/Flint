@@ -1,0 +1,8 @@
+# A mixed comparison is legal when one side is converted explicitly.
+fn main() -> i64 {
+    a: i64 = 1
+    b: f64 = 2.5
+    if (a as f64) < b { print("lt") }
+    if b > (a as f64) { print("gt") }
+    return 0
+}

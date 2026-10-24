@@ -5134,3 +5134,83 @@ is ✓.
   construct but not the LINE, because the S-expression carries no
   positions. Putting them in is the honest fix and it is a format change
   (both frontends, the goldens, the ladder).
+
+## 2A landing addendum (2026-10-24) — the checker phase, the facts, zero drift
+
+**What landed.**
+
+1. **The checker** (`TypeChecker`, `src/main.cpp`) runs after imports +
+   declaration generation and **before** `emitFunctionBodies`. A provable
+   error stops the compile with a span, a stable code and a `help` line:
+   `E0290` declaration/global initialiser, `E0291` return, `E0292`
+   assignment, `E0293` call argument, `E0294` mixed `i64`/`f64`
+   comparison. `--no-type-check` is the differential oracle, and the cache
+   salt includes it so a checked and an unchecked build cannot collide.
+2. **Compatibility is the backend's compatibility**, not a stricter rule.
+   `compatibleStore` relaxes exactly one case: a `ptr` destination accepts
+   an `i64`/`bool` value. That is the FFI handle convention —
+   `cell: ptr = flint_atomic_new(0)` is correct today (opaque-pointer alloca,
+   `store i64`, SROA `inttoptr`). The reverse is a bug: `x: i64 = "hi"`
+   compiles and silently retypes the binding, so the annotation is a lie and
+   `E0290` reports it. `f64`↔`i64` stays strict everywhere, including
+   comparison, where codegen emitted `fcmp olt i64, double` and LLVM's
+   verifier rejected the module.
+3. **The facts** (`2A.1`): `CallExprAST::instantiatedTypeArgs` and
+   `resolvedImpl` are recorded by codegen and printed by `--type-audit`.
+   The impl fact names the receiver type (`area for Circle`) because the
+   function name alone does not identify an impl.
+4. **Drift is zero** across the whole tree. The last four shapes:
+   - a named function used as a value (`h = inc`) had no parser signature
+     table. `fnSignatures` (name → `fn(params) -> ret`) is filled by
+     `recordFnSignature` at the end of both definition paths; `inferType`,
+     `inferCallType` and the checker's `typeOf(Variable)` read it. Generic
+     and void functions are deliberately absent: codegen's `namedFnThunk`
+     has no value for them, so a guess would be wrong.
+   - `readTypeFromTokens` (the declaration pre-pass) did not accept
+     `KW_PTR`, so it could not see `fn f() -> ptr`.
+   - the pre-pass for a bodyless declaration ran past the newline into the
+     next declaration, recording its return type under the wrong name and
+     consuming that declaration's signature. It now stops at a newline or
+     semicolon at depth 0.
+   - `parseExternBlock` never recorded `fnReturnTypes`, so the last
+     `-> ptr` extern in `examples/ai_arch_bench.fl` was invisible.
+5. **The gates**: `tests/test_type_check.sh` (8 rejection fixtures with
+   their own code and no artifact, 4 acceptance fixtures, and one
+   differential pair for every `.fl` in the tree = 174 checks) and
+   `tests/test_type_audit.sh` (whole tree; any `parse=` drift or
+   `CONTRACT VIOLATED` fails; the facts fixture pins `[i64]`, `[f64]`,
+   `area for Circle`). Both are in `v1_gate_check.sh --full`; docs,
+   errors-cpp and diagnostic-codes are in the default battery.
+
+**Measured (2026-10-24).**
+
+- `v1_gate_check.sh ./flintc --full`: **24/24**.
+- type-check: **174 passed, 0 failed** (12 fixtures + 162 corpus files).
+- type-audit: **139 files clean, 23 skipped** (the deliberate
+  borrow/move/aegis error demos), **0 failed, 74 call facts**.
+- differential 13/13 (0 known divergences), driver 6/6, parse-gate 146/146,
+  fixpoint 146/146, errors-cpp 141/141, diagnostic-codes 16/16, docs
+  32 links / 15 documents.
+- bootstrap A/B/C: Phase C fixed point **byte-identical**.
+
+**What the work found (the traps).**
+
+- The first differential corpus omitted stage1-3, driver, tools and
+  agent-bench. The pipeline gates caught what that gap hid: new fixtures
+  under `tests/` are parsed by the self-host parser, and `facts.fl`'s
+  `::<f64>` is syntax the pipeline does not implement yet. The fixture now
+  uses inference; explicit `::<T>` coverage lives in
+  `tests_manual/t_explicit_targs.fl` (7 facts). Both corpora now walk the
+  whole tree, so a checker false positive on a pipeline source fails
+  type-check before it can break the bootstrap.
+- `tests/test_selfhost.sh` takes the PHASE as `$1` and the compiler from
+  `$FLINTC`: `bash tests/test_selfhost.sh ./flintc` silently runs no phase.
+  Use `FLINTC=./flintc bash tests/test_selfhost.sh`.
+- The gates' tmp root is `${TMPDIR:-/data/data/com.termux/files/usr/tmp}`,
+  not `.../tmp/opencode`. The differential and driver gates need the
+  self-host artifacts there; when the system cleans them, they fail for an
+  environmental reason. Run `test_selfhost.sh` first, then the battery.
+
+**Deliberately not here.** The typed HIR, regions, capabilities and the
+pipeline's shared semantics. 2A delivered the checker and the facts; the
+HIR consumes them later.
