@@ -45,9 +45,14 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
   the explicit `::<T>` call syntax and the C++ query mode are the remaining
   2E items ([`COMPATIBILITY.md`](COMPATIBILITY.md) D5,
   [`docs/PIPELINE-GENERICS.md`](docs/PIPELINE-GENERICS.md)).
-- **In progress** — Phase 2: a real type checker with structured
-  diagnostics and typed facts (the live queue is
-  [`STATE.md`](STATE.md) §4.2).
+- **Type checking (Phase 2A, landed)** — a compiler phase rejects provable
+  type errors with structured `E0290`–`E0294` diagnostics before codegen,
+  may never reject a program the compiler accepts (174/174 differential over
+  every `.fl` in the tree), and `--type-audit` reports **0 contract
+  violations / 0 drift** plus the call facts (instantiated type arguments,
+  resolved trait impls). `--no-type-check` is the differential oracle. The
+  remaining Phase 2 items (typed HIR, regions, capabilities) are in
+  [`STATE.md`](STATE.md) §4.2.
 - **Honest gaps** — `[T]` containers (M7) are deferred by decision, Windows
   and macOS are not executed from this device, and the self-host pipeline's
   function table holds one entry per method name (two trait impls of the

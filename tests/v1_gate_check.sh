@@ -29,6 +29,11 @@ gate fmt bash tests/test_fmt.sh "$FLINTC"
 gate errors bash tests/test_errors.sh
 gate aegis bash tests/test_aegis.sh "$FLINTC"
 gate stdlib bash tests/test_ai.sh "$FLINTC"
+# The documentation and diagnostic-catalogue gates are fast and need no
+# compiler run, so they belong to the default battery.
+gate docs bash tests/test_docs.sh
+gate errors-cpp bash tests/test_errors_cpp.sh
+gate diagnostic-codes bash tests/test_diagnostic_codes.sh "$FLINTC"
 if [ "$FULL" = 1 ]; then
   gate parse-gate-83 bash tests/test_parse_gate.sh "$FLINTC"
   gate fixpoint-83 bash tests/test_fixpoint.sh "$FLINTC"
@@ -37,6 +42,10 @@ if [ "$FULL" = 1 ]; then
   gate tutorial bash tests/run_tutorial.sh "$FLINTC"
   gate sanitizers bash tests/test_sanitizers.sh "$FLINTC"
   gate opt-identity bash tests/test_opt_identity.sh "$FLINTC"
+  # Phase 2 / 2A: the type-checking phase and the inference audit. Both walk
+  # the whole corpus twice, so they are slow gates.
+  gate type-check bash tests/test_type_check.sh "$FLINTC"
+  gate type-audit bash tests/test_type_audit.sh "$FLINTC"
 fi
 echo "v1-gate: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -1,0 +1,23 @@
+# 2A.1 facts: a generic call's instantiated type arguments and a trait
+# method's resolved implementation must be printed by --type-audit.
+struct Circle { r: i64 }
+
+trait Shape {
+    fn area(self) -> i64
+}
+
+fn area(c: Circle) -> i64 {
+    return c.r * c.r * 3
+}
+
+fn idc<T>(x: T) -> T { return x }
+
+fn main() -> i64 {
+    a = idc(5)
+    b = idc(1.5)          # inferred: the instantiated argument is f64
+    c = Circle { r: 2 }
+    print(c.area())
+    print(a)
+    print(b)
+    return 0
+}

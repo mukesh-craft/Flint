@@ -327,6 +327,9 @@ static std::string gSafetyPosture = "safe";
 // Phase 2 / 2A.0 -- the type audit. Off by default; it prints the places
 // where the parser's inference and the codegen's inference disagree.
 static bool gTypeAudit = false;
+// Phase 2 / 2A: the checking phase is ON by default. --no-type-check is the
+// differential oracle (and the escape hatch for a false positive).
+static bool gTypeCheck = true;
 
 static bool gUnsafeWarned = false;
 
@@ -2352,6 +2355,15 @@ struct CallExprAST : ExprAST {
     std::string callee;
     std::vector<Type> typeArgs;
     std::vector<std::unique_ptr<ExprAST>> args;
+    // Phase 2 / 2A.1 -- the facts the call site resolved:
+    //   * instantiatedTypeArgs: the CONCRETE type arguments of a generic
+    //     call (`idc(5)` -> [i64]), whether inferred or explicit;
+    //   * resolvedImpl: for a trait-method call, the implementation that
+    //     name+arity dispatch selected (`area` -> `area.Circle`).
+    // They are recorded by codegen and printed by --type-audit, so the
+    // resolution is inspectable instead of implicit.
+    std::vector<Type> instantiatedTypeArgs;
+    std::string resolvedImpl;
     CallExprAST(std::string c, std::vector<std::unique_ptr<ExprAST>> a)
         : ExprAST(NodeKind::Call), callee(std::move(c)), args(std::move(a)) {}
 };
@@ -2737,6 +2749,9 @@ struct FunctionAST : ExprAST {
     std::vector<std::pair<std::string, Type>> params;
     std::vector<std::unique_ptr<ExprAST>> defaults; // default values for params
     Type returnType;
+    // Phase 2 / 2A: was the return type WRITTEN (`-> T`) or inferred from
+    // the body? Only a written one is a contract the checker may enforce.
+    bool returnTypeWasAnnotated = false;
     std::unique_ptr<ExprAST> body;
     bool isDeclaration = false;
     size_t bodyStart = 0;  // token index of '{' in token stream
@@ -2971,6 +2986,13 @@ public:
     // i64" (a call to flint_regex_replace, flint_str_*, ...). One registry
     // removes the class, not just the instances.
     Type inferCallType(const std::string& callee) {
+        // An INDIRECT call (`h = inc; h(5)`) is typed by the binding's fn
+        // signature. A local binding shadows a builtin of the same name, so
+        // it is consulted first.
+        auto vt = varTypeMap.find(callee);
+        if (vt != varTypeMap.end() && vt->second.kind == TypeKind::Func &&
+            vt->second.funcRet)
+            return *vt->second.funcRet;
         auto bit = gBuiltinTypes.find(callee);
         if (bit != gBuiltinTypes.end()) return bit->second;
         // A USER function: its declared return type, from the pre-pass (so a
@@ -2978,6 +3000,34 @@ public:
         auto rit = fnReturnTypes.find(callee);
         if (rit != fnReturnTypes.end()) return rit->second;
         return inferCallTypeFallback(callee);
+    }
+
+    // Phase 2 / 2A: record the VALUE-level signature of a parsed function
+    // (`inc` in `h = inc`), not just its call-level return type. The two are
+    // different questions: `fnReturnTypes` answers "what does a call
+    // return", this answers "what is the function itself".
+    //
+    // A generic or void function has no fn value -- codegen's namedFnThunk
+    // returns nullptr for both -- so it is deliberately absent: better no
+    // guess than a wrong one.
+    void recordFnSignature(const FunctionAST* fn) {
+        if (!fn) return;
+        if (!fn->typeParams.empty() ||
+            fn->returnType.kind == TypeKind::Void ||
+            fn->returnType.kind == TypeKind::TypeParam) {
+            fnSignatures.erase(fn->name);
+            return;
+        }
+        std::vector<Type> ps;
+        ps.reserve(fn->params.size());
+        for (auto& p : fn->params) {
+            if (p.second.kind == TypeKind::TypeParam) {
+                fnSignatures.erase(fn->name);
+                return;
+            }
+            ps.push_back(p.second);
+        }
+        fnSignatures[fn->name] = Type::fn_(std::move(ps), fn->returnType);
     }
 
     static Type inferCallTypeFallback(const std::string& callee) {
@@ -3152,6 +3202,11 @@ public:
         if (t.type == TokenType::KW_F64) { out = Type::f64(); i++; return true; }
         if (t.type == TokenType::KW_STR) { out = Type::str(); i++; return true; }
         if (t.type == TokenType::KW_BOOL) { out = Type::boolean(); i++; return true; }
+        // `ptr` is a keyword token, and leaving it out here made the
+        // declaration pre-pass blind to `fn f() -> ptr`: a forward call
+        // then inferred i64 for a pointer result. Same class as the tensor
+        // drift -- two engines, one shape they disagreed on.
+        if (t.type == TokenType::KW_PTR) { out = Type::ptr_(); i++; return true; }
         if (t.type == TokenType::KW_FN) {
             // fn(T1, T2) -> R
             i++;
@@ -3202,6 +3257,15 @@ public:
                 if (tt == TokenType::LPAREN) depth++;
                 else if (tt == TokenType::RPAREN) depth--;
                 else if (depth == 0 && tt == TokenType::LBRACE) break;      // body: no annotation
+                // A bodyless declaration ends at the newline. Without this
+                // stop the scan for a VOID declaration (`fn f(t: ptr)`)
+                // ran into the NEXT declaration and recorded its return
+                // type under f's name -- and consumed that declaration, so
+                // its own signature was never recorded (measured: the last
+                // `-> ptr` extern in examples/ai_arch_bench.fl, whose call
+                // then inferred i64).
+                else if (depth == 0 && (tt == TokenType::NEWLINE ||
+                                        tt == TokenType::SEMICOLON)) break;
                 else if (depth == 0 && tt == TokenType::ARROW) {
                     // the return type, read from the tokens (no parseType:
                     // it would report errors for shapes this pass does not
@@ -3392,13 +3456,15 @@ public:
             }
         }
         Type retType = Type::void_();
-        if (match(TokenType::ARROW)) retType = parseType();
+        bool retAnnotated = false;
+        if (match(TokenType::ARROW)) { retType = parseType(); retAnnotated = true; }
         auto fn = std::make_unique<FunctionAST>();
         fn->name = nameTok.lexeme;
         fn->params = std::move(params);
         fn->untypedParams = std::move(untyped);
         fn->defaults = std::move(defaults);
         fn->returnType = retType;
+        fn->returnTypeWasAnnotated = retAnnotated;
         // Phase 2 / 2A: record the signature so a call to THIS function
         // infers its declared return type (the parse-time engine used to
         // answer i64 for every user function).
@@ -3439,6 +3505,10 @@ public:
                 }
             }
         }
+        // The body may have refined an inferred return type; keep the
+        // parse-time signature table in step with it.
+        fnReturnTypes[fn->name] = fn->returnType;
+        recordFnSignature(fn.get());
         return fn;
     }
 
@@ -3507,6 +3577,9 @@ public:
                     consume(TokenType::RPAREN, "expected ')'");
                     if (match(TokenType::ARROW)) ext.returnType = parseType();
                     else ext.returnType = Type::void_();
+                    // The parse-time engine types a call by its callee's
+                    // signature; an extern is a function too.
+                    fnReturnTypes[ext.name] = ext.returnType;
                     match(TokenType::SEMICOLON);
                     match(TokenType::NEWLINE);
                     prog.externs.push_back(ext);
@@ -3531,6 +3604,10 @@ private:
     // call to an already-declared function infers its real type instead of
     // the builtins table's i64 fallback.
     std::unordered_map<std::string, Type> fnReturnTypes;
+    // The full signatures of the functions parsed so far (name -> fn type),
+    // so a NAMED function used as a value is typed like codegen types it.
+    // recordFnSignature is the one writer.
+    std::unordered_map<std::string, Type> fnSignatures;
     std::unordered_set<std::string> globalVarNames;
     std::unordered_map<std::string, Type> varTypeMap;
     // Phase 2 / 2A: the types visible at the end of the LAST block parsed
@@ -3679,11 +3756,14 @@ private:
             case NodeKind::Array: return Type::array(Type::i64());
             case NodeKind::MapLiteral: return Type::map();
             case NodeKind::Cast: return static_cast<CastExprAST*>(expr)->target;
-            // Tensor deliberately infers i64, NOT ptr: inferCallType gives
-            // flt_create_1d/2d the same i64 (opaque handles are unified at
-            // codegen by emitVarDecl's LLVM-type adjustment), so a literal
-            // and its hand-built equivalent type identically everywhere.
-            case NodeKind::Tensor: return Type::i64();
+            // A tensor handle is an OPAQUE POINTER, exactly like the value
+            // flt_create_1d/2d return: the compiler registers those builtins
+            // with an LLVM pointer return, and inferCallType reads that
+            // registry, so a call is typed str. A literal must be typed the
+            // same way or the two spellings of one value disagree -- the
+            // type audit measured 21 declarations of exactly that drift
+            // (parse=i64, codegen=str) before this line changed.
+            case NodeKind::Tensor: return Type::str();
             case NodeKind::Variable: {
                 auto* v = static_cast<VariableExprAST*>(expr);
                 auto it = varTypeMap.find(v->name);
@@ -3692,6 +3772,12 @@ private:
                 // return-type inference runs after the body was parsed).
                 auto bt = lastBlockTypes.find(v->name);
                 if (bt != lastBlockTypes.end()) return bt->second;
+                // A NAMED function used as a value (`h = inc`). Codegen
+                // materialises a thunk with exactly this signature; without
+                // the lookup the parse engine answered i64 and the audit
+                // measured `h parse=i64 codegen=fn` in every fn-value test.
+                auto fs = fnSignatures.find(v->name);
+                if (fs != fnSignatures.end()) return fs->second;
                 return Type::i64();
             }
             case NodeKind::Binary: {
@@ -3796,8 +3882,10 @@ private:
         consume(TokenType::RPAREN, "expected ')' after parameters");
 
         Type retType = Type::void_();
+        bool retAnnotated = false;
         if (match(TokenType::ARROW)) {
             retType = parseType();
+            retAnnotated = true;
         }
 
         for (auto& p : params) {
@@ -3814,6 +3902,7 @@ private:
         fn->untypedParams = std::move(untyped);
         fn->defaults = std::move(defaults);
         fn->returnType = retType;
+        fn->returnTypeWasAnnotated = retAnnotated;
         fn->isDeclaration = isDecl;
         fn->loc = nameTok.loc;
 
@@ -3885,6 +3974,14 @@ private:
                 }
             }
         }
+        // Phase 2 / 2A: the parse-time engine needs the signature of THIS
+        // function for later declarations (`s = make_shape(...)`). The
+        // keywordless path recorded it; this path is the one `parseProgram`
+        // uses and it did not, so every call to a user function still
+        // inferred i64 while codegen knew the real type -- the drift the
+        // audit measured.
+        fnReturnTypes[fn->name] = fn->returnType;
+        recordFnSignature(fn.get());
         parserTypeParams.clear();
         return fn;
     }
@@ -4386,12 +4483,13 @@ private:
                 case NodeKind::Array:
                     varType = Type::array(Type::i64());
                     break;
-                case NodeKind::Variable: {
-                    auto* varInit = static_cast<VariableExprAST*>(init.get());
-                    auto it = varTypeMap.find(varInit->name);
-                    if (it != varTypeMap.end()) varType = it->second;
+                case NodeKind::Variable:
+                    // varTypeMap, the closed block's snapshot, and the
+                    // named-function table all live in inferType; copying
+                    // half of the rule here is how the fn-value drift
+                    // happened.
+                    varType = inferType(init.get());
                     break;
-                }
                 case NodeKind::Ref: {
                     auto* refInit = static_cast<RefExprAST*>(init.get());
                     if (refInit->target->kind == NodeKind::Variable) {
@@ -4421,7 +4519,11 @@ private:
                     // honest (annotations, methodRecvKind, later inference).
                     varType = static_cast<CastExprAST*>(init.get())->target;
                     break;
-                // Tensor keeps the default i64 (same as flt_create_* calls).
+                // A tensor literal is an opaque pointer, the same type
+                // inferCallType gives flt_create_1d/2d (see inferType).
+                case NodeKind::Tensor:
+                    varType = Type::str();
+                    break;
                 case NodeKind::Call: {
                     auto* cInit = static_cast<CallExprAST*>(init.get());
                     // Same table inferType uses, so a global bound to a builtin
@@ -4451,6 +4553,9 @@ private:
 
         auto decl = std::make_unique<VarDeclAST>(nameTok.lexeme, isMutable, varType, std::move(init));
         decl->typeWasAnnotated = hasTypeAnnotation;
+        // 2A: the declaration site is the variable NAME, so a diagnostic can
+        // point at it (it used to default to line 1).
+        decl->loc = nameTok.loc;
         decl->loc = nameTok.loc;
         return decl;
     }
@@ -5704,6 +5809,26 @@ public:
         bool annotated = false;
     };
     std::vector<TypeDrift> typeDrift;
+    // Phase 2 / 2A.1: the facts resolved at CALL sites. Unlike a declaration
+    // (where the two engines are compared), a call site has one truth: the
+    // instantiation/implementation the compiler chose. Recording it here is
+    // what makes --type-audit able to SHOW the choice.
+    struct CallFact {
+        std::string callee;
+        int line = 0;
+        std::vector<Type> typeArgs;
+        std::string impl;
+    };
+    std::vector<CallFact> callFacts;
+    void recordCallFact(CallExprAST* call, const std::vector<Type>& typeArgs,
+                        const std::string& impl) {
+        CallFact f;
+        f.callee = call->callee;
+        f.line = call->loc.line;
+        f.typeArgs = typeArgs;
+        f.impl = impl;
+        callFacts.push_back(std::move(f));
+    }
     bool auditTypes = false;   // set from the --type-audit flag
     // The source location of the statement/expression being emitted, so a
     // codegen diagnostic can say WHERE it happened. Parse errors have always
@@ -10357,6 +10482,8 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                     ef = specialize(generic, call->typeArgs);
                 }
                 if (!ef) return codegenError("E0058", std::string("failed to specialize '") + call->callee + "'");
+                call->instantiatedTypeArgs = call->typeArgs;
+                recordCallFact(call, call->typeArgs, "");
                 std::vector<llvm::Value*> eargs;
                 for (auto& a : call->args) {
                     auto* v = emitExpr(a.get());
@@ -10436,6 +10563,8 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                     "'; the argument's type could not be determined");
             }
 
+            call->instantiatedTypeArgs = typeArgs;
+            recordCallFact(call, typeArgs, "");
             std::string mangled = mangle(call->callee, typeArgs);
             llvm::Function* f = nullptr;
             auto cit = genericCache.find(mangled);
@@ -10737,6 +10866,17 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 FunctionAST* impl = resolveUfcsImpl(call->callee.substr(3),
                     call->args.size(), recv, recvKnown, diag);
                 if (!impl) return codegenError("E0142", diag);
+                // The FUNCTION NAME alone does not identify an impl: two
+                // types may implement `area` with the same name, and the
+                // receiver type is what name+arity dispatch selected on.
+                // Record both, e.g. `area for Circle`.
+                std::string implFact = impl->name;
+                if (recvKnown)
+                    implFact += " for " +
+                        ((recv.kind == TypeKind::Struct || recv.kind == TypeKind::Enum)
+                             ? recv.structName : typeTag(recv));
+                call->resolvedImpl = implFact;
+                recordCallFact(call, {}, implFact);
                 it = functionMap.find(impl->name);
                 if (it == functionMap.end())
                     return codegenError("E0099", "no type in scope implements '" + impl->name + "'");
@@ -14168,6 +14308,683 @@ public:
     }
 };
 
+// ============================================================================
+// TYPE CHECKER — Phase 2 / 2A
+//
+// The compiler's first CHECKING phase: after parsing and import merging,
+// after declaration generation (so the builtin registry exists), and before
+// any function body is emitted. It checks only the DECIDABLE subset:
+//
+//   * an annotated variable declaration is a contract (the initialiser must
+//     have the annotated type);
+//   * an annotated return type is a contract (every `return`, including the
+//     parser's synthetic one for a trailing expression, must have it);
+//   * assignment to an annotated variable must keep its type;
+//   * arguments to user functions and externs must match their declared
+//     parameter types;
+//   * a comparison may not mix i64 and f64 (LLVM has no FCmp for that; the
+//     compiler used to crash with "Both operands to FCmp ... are not of the
+//     same type").
+//
+// Everything it does not model answers UNKNOWN, and an UNKNOWN operand
+// suppresses the check. That is the "never reject a program the compiler
+// accepts" rule: the checker may MISS an error, never invent one. The
+// differential gate (tests/test_type_check.sh) runs the corpus with and
+// without this phase and requires identical accept/reject decisions.
+//
+// Types are compared through llvmType(), the same function the codegen's
+// call guard uses. bool and i64 are therefore compatible (both LLVM i64),
+// and all pointer-sized kinds are compatible (LLVM opaque pointers) exactly
+// as the backend treats them; an f64-vs-i64 mismatch is still a mismatch.
+//
+// This is deliberately NOT a typed HIR. It records nothing and changes no
+// codegen type; it only refuses what is provably wrong before LLVM sees it.
+// ============================================================================
+
+class TypeChecker {
+public:
+    TypeChecker(ProgramAST& prog, Codegen& cg, int fileId)
+        : prog(prog), cg(cg), fileId(fileId) {}
+
+    bool run() {
+        indexDeclarations();
+        checkGlobals();
+        for (auto& fn : prog.functions) {
+            if (fn->isDeclaration || !fn->body) continue;
+            checkFunction(fn.get());
+        }
+        return !hadError;
+    }
+
+    int errorCount() const { return errors; }
+
+private:
+    // A checked expression type. `known` is the whole safety valve: an
+    // expression shape the checker does not model is not a guess, it is
+    // silence.
+    struct CType {
+        bool known = false;
+        Type t;
+    };
+
+    struct VarInfo {
+        bool known = true;
+        bool annotated = false;
+        Type type;
+    };
+
+    ProgramAST& prog;
+    Codegen& cg;
+    int fileId;
+    bool hadError = false;
+    int errors = 0;
+
+    const FunctionAST* currentFn = nullptr;
+    Type currentRet;
+    bool currentRetAnnotated = false;
+
+    std::vector<std::unordered_map<std::string, VarInfo>> scopes;
+    std::unordered_map<std::string, VarInfo> globals;
+    std::unordered_map<std::string, FunctionAST*> userFns;
+    std::unordered_map<std::string, const ExternFn*> externFns;
+    std::unordered_map<std::string, const StructDef*> structs;
+    std::unordered_map<std::string, const EnumDef*> enums;
+
+    static CType mkKnown(const Type& t) {
+        CType c;
+        c.known = true;
+        c.t = t;
+        return c;
+    }
+    static CType mkUnknown() { return CType{}; }
+
+    static std::string typeName(const Type& t) { return Codegen::typeTag(t); }
+
+    // A STORAGE context (declaration/global initialiser, assignment) stores
+    // through an opaque-pointer slot, and the backend accepts an i64 there:
+    // the runtime returns opaque handles as i64 (`flint_atomic_new`) while
+    // the source annotates them `ptr`, and codegen's alloca is `ptr`. The
+    // store is valid IR under opaque pointers and the load reinterprets the
+    // same 8 bytes -- the handle convention, not a type error.
+    //
+    // Only `ptr` is relaxed this way. A `str`/`map` slot holding an
+    // arbitrary integer would print/dereference a bogus address, and an
+    // i64 ANNOTATION given a pointer triggers codegen's retyping ladder
+    // (the variable silently becomes a str), which is the contract
+    // violation E0290 exists to report.
+    bool compatibleStore(const Type& dest, const Type& val) {
+        if (compatible(dest, val)) return true;
+        return dest.kind == TypeKind::Ptr &&
+               (val.kind == TypeKind::I64 || val.kind == TypeKind::Bool);
+    }
+
+    // The one compatibility rule. It is intentionally the BACKEND's rule,
+    // not a stricter one: rejecting something the codegen accepts would
+    // break valid programs (the differential gate checks exactly that).
+    bool compatible(const Type& a, const Type& b) {
+        if (a.kind == TypeKind::TypeParam || b.kind == TypeKind::TypeParam)
+            return true;   // generic: substituted before codegen, not modelled here
+        if (a.kind == TypeKind::Void || b.kind == TypeKind::Void)
+            return false;  // a void expression has no value to store or return
+        llvm::Type* la = llvmType(a, *cg.ctx, cg.mod.get());
+        llvm::Type* lb = llvmType(b, *cg.ctx, cg.mod.get());
+        if (!la || !lb) return a == b;
+        return la == lb;
+    }
+
+    // ---- diagnostics ----------------------------------------------------
+
+    void typeError(const char* code, const std::string& message,
+                   const ExprAST* at, const ExprAST* context = nullptr,
+                   const std::string& help = "") {
+        Diagnostic d;
+        d.code = code ? code : "";
+        d.level = "error";
+        d.message = message;
+        d.help = help;
+        auto addLabel = [&](const ExprAST* n, bool primary,
+                            const std::string& text) {
+            if (!n) return;
+            DiagLabel l;
+            l.primary = primary;
+            l.message = text;
+            l.span.fileId = fileId;
+            l.span.start.line = n->loc.line > 0 ? n->loc.line : 1;
+            l.span.start.col = n->loc.col > 0 ? n->loc.col : 1;
+            l.span.end = l.span.start;
+            l.span.end.col += 1;
+            d.labels.push_back(l);
+        };
+        addLabel(at, true, "");
+        if (context && context != at) addLabel(context, false, "the declaration is here");
+        emitDiagnostic(d);
+        hadError = true;
+        errors++;
+    }
+
+    // ---- scopes ---------------------------------------------------------
+
+    void pushScope() { scopes.push_back({}); }
+    void popScope() { if (!scopes.empty()) scopes.pop_back(); }
+
+    void declare(const std::string& name, const VarInfo& v) {
+        if (scopes.empty()) scopes.push_back({});
+        scopes.back()[name] = v;
+    }
+
+    const VarInfo* lookup(const std::string& name) {
+        for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+            auto f = it->find(name);
+            if (f != it->end()) return &f->second;
+        }
+        auto g = globals.find(name);
+        if (g != globals.end()) return &g->second;
+        return nullptr;
+    }
+
+    // ---- declarations ---------------------------------------------------
+
+    void indexDeclarations() {
+        for (auto& s : prog.structs) structs[s.name] = &s;
+        for (auto& e : prog.enums) enums[e.name] = &e;
+        for (auto& fn : prog.functions)
+            if (!userFns.count(fn->name)) userFns[fn->name] = fn.get();
+        for (auto& ex : prog.externs) externFns[ex.name] = &ex;
+    }
+
+    void checkGlobals() {
+        // Declare all globals first (a global may refer to a later one),
+        // but trust only an ANNOTATED type until the initialiser is seen.
+        for (auto& g : prog.globals) {
+            VarInfo v;
+            v.type = g->varType;
+            v.annotated = g->typeWasAnnotated;
+            v.known = g->typeWasAnnotated;
+            globals[g->varName] = v;
+        }
+        for (auto& g : prog.globals) {
+            CType init = g->init ? typeOf(g->init.get()) : mkUnknown();
+            if (g->init && g->typeWasAnnotated &&
+                g->varType.kind != TypeKind::TypeParam && init.known &&
+                !compatibleStore(g->varType, init.t)) {
+                typeError("E0290",
+                    "cannot initialise '" + g->varName + "': the annotation is " +
+                        typeName(g->varType) + ", but the value is " + typeName(init.t),
+                    g->init.get(), g.get(),
+                    "convert the value or change the annotation");
+            }
+            if (!g->typeWasAnnotated && init.known && init.t.kind != TypeKind::Void) {
+                globals[g->varName].type = init.t;
+                globals[g->varName].known = true;
+            }
+        }
+    }
+
+    void checkFunction(FunctionAST* fn) {
+        scopes.clear();
+        pushScope();
+        for (size_t i = 0; i < fn->params.size(); i++) {
+            VarInfo v;
+            v.type = fn->params[i].second;
+            bool untyped = false;
+            for (size_t u : fn->untypedParams) if (u == i) { untyped = true; break; }
+            // An untyped parameter is retyped at each call site; its
+            // placeholder i64 is not a fact the checker may rely on.
+            v.known = !untyped;
+            v.annotated = !untyped;
+            declare(fn->params[i].first, v);
+        }
+        currentFn = fn;
+        currentRet = fn->returnType;
+        currentRetAnnotated = fn->returnTypeWasAnnotated;
+        if (fn->body->kind == NodeKind::Block)
+            checkBlock(static_cast<BlockStmtAST*>(fn->body.get()));
+        else
+            typeOf(fn->body.get());
+        currentFn = nullptr;
+        popScope();
+    }
+
+    // ---- statements -----------------------------------------------------
+
+    CType checkBlock(BlockStmtAST* b) {
+        if (!b) return mkUnknown();
+        pushScope();
+        CType val = mkUnknown();
+        for (size_t i = 0; i < b->stmts.size(); i++) {
+            CType cur = checkStmt(b->stmts[i].get());
+            bool last = (i + 1 == b->stmts.size());
+            val = (last && b->stmts[i] && Parser::isValueExpr(b->stmts[i]->kind))
+                      ? cur : mkUnknown();
+        }
+        popScope();
+        return val;
+    }
+
+    CType checkStmt(ExprAST* s) {
+        if (!s) return mkUnknown();
+        switch (s->kind) {
+            case NodeKind::Block:
+                return checkBlock(static_cast<BlockStmtAST*>(s));
+            case NodeKind::VarDecl:
+                return checkVarDecl(static_cast<VarDeclAST*>(s));
+            case NodeKind::Return:
+                return checkReturn(static_cast<ReturnStmtAST*>(s));
+            case NodeKind::Break:
+            case NodeKind::Continue:
+                return mkUnknown();
+            default:
+                return typeOf(s);
+        }
+    }
+
+    CType checkVarDecl(VarDeclAST* d) {
+        CType init = d->init ? typeOf(d->init.get()) : mkUnknown();
+        if (d->init && d->typeWasAnnotated &&
+            d->varType.kind != TypeKind::TypeParam && init.known &&
+            !compatibleStore(d->varType, init.t)) {
+            typeError("E0290",
+                "cannot initialise '" + d->varName + "': the annotation is " +
+                    typeName(d->varType) + ", but the value is " + typeName(init.t),
+                d->init.get(), d,
+                "convert the value or change the annotation");
+        }
+        VarInfo v;
+        v.annotated = d->typeWasAnnotated;
+        if (d->typeWasAnnotated && d->varType.kind != TypeKind::TypeParam) {
+            v.type = d->varType;
+            v.known = true;
+        } else if (init.known && init.t.kind != TypeKind::Void) {
+            // The initialiser's checked type is more trustworthy than the
+            // parser's guess; it is also what codegen will have produced.
+            v.type = init.t;
+            v.known = true;
+        } else {
+            v.type = d->varType;
+            v.known = false;
+        }
+        declare(d->varName, v);
+        return init;
+    }
+
+    CType checkReturn(ReturnStmtAST* r) {
+        CType v = r->value ? typeOf(r->value.get()) : mkUnknown();
+        if (r->value && currentFn && currentRetAnnotated &&
+            currentRet.kind != TypeKind::Void && v.known &&
+            v.t.kind != TypeKind::Void && !compatible(currentRet, v.t)) {
+            typeError("E0291",
+                "cannot return a value of type " + typeName(v.t) + " from '" +
+                    currentFn->name + "', which is declared to return " +
+                    typeName(currentRet),
+                r->value.get(), r,
+                "convert the value or change the return type");
+        }
+        return v;
+    }
+
+    // ---- expressions ----------------------------------------------------
+
+    CType typeOf(ExprAST* e) {
+        if (!e) return mkUnknown();
+        switch (e->kind) {
+            case NodeKind::Number: {
+                auto* n = static_cast<NumberExprAST*>(e);
+                if (n->isFloat) return mkKnown(Type::f64());
+                if (n->isInt) return mkKnown(Type::i64());
+                double ip = 0;
+                return mkKnown(std::modf(n->value, &ip) != 0.0 ? Type::f64()
+                                                               : Type::i64());
+            }
+            case NodeKind::String: return mkKnown(Type::str());
+            case NodeKind::Tensor: return mkKnown(Type::str());
+            case NodeKind::Variable: {
+                auto* ve = static_cast<VariableExprAST*>(e);
+                const VarInfo* v = lookup(ve->name);
+                // A DECLARED variable shadows a function of the same name,
+                // even when its own type is unknown: silence, not the
+                // function's signature.
+                if (v) return v->known ? mkKnown(v->type) : mkUnknown();
+                // A NAMED function used as a value (`h = inc`). Its fn type
+                // is the declaration's signature + return type, which is
+                // also the thunk codegen builds, so a later `h(5)` is
+                // checked through the same value path a lambda uses. A
+                // generic or void function has no fn value: stay unknown.
+                auto uit = userFns.find(ve->name);
+                if (uit != userFns.end() && uit->second->typeParams.empty() &&
+                    uit->second->returnType.kind != TypeKind::Void) {
+                    std::vector<Type> ps;
+                    bool concrete = true;
+                    for (auto& p : uit->second->params) {
+                        if (p.second.kind == TypeKind::TypeParam) {
+                            concrete = false;
+                            break;
+                        }
+                        ps.push_back(p.second);
+                    }
+                    if (concrete)
+                        return mkKnown(Type::fn_(ps, uit->second->returnType));
+                }
+                return mkUnknown();
+            }
+            case NodeKind::Array: {
+                auto* a = static_cast<ArrayExprAST*>(e);
+                for (auto& el : a->elements) typeOf(el.get());
+                return mkKnown(Type::array(Type::i64()));
+            }
+            case NodeKind::MapLiteral: {
+                auto* m = static_cast<MapLiteralAST*>(e);
+                for (auto& v : m->values) typeOf(v.get());
+                return mkKnown(Type::map());
+            }
+            case NodeKind::Binary: {
+                auto* b = static_cast<BinaryExprAST*>(e);
+                CType l = typeOf(b->lhs.get());
+                CType r = typeOf(b->rhs.get());
+                if (b->op == '+' && ((l.known && l.t.kind == TypeKind::Str) ||
+                                     (r.known && r.t.kind == TypeKind::Str)))
+                    return mkKnown(Type::str());
+                if ((l.known && l.t.kind == TypeKind::F64) ||
+                    (r.known && r.t.kind == TypeKind::F64))
+                    return mkKnown(Type::f64());
+                if (l.known && r.known && isIntLike(l.t) && isIntLike(r.t))
+                    return mkKnown(Type::i64());
+                return mkUnknown();
+            }
+            case NodeKind::Compare: {
+                auto* c = static_cast<CompareExprAST*>(e);
+                CType l = typeOf(c->lhs.get());
+                CType r = typeOf(c->rhs.get());
+                if (l.known && r.known && l.t.kind != TypeKind::Void &&
+                    r.t.kind != TypeKind::Void) {
+                    bool lf = (l.t.kind == TypeKind::F64);
+                    bool rf = (r.t.kind == TypeKind::F64);
+                    if ((lf && isIntLike(r.t)) || (rf && isIntLike(l.t))) {
+                        typeError("E0294",
+                            "cannot compare " + typeName(l.t) + " with " +
+                                typeName(r.t) + "; convert one side explicitly",
+                            e, nullptr,
+                            "write `as f64` on the integer, or `as i64` on the float");
+                    }
+                }
+                return mkKnown(Type::i64());
+            }
+            case NodeKind::Call:
+                return typeOfCall(static_cast<CallExprAST*>(e));
+            case NodeKind::Cast: {
+                auto* c = static_cast<CastExprAST*>(e);
+                typeOf(c->expr.get());
+                return mkKnown(c->target);
+            }
+            case NodeKind::Index: {
+                auto* ix = static_cast<IndexExprAST*>(e);
+                CType base = typeOf(ix->base.get());
+                typeOf(ix->index.get());
+                if (base.known) {
+                    if (base.t.kind == TypeKind::Array) return mkKnown(Type::i64());
+                    if (base.t.kind == TypeKind::Str ||
+                        base.t.kind == TypeKind::Map) return mkKnown(Type::i64());
+                }
+                return mkUnknown();
+            }
+            case NodeKind::Slice: {
+                auto* sl = static_cast<SliceExprAST*>(e);
+                typeOf(sl->arr.get());
+                typeOf(sl->start.get());
+                if (sl->end) typeOf(sl->end.get());
+                return mkUnknown();
+            }
+            case NodeKind::Ref: {
+                auto* r = static_cast<RefExprAST*>(e);
+                CType t = typeOf(r->target.get());
+                if (t.known && t.t.kind != TypeKind::Void)
+                    return mkKnown(Type::ref(t.t));
+                return mkUnknown();
+            }
+            case NodeKind::Deref: {
+                auto* d = static_cast<DerefExprAST*>(e);
+                CType t = typeOf(d->target.get());
+                if (t.known && t.t.kind == TypeKind::Ref && t.t.elemType)
+                    return mkKnown(*t.t.elemType);
+                return mkUnknown();
+            }
+            case NodeKind::StructLiteral: {
+                auto* sl = static_cast<StructLiteralAST*>(e);
+                for (auto& f : sl->fields) typeOf(f.second.get());
+                return mkKnown(Type::struct_(sl->structName));
+            }
+            case NodeKind::EnumConstruct: {
+                auto* ec = static_cast<EnumConstructAST*>(e);
+                for (auto& a : ec->args) typeOf(a.get());
+                return mkKnown(Type::enum_(ec->enumName));
+            }
+            case NodeKind::FieldAccess: {
+                auto* fa = static_cast<FieldAccessAST*>(e);
+                CType base = typeOf(fa->base.get());
+                if (base.known && base.t.kind == TypeKind::Struct) {
+                    auto sit = structs.find(base.t.structName);
+                    if (sit != structs.end()) {
+                        for (auto& fd : sit->second->fields)
+                            if (fd.name == fa->fieldName) return mkKnown(fd.type);
+                    }
+                }
+                return mkUnknown();
+            }
+            case NodeKind::If: {
+                auto* st = static_cast<IfStmtAST*>(e);
+                typeOf(st->condition.get());
+                CType t = checkStmt(st->thenBlock.get());
+                CType el = st->elseBlock ? checkStmt(st->elseBlock.get()) : mkUnknown();
+                if (t.known && el.known && t.t.kind != TypeKind::Void &&
+                    el.t.kind != TypeKind::Void && compatible(t.t, el.t))
+                    return t;
+                return mkUnknown();
+            }
+            case NodeKind::While: {
+                auto* w = static_cast<WhileStmtAST*>(e);
+                typeOf(w->condition.get());
+                checkStmt(w->body.get());
+                return mkUnknown();
+            }
+            case NodeKind::Match: {
+                auto* m = static_cast<MatchExprAST*>(e);
+                CType sc = typeOf(m->scrutinee.get());
+                const EnumDef* ed = nullptr;
+                if (sc.known && sc.t.kind == TypeKind::Enum) {
+                    auto eit = enums.find(sc.t.structName);
+                    if (eit != enums.end()) ed = eit->second;
+                }
+                CType result = mkUnknown();
+                Type common;
+                bool first = true;
+                for (auto& arm : m->arms) {
+                    pushScope();
+                    if (ed) {
+                        for (auto& vd : ed->variants) {
+                            if (vd.name != arm.variantName) continue;
+                            for (size_t i = 0; i < arm.bindNames.size(); i++) {
+                                VarInfo v;
+                                if (i < vd.payloadTypes.size()) {
+                                    v.type = vd.payloadTypes[i];
+                                    v.known = true;
+                                } else {
+                                    v.known = false;
+                                }
+                                declare(arm.bindNames[i], v);
+                            }
+                            break;
+                        }
+                    }
+                    CType b = checkStmt(arm.body.get());
+                    popScope();
+                    if (b.known && b.t.kind != TypeKind::Void) {
+                        if (first) { common = b.t; first = false; result = b; }
+                        else if (!compatible(common, b.t)) result = mkUnknown();
+                    }
+                }
+                return result;
+            }
+            case NodeKind::Lambda: {
+                auto* lam = static_cast<LambdaExprAST*>(e);
+                for (auto& p : lam->params) {
+                    if (p.second.kind == TypeKind::TypeParam) return mkUnknown();
+                }
+                if (lam->retType.kind == TypeKind::Void) return mkUnknown();
+                std::vector<Type> ps;
+                for (auto& p : lam->params) ps.push_back(p.second);
+                return mkKnown(Type::fn_(ps, lam->retType));
+            }
+            case NodeKind::Unwrap: {
+                auto* u = static_cast<UnwrapExprAST*>(e);
+                typeOf(u->inner.get());
+                return mkUnknown();
+            }
+            case NodeKind::Destructure: {
+                auto* d = static_cast<DestructureAST*>(e);
+                typeOf(d->init.get());
+                for (auto& n : d->names) {
+                    VarInfo v;
+                    v.known = false;
+                    declare(n, v);
+                }
+                return mkUnknown();
+            }
+            case NodeKind::Assign: {
+                auto* a = static_cast<AssignExprAST*>(e);
+                CType rhs = typeOf(a->rhs.get());
+                const VarInfo* v = lookup(a->varName);
+                if (v && v->known && v->annotated && rhs.known &&
+                    !compatibleStore(v->type, rhs.t)) {
+                    typeError("E0292",
+                        "cannot assign a value of type " + typeName(rhs.t) +
+                            " to '" + a->varName + "' of type " + typeName(v->type),
+                        a->rhs.get(), a,
+                        "convert the value or declare the variable with the new type");
+                }
+                return rhs;
+            }
+            case NodeKind::VarDecl:
+                return checkVarDecl(static_cast<VarDeclAST*>(e));
+            case NodeKind::Return:
+                return checkReturn(static_cast<ReturnStmtAST*>(e));
+            case NodeKind::PyBlock:
+                return mkKnown(Type::void_());
+            case NodeKind::Block:
+                return checkBlock(static_cast<BlockStmtAST*>(e));
+            default:
+                return mkUnknown();
+        }
+    }
+
+    static bool isIntLike(const Type& t) {
+        return t.kind == TypeKind::I64 || t.kind == TypeKind::Bool;
+    }
+
+    void checkArgs(CallExprAST* call,
+                   const std::vector<std::pair<std::string, Type>>& params,
+                   const std::vector<size_t>& untyped,
+                   const std::vector<CType>& argv) {
+        if (argv.size() > params.size()) return;  // arity: codegen owns it
+        for (size_t i = 0; i < argv.size(); i++) {
+            bool skip = false;
+            for (size_t u : untyped) if (u == i) { skip = true; break; }
+            if (skip) continue;
+            ExprAST* a = call->args[i].get();
+            if (!a || a->kind == NodeKind::Lambda) continue;  // codegen checks signatures
+            if (!argv[i].known || argv[i].t.kind == TypeKind::Void) continue;
+            const Type& pt = params[i].second;
+            if (pt.kind == TypeKind::TypeParam) continue;
+            if (!compatible(pt, argv[i].t)) {
+                typeError("E0293",
+                    "call to '" + call->callee + "': argument " +
+                        std::to_string(i + 1) + " is " + typeName(argv[i].t) +
+                        ", but parameter " + std::to_string(i + 1) + " is " +
+                        typeName(pt),
+                    a, call,
+                    "convert the argument or change parameter " + std::to_string(i + 1));
+            }
+        }
+    }
+
+    CType typeOfCall(CallExprAST* call) {
+        std::vector<CType> argv;
+        argv.reserve(call->args.size());
+        for (auto& a : call->args) argv.push_back(typeOf(a.get()));
+
+        const std::string& name = call->callee;
+        // The printer accepts every value type; the array/thread builtins
+        // are lowered by hand, so their registered LLVM signature is not
+        // the call's source-level contract. Do not invent checks for them.
+        if (name == "print" || name == "println") return mkKnown(Type::void_());
+        if (name == "len") return mkKnown(Type::i64());
+        if (name == "flint_array_get") return mkKnown(Type::i64());
+        if (name == "flint_array_set" || name == "flint_array_data" ||
+            name == "flint_array_get_ptr" || name == "flint_array_set_ptr" ||
+            name == "flint_thread_spawn")
+            return mkUnknown();
+        if (name.rfind("fa_", 0) == 0) return mkUnknown();  // trait method dispatch
+
+        auto uit = userFns.find(name);
+        if (uit != userFns.end()) {
+            FunctionAST* fn = uit->second;
+            // A generic is instantiated at codegen; argument types there are
+            // checked against the INSTANTIATED signature, not the template.
+            if (fn->typeParams.empty())
+                checkArgs(call, fn->params, fn->untypedParams, argv);
+            if (fn->returnType.kind == TypeKind::TypeParam) return mkUnknown();
+            return mkKnown(fn->returnType);
+        }
+
+        auto eit = externFns.find(name);
+        if (eit != externFns.end()) {
+            const ExternFn* ex = eit->second;
+            if (argv.size() <= ex->paramTypes.size() || !ex->isVararg) {
+                for (size_t i = 0; i < argv.size() && i < ex->paramTypes.size(); i++) {
+                    ExprAST* a = call->args[i].get();
+                    if (!a || !argv[i].known || argv[i].t.kind == TypeKind::Void) continue;
+                    const Type& pt = ex->paramTypes[i];
+                    if (pt.kind == TypeKind::TypeParam) continue;
+                    if (!compatible(pt, argv[i].t)) {
+                        typeError("E0293",
+                            "call to '" + call->callee + "': argument " +
+                                std::to_string(i + 1) + " is " + typeName(argv[i].t) +
+                                ", but parameter " + std::to_string(i + 1) + " is " +
+                                typeName(pt),
+                            a, call,
+                            "convert the argument or change parameter " + std::to_string(i + 1));
+                    }
+                }
+            }
+            return mkKnown(ex->returnType);
+        }
+
+        // A function VALUE (`let g = f; g(5)`) carries its signature in the
+        // binding.
+        const VarInfo* v = lookup(name);
+        if (v && v->known && v->type.kind == TypeKind::Func && v->type.funcRet) {
+            const Type& ft = v->type;
+            for (size_t i = 0; i < argv.size() && i < ft.funcParams.size(); i++) {
+                ExprAST* a = call->args[i].get();
+                if (!a || a->kind == NodeKind::Lambda) continue;
+                if (!argv[i].known || argv[i].t.kind == TypeKind::Void) continue;
+                if (!compatible(ft.funcParams[i], argv[i].t)) {
+                    typeError("E0293",
+                        "call to '" + name + "': argument " +
+                            std::to_string(i + 1) + " is " + typeName(argv[i].t) +
+                            ", but parameter " + std::to_string(i + 1) + " is " +
+                            typeName(ft.funcParams[i]),
+                        a, call,
+                        "convert the argument or change the fn type");
+                }
+            }
+            return mkKnown(*ft.funcRet);
+        }
+
+        auto bit = gBuiltinTypes.find(name);
+        if (bit != gBuiltinTypes.end()) return mkKnown(bit->second);
+        return mkUnknown();
+    }
+};
+
 int main(int argc, char* argv[]) {
     PROFILE_BEGIN("total");
     // B3: explicit init phase — argv parsing + registry fetch. Lets the
@@ -14322,6 +15139,8 @@ int main(int argc, char* argv[]) {
             runMode = false;
         } else if (arg == "--type-audit") {
             gTypeAudit = true;
+        } else if (arg == "--no-type-check") {
+            gTypeCheck = false;
         } else if (arg == "--print-size") {
             gPrintSize = true;
         } else if (arg.rfind("--print-size-json=", 0) == 0) {
@@ -14403,6 +15222,8 @@ int main(int argc, char* argv[]) {
             << "DIAGNOSTICS AND MODES\n"
             << "  --check-bce              Report bounds-check counts (changes nothing)\n"
             << "  --error-format FORMAT    Diagnostic output: human (default) or json\n"
+            << "  --no-type-check          Disable the 2A type checker (differential oracle)\n"
+            << "  --type-audit             Report inference disagreements + 2A.1 call facts\n"
             << "  --print-size             Report the artifact's size attribution after linking\n"
             << "  --print-size-json=PATH   Write the same attribution as JSON to PATH\n"
             << "  --test                   Run test_ functions after JIT compile\n"
@@ -14508,7 +15329,9 @@ int main(int argc, char* argv[]) {
     }
     PROFILE_END(); // iface_hash
     uint64_t sourceHash =
-        fnv1a(cacheSalt(optLevel, releaseMode, backend, argv[0], loopOpt, targetTripleSpec, debugFlag) + std::string(1, '\0') + sourceRef.str() +
+        fnv1a(cacheSalt(optLevel, releaseMode, backend, argv[0], loopOpt, targetTripleSpec, debugFlag) +
+              std::string(1, '\0') + (gTypeCheck ? "type-check=1" : "type-check=0") +
+              std::string(1, '\0') + sourceRef.str() +
               std::string(1, '\0') + ifaceFp + std::string(1, '\0') + linkFp);
     if (getenv("FLINT_LOG_CACHE"))
         std::cerr << "cache: key iface=[" << ifaceFp << "] link=[" << linkFp << "]\n";
@@ -14910,6 +15733,20 @@ int main(int argc, char* argv[]) {
     // Sync LLVM declarations into C++ symbol tables for call resolution
     codegen.syncInterfaceSymbols();
 
+    // Phase 2 / 2A: the type checker runs as a compiler PHASE -- after
+    // parsing/imports and declaration generation (so the builtin registry
+    // exists), and before any body is emitted. A provable type error stops
+    // the compile here, with a span and a code, instead of reaching LLVM's
+    // verifier with a message about the compiler's own IR.
+    if (gTypeCheck) {
+        TypeChecker checker(*combined, codegen, codegen.fileId);
+        if (!checker.run()) {
+            PROFILE_END(); PROFILE_END(); PROFILE_REPORT();
+            std::cerr << "type check failed\n";
+            return 1;
+        }
+    }
+
     // Emit function bodies and output
     if (!codegen.emitFunctionBodies(*combined)) {
         PROFILE_END(); PROFILE_END(); PROFILE_REPORT();
@@ -14965,6 +15802,29 @@ int main(int argc, char* argv[]) {
             std::cerr << "type-audit:   line " << d.line << ": '" << d.name
                       << "' parse=" << d.parseType
                       << " codegen=" << d.codegenType << "\n";
+        }
+        // Phase 2 / 2A.1: the call facts. A generic call's concrete type
+        // arguments and a trait method's resolved implementation are the
+        // two facts the compiler used to keep implicit; print them so a
+        // gate (and a human) can compare them with the source.
+        if (!codegen.callFacts.empty()) {
+            std::cerr << "type-audit: " << codegen.callFacts.size()
+                      << " call fact(s)\n";
+            for (const auto& f : codegen.callFacts) {
+                std::cerr << "type-audit: call line " << f.line
+                          << ": '" << f.callee << "'";
+                if (!f.typeArgs.empty()) {
+                    std::cerr << " type-args=[";
+                    for (size_t i = 0; i < f.typeArgs.size(); i++) {
+                        if (i) std::cerr << ",";
+                        std::cerr << Codegen::typeTag(f.typeArgs[i]);
+                    }
+                    std::cerr << "]";
+                }
+                if (!f.impl.empty())
+                    std::cerr << " impl='" << f.impl << "'";
+                std::cerr << "\n";
+            }
         }
         if (contracts > 0) { std::cerr << "type-audit: FAILED\n"; return 1; }
     }

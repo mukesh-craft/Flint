@@ -19,6 +19,9 @@ SRC = "src/main.cpp"
 CALLS = [
     ("codegenError", r"codegenError"),
     ("parseError", r"parseError"),
+    # Phase 2 / 2A: the type checker's diagnostics are part of the same
+    # catalogue (one code space, one renderer, one JSON stream).
+    ("typeError", r"typeError"),
 ]
 
 

@@ -189,5 +189,10 @@ Regenerate: `python3 tools/errors_cpp.py --format md` (or
 - `E0134  use of moved variable ' <...> '`
 - `E0135  variable ' <...> ' already declared`
 - `E0136  variable ' <...> ' not declared`
+- `E0290  cannot initialise ' <...> ': the annotation is <...> , but the value is <...>`
+- `E0291  cannot return a value of type <...> from ' <...> ', which is declared to return <...>`
+- `E0292  cannot assign a value of type <...> to ' <...> ' of type <...>`
+- `E0293  call to ' <...> ': argument <...> is <...> , but parameter <...> is <...>`
+- `E0294  cannot compare <...> with <...> ; convert one side explicitly`
 
-Total: 136 diagnostics.
+Total: 141 diagnostics.
