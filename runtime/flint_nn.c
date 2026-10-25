@@ -11,7 +11,8 @@ extern double flint_rand_f64(void);
 #include <string.h>
 #include <stdio.h>
 
-extern void flint_panic(const char*);
+// See flint_aegis.c: noreturn is part of the contract, not an optimization.
+extern void flint_panic(const char*) __attribute__((cold, noreturn));
 
 // Tensors are opaque handles here; a 4-D view is unpacked from the shape.
 static int64_t sh(void* t, int64_t d) { return flt_shape(t, d); }

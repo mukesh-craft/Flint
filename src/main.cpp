@@ -2847,6 +2847,11 @@ struct Symbol {
     // the callee from field 0 and passes the box itself as the first arg.
     llvm::Value* lambdaEnv = nullptr;
     llvm::StructType* lambdaBoxTy = nullptr;
+    // Phase 2 / 2D: true when the env box lives on the HEAP -- either
+    // allocated there directly (a closure created in an escaping position)
+    // or promoted at an escape site by promoteLambdaBox(). A heap box does
+    // not depend on the defining frame, so the value may outlive it.
+    bool lambdaHeapBox = false;
 
     // ONE predicate for "is this binding a function VALUE?", used by every
     // site that asks: binding a value, storing one in a global, returning
@@ -2893,6 +2898,16 @@ public:
     void reviveMoved() {
         for (auto& sc : scopes)
             for (auto& kv : sc) kv.second.moved = false;
+    }
+
+    // Apply f to every visible binding (all open scopes). The closure
+    // promotion uses this to keep ALIASES of one env box in sync: two
+    // bindings may name the same box (`let h = cb`), and after promotion
+    // both have to point at the heap copy.
+    template <typename F>
+    void forEachSymbol(F f) {
+        for (auto& sc : scopes)
+            for (auto& kv : sc) f(kv.second);
     }
 
     // Every name visible at this point (all the open scopes). Used for
@@ -3764,6 +3779,12 @@ private:
             // type audit measured 21 declarations of exactly that drift
             // (parse=i64, codegen=str) before this line changed.
             case NodeKind::Tensor: return Type::str();
+            // A slice (`arr[1:4]`) is `flint_array_slice`, which returns a
+            // FlintVec* -- an OPAQUE POINTER, typed `str` by the codegen
+            // rule for pointer initializers. Without this case the parse
+            // engine answered i64 and the type audit reported drift on
+            // examples/slice_demo.fl (`sliced parse=i64 codegen=str`).
+            case NodeKind::Slice: return Type::str();
             case NodeKind::Variable: {
                 auto* v = static_cast<VariableExprAST*>(expr);
                 auto it = varTypeMap.find(v->name);
@@ -6172,6 +6193,15 @@ public:
     // Cleared on any reassign to non-time value. Used only to elide the
     // ssub overflow check for time1-time0 (diff of two [0,MAX] fits).
     std::unordered_set<std::string> timeVars;
+    // Phase 2 / 2D: set while emitting an expression in a position that may
+    // outlive the defining frame (a return value, a global store, a call
+    // argument). A lambda LITERAL created here gets a HEAP env box directly;
+    // a closure bound earlier is promoted at the site by promoteLambdaBox().
+    bool lambdaEscapesNow = false;
+    // Phase 2 / 2D: the Symbol of the last inline lambda materialized by
+    // emitExpr. `h = |...|` copies its box metadata onto h, so h can later
+    // be promoted like any other closure binding.
+    Symbol* lastInlineLambdaSym = nullptr;
 
     void initStdEnums() {
         // Define Option enum: Option.None, Option.Some(i64)
@@ -7774,12 +7804,15 @@ public:
         // One error per program: after the first codegen error, emit nothing
         // further (see emitStmt for why).
         if (cgHadError) return nullptr;
-        if (node && node->loc.line > 0) { cgCurLine = node->loc.line; cgCurCol = node->loc.col; }
+        // A null node is how a failed subexpression propagates. Every case
+        // below switches on node->kind, so stop here instead of crashing.
+        if (!node) return nullptr;
+        if (node->loc.line > 0) { cgCurLine = node->loc.line; cgCurCol = node->loc.col; }
         // --debug: block-tail statements reach here via emitBlockExpr's
         // emitExpr path (bypassing emitStmt), so the line stamp lives here
         // too. Multi-line expressions map to their own lines, which is
         // still correct stepping.
-        if (debugInfo && curDISub && node->loc.line) {
+        if (debugInfo && curDISub && node && node->loc.line) {
             unsigned el = (unsigned)node->loc.line;
             builder->SetCurrentDebugLocation(
                 llvm::DebugLoc(llvm::DILocation::get(*ctx, el, 1, curDISub)));
@@ -7875,6 +7908,7 @@ public:
                 if (!isym || !isym->isLambda || !isym->lambdaEnv) {
                     return nullptr; // emitLambdaDef already reported the error
                 }
+                lastInlineLambdaSym = isym;
                 return builder->CreatePointerCast(
                     isym->lambdaEnv,
                     llvmType(isym->type, *ctx, mod.get()),
@@ -7909,7 +7943,16 @@ public:
                     markColdPanicFn(panicFn);
                 }
                 builder->CreateCall(panicFn, {builder->CreateGlobalString("unwrap of None/Err", "unwrap_msg")});
-                builder->CreateRet(llvm::ConstantInt::get(i64Ty, 0));
+                // flint_panic never returns, but the block still needs a
+                // well-formed terminator. Emit one matching THIS function's
+                // return type: `main` is i32 (C convention), other functions
+                // may be i64 or void. A hardcoded `ret i64 0` made every
+                // `try`/`?` inside `fn main() -> i64` fail verification.
+                if (currentFunc->getReturnType()->isVoidTy()) {
+                    builder->CreateRetVoid();
+                } else {
+                    builder->CreateRet(llvm::Constant::getNullValue(currentFunc->getReturnType()));
+                }
                 // OK block: extract payload via bitcast to variant struct (same as emitMatch)
                 builder->SetInsertPoint(okBB);
                 auto* bcPtr = builder->CreateBitCast(alloca, i8PtrTy);
@@ -7931,27 +7974,25 @@ public:
                     if (!git->second.isMutable) {
                         return codegenError("E0022", std::string("cannot assign to immutable global '") + a->varName + "'");
                     }
-                    // M4: a global outlives every frame; storing an env box
-                    // pointer (its captures live in some frame's static area)
-                    // into a global is a use-after-return by construction.
-                    // Phase 2 / 2D: a function value may be stored in a
-                    // global when its box does not depend on the frame that
-                    // created it -- a capture-less closure's box and a named
-                    // function's box are module-level constants. A
-                    // frame-bound box still cannot (it would be a
-                    // use-after-return by construction).
-                    if (a->rhs->kind == NodeKind::Lambda) {
-                        auto* lamRhs = static_cast<LambdaExprAST*>(a->rhs.get());
-                        if (!lamRhs->captures.empty())
-                            return codegenError("E0044", "cannot store a lambda into global '" + a->varName + "': it would escape its defining frame");
-                    }
+                    // Phase 2 / 2D: a global outlives every frame, so a
+                    // capturing closure stored here is PROMOTED to the heap
+                    // first; a lambda literal is created on the heap
+                    // (ScopedEscape). A capture-less closure / named function
+                    // already has a module-level box. This used to be an
+                    // error for exactly the frame-bound case promotion now
+                    // removes.
                     if (a->rhs->kind == NodeKind::Variable) {
                         auto* vn = static_cast<VariableExprAST*>(a->rhs.get());
-                        auto* srcSym = symTable.lookup(vn->name);
-                        if (Symbol::isFunctionValue(srcSym) && !functionValueIsStatic(srcSym))
-                            return codegenError("E0043", "cannot store a function value into global '" + a->varName + "': it would escape its defining frame");
+                        Symbol* srcSym = symTable.lookup(vn->name);
+                        if (srcSym && srcSym->isLambda) promoteLambdaBox(srcSym);
                     }
-                    auto* val = emitExpr(a->rhs.get());
+                    llvm::Value* val = nullptr;
+                    if (a->rhs->kind == NodeKind::Lambda) {
+                        ScopedEscape esc(lambdaEscapesNow);
+                        val = emitExpr(a->rhs.get());
+                    } else {
+                        val = emitExpr(a->rhs.get());
+                    }
                     if (!val) return nullptr;
                     git->second.knownArrayLenValue = nullptr;
                     return builder->CreateStore(val, git->second.global);
@@ -7964,8 +8005,28 @@ public:
                 if (sym->borrowCount > 0) {
                     return codegenError("E0020", std::string("cannot assign to '") + a->varName + "' while borrowed");
                 }
+                // Phase 2 / 2D: `h = |...|` stores a fresh closure into an
+                // existing binding. The literal itself does NOT escape here
+                // (h is a local), so it keeps a frame box; the assignment
+                // copies the box metadata onto h, and a later escape of h
+                // promotes that box like any other closure binding.
+                lastInlineLambdaSym = nullptr;
                 auto* val = emitExpr(a->rhs.get());
                 if (!val) return nullptr;
+                if (a->rhs->kind == NodeKind::Lambda && lastInlineLambdaSym &&
+                    sym->type.kind == TypeKind::Func) {
+                    const Symbol* src = lastInlineLambdaSym;
+                    sym->isLambda = true;
+                    sym->lambdaFn = src->lambdaFn;
+                    sym->lambdaDefinedIn = src->lambdaDefinedIn;
+                    sym->lambdaParamTypes = src->lambdaParamTypes;
+                    sym->lambdaCapNames = src->lambdaCapNames;
+                    sym->lambdaCapTypes = src->lambdaCapTypes;
+                    sym->lambdaEnv = src->lambdaEnv;
+                    sym->lambdaBoxTy = src->lambdaBoxTy;
+                    sym->lambdaHeapBox = src->lambdaHeapBox;
+                }
+                lastInlineLambdaSym = nullptr;
                 if (a->rhs->kind == NodeKind::Variable) {
                     auto* varRhs = static_cast<VariableExprAST*>(a->rhs.get());
                     auto* srcSym = symTable.lookup(varRhs->name);
@@ -8324,6 +8385,53 @@ public:
                                            "fnval.ptr");
     }
 
+    // Phase 2 / 2D: RAII scope for "this expression may escape". Nesting is
+    // safe: the destructor restores the previous value, not `false`.
+    struct ScopedEscape {
+        bool& flag;
+        bool saved;
+        explicit ScopedEscape(bool& f) : flag(f), saved(f) { flag = true; }
+        ~ScopedEscape() { flag = saved; }
+    };
+
+    // Phase 2 / 2D: move a frame-bound env box to the HEAP so its value may
+    // outlive this frame. Captures were snapshotted BY VALUE into the box, so
+    // copying the whole box preserves the closure exactly. Idempotent.
+    //
+    // Every symbol that names the same box is updated: `let h = cb` makes h
+    // a second name for one box, and after promotion both must point at the
+    // heap copy (the stack copy dies with the frame).
+    bool promoteLambdaBox(Symbol* sym) {
+        if (!sym || !sym->isLambda || !sym->lambdaEnv) return false;
+        if (sym->lambdaHeapBox) return true;
+        if (llvm::isa<llvm::GlobalVariable>(sym->lambdaEnv)) {
+            sym->lambdaHeapBox = true; // a static box already outlives frames
+            return true;
+        }
+        if (!sym->lambdaBoxTy) return false;
+        auto mit = functionMap.find("flint_malloc");
+        if (mit == functionMap.end()) return false;
+        llvm::Value* old = sym->lambdaEnv;
+        auto* i8ptr = llvm::PointerType::get(*ctx, 0);
+        auto* size = llvm::ConstantExpr::getSizeOf(sym->lambdaBoxTy);
+        auto* raw = builder->CreateCall(mit->second, {size}, "lambox.heap.raw");
+        auto* heap = builder->CreateBitCast(raw, i8ptr, "lambox.heap");
+        unsigned n = sym->lambdaBoxTy->getNumElements();
+        for (unsigned i = 0; i < n; i++) {
+            auto* src = builder->CreateStructGEP(sym->lambdaBoxTy, old, i, "lambox.old");
+            auto* v = builder->CreateLoad(sym->lambdaBoxTy->getElementType(i), src, "lambox.cap");
+            auto* dst = builder->CreateStructGEP(sym->lambdaBoxTy, heap, i, "lambox.new");
+            builder->CreateStore(v, dst);
+        }
+        symTable.forEachSymbol([&](Symbol& s) {
+            if (s.isLambda && s.lambdaEnv == old) {
+                s.lambdaEnv = heap;
+                s.lambdaHeapBox = true;
+            }
+        });
+        return true;
+    }
+
     // P0-6 closure conversion (re-added after 2026-09-14 wipe): outline
     // `name = |params| body` to __lam_<name>_<N>(params..., captures...).
     // Captures are evaluated NOW (by value) into hidden slots in the defining
@@ -8399,13 +8507,28 @@ public:
         // A closure that DOES capture keeps its frame-bound box and the
         // escape rules still apply to it.
         llvm::Value* envBox = nullptr;
+        bool heapBox = false;
         if (caps.empty()) {
             auto* init = llvm::ConstantStruct::get(envTy, {fn});
             envBox = new llvm::GlobalVariable(*mod, envTy, true,
                                              llvm::GlobalValue::InternalLinkage,
                                              init, "lambox." + lamName);
         } else {
-            envBox = createEntryAlloca(envTy, "lambox_" + name);
+            // Phase 2 / 2D: a closure created in an ESCAPING position gets
+            // its box on the heap immediately -- there is no binding to
+            // promote later (e.g. `return |x| x + k`). A heap box does not
+            // depend on the frame that created it.
+            if (lambdaEscapesNow) {
+                auto mit = functionMap.find("flint_malloc");
+                if (mit != functionMap.end()) {
+                    auto* size = llvm::ConstantExpr::getSizeOf(envTy);
+                    auto* raw = builder->CreateCall(mit->second, {size}, "lambox.heap.raw");
+                    envBox = builder->CreateBitCast(
+                        raw, llvm::PointerType::get(*ctx, 0), "lambox.heap");
+                    heapBox = true;
+                }
+            }
+            if (!envBox) envBox = createEntryAlloca(envTy, "lambox_" + name);
             builder->CreateStore(llvm::Constant::getNullValue(envPtrTy_i8),
                                  builder->CreateStructGEP(envTy, envBox, 0, "lambox.fnptr_slot"));
             for (size_t i = 0; i < caps.size(); i++) {
@@ -8420,6 +8543,7 @@ public:
         }
         entry.lambdaEnv = envBox;
         entry.lambdaBoxTy = envTy;
+        entry.lambdaHeapBox = heapBox;
         if (!symTable.declare(name, entry)) {
             codegenError("E0039", "cannot rebind '" + name + "' as lambda");
             return;
@@ -8535,6 +8659,10 @@ public:
         // (the handle is an opaque i64), so provenance is recorded here —
         // the only place binding and source meet.
         bool initIsTensor = decl->init && decl->init->kind == NodeKind::Tensor;
+        // Phase 2 / 2D: `let h = cb` makes h a second name for cb's env box.
+        // Remember the source so the new Symbol carries the box metadata
+        // (needed to promote h, and to know h is a closure at all).
+        const Symbol* fnAliasSrc = nullptr;
         // Emit init first to get its LLVM type (may differ from declared type for builtins)
         auto* init = emitExpr(decl->init.get());
         // M4: binding through a lambda VALUE (`let g = f`). The source
@@ -8549,6 +8677,7 @@ public:
             auto gvit = globalSymTable.find(vn->name);
             if (gvit != globalSymTable.end()) gs = &gvit->second;
             const Symbol* cs = srcSym ? srcSym : gs;
+            if (cs && cs->isLambda) fnAliasSrc = cs;
             // M4 follow-up: `let h = inc` binds a NAMED function. The
             // source is a function, not a symbol, so the fn type comes from
             // the function's own definition.
@@ -8617,6 +8746,24 @@ public:
         }
         llvm::AllocaInst* alloca = createEntryAlloca(lty, decl->varName);
         symTable.declare(decl->varName, {rt, alloca, nullptr, decl->isMutable, false, 0});
+        // Phase 2 / 2D: an alias of a closure binding. The value in the
+        // alloca and the source's box are the same pointer; carrying the
+        // metadata lets a later escape promote h, and lets the promotion
+        // update both names through forEachSymbol.
+        if (fnAliasSrc && fnAliasSrc->isLambda) {
+            auto* dst = symTable.lookup(decl->varName);
+            if (dst) {
+                dst->isLambda = true;
+                dst->lambdaFn = fnAliasSrc->lambdaFn;
+                dst->lambdaDefinedIn = fnAliasSrc->lambdaDefinedIn;
+                dst->lambdaParamTypes = fnAliasSrc->lambdaParamTypes;
+                dst->lambdaCapNames = fnAliasSrc->lambdaCapNames;
+                dst->lambdaCapTypes = fnAliasSrc->lambdaCapTypes;
+                dst->lambdaEnv = fnAliasSrc->lambdaEnv;
+                dst->lambdaBoxTy = fnAliasSrc->lambdaBoxTy;
+                dst->lambdaHeapBox = fnAliasSrc->lambdaHeapBox;
+            }
+        }
         // Phase 2 / 2A.1: an array LITERAL has a known exact length. The
         // runtime array is allocated with exactly that many elements, so
         // the fact is exact by construction.
@@ -8727,34 +8874,29 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             if (it != functionMap.end()) builder->CreateCall(it->second, {});
         }
         if (ret->value) {
-            // M4: an env box lives in the defining frame's static area.
-            // Returning one would hand out a pointer to dead locals the
-            // moment the frame returns, so function values cannot cross a
-            // return boundary (closure-escape rule from the M4 spec).
-            // Phase 2 / 2D: a function value may cross a return boundary
-            // when its box is STATIC (a capture-less closure, or a named
-            // function): such a box does not point into the frame that is
-            // going away. A frame-bound box still cannot.
-            if (ret->value->kind == NodeKind::Lambda) {
-                auto* lamR = static_cast<LambdaExprAST*>(ret->value.get());
-                if (!lamR->captures.empty()) {
-                    codegenError("E0042", "cannot return a lambda: it would escape its defining frame");
-                    return;
-                }
-            }
+            // Phase 2 / 2D: a function value may cross a return boundary.
+            // A capture-less closure and a named function already have a
+            // module-level box. A CAPTURING closure is promoted to the heap
+            // here, and a lambda literal is created on the heap (ScopedEscape
+            // sets the flag emitLambdaDef reads). Captures are snapshotted by
+            // value, so the heap copy IS the closure. Refusing instead (the
+            // pre-2D rule) was correct only while every box was frame-bound.
             if (ret->value->kind == NodeKind::Variable) {
                 auto* vn = static_cast<VariableExprAST*>(ret->value.get());
-                auto* srcSym = symTable.lookup(vn->name);
-                const Symbol* gs = nullptr;
-                auto gvit = globalSymTable.find(vn->name);
-                if (gvit != globalSymTable.end()) gs = &gvit->second;
-                const Symbol* cs = srcSym ? srcSym : gs;
-                if (Symbol::isFunctionValue(cs) && !functionValueIsStatic(cs)) {
-                    codegenError("E0041", "cannot return a function value: it would escape its defining frame");
-                    return;
+                Symbol* srcSym = symTable.lookup(vn->name);
+                if (!srcSym) {
+                    auto gvit = globalSymTable.find(vn->name);
+                    if (gvit != globalSymTable.end()) srcSym = &gvit->second;
                 }
+                if (srcSym && srcSym->isLambda) promoteLambdaBox(srcSym);
             }
-            auto* v = emitExpr(ret->value.get());
+            llvm::Value* v = nullptr;
+            if (ret->value->kind == NodeKind::Lambda) {
+                ScopedEscape esc(lambdaEscapesNow);
+                v = emitExpr(ret->value.get());
+            } else {
+                v = emitExpr(ret->value.get());
+            }
             if (v) {
                 if (currentFunc && currentFunc->getName() == "main") {
                     builder->CreateRet(coerceMainReturn(v));
@@ -9004,20 +9146,6 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         };
         walk(body);
         return bad;
-    }
-
-    // Is this function value's box STATIC (module-level) rather than
-    // frame-bound? A static box does not depend on any frame, so the value
-    // may escape. Phase 2 / 2D.
-    static bool functionValueIsStatic(const Symbol* sym) {
-        if (!sym) return false;
-        if (!sym->isLambda) {
-            // A named function's value: its box is a module-level constant
-            // (see namedFnValue).
-            return true;
-        }
-        if (!sym->lambdaEnv) return false;
-        return llvm::isa<llvm::GlobalVariable>(sym->lambdaEnv);
     }
 
     // Does this statement assign to `name`? (The first assignment to the
@@ -9878,7 +10006,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             llvm::Type* cmpTy = l->getType()->isFloatingPointTy() ? l->getType() : r->getType();
             llvm::Value* lf = l->getType() == cmpTy ? l : builder->CreateSIToFP(l, cmpTy, "cmpf_l");
             llvm::Value* rf = r->getType() == cmpTy ? r : builder->CreateSIToFP(r, cmpTy, "cmpf_r");
-            llvm::CmpInst::Predicate fpred = pred;
+            llvm::CmpInst::Predicate fpred;
             switch (pred) {
                 case llvm::CmpInst::ICMP_EQ:  fpred = llvm::CmpInst::FCMP_OEQ; break;
                 case llvm::CmpInst::ICMP_NE:  fpred = llvm::CmpInst::FCMP_ONE; break;
@@ -9907,12 +10035,19 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                                    bool instantiationMsg = false) {
         if (!f) return nullptr;
         if (llvm::FunctionType* fty = f->getFunctionType()) {
-            if (fty->getNumParams() != args.size()) {
+            // A variadic C function (printf) has a fixed prefix plus `...`:
+            // require at least the fixed parameters and do not count the
+            // variadic ones against the signature.
+            const bool variadic = fty->isVarArg();
+            const size_t fixed = fty->getNumParams();
+            const bool arity_ok = variadic ? args.size() >= fixed
+                                           : args.size() == fixed;
+            if (!arity_ok) {
                 return codegenError("E0001", "'" + displayName + "' expects " +
-                    std::to_string(fty->getNumParams()) + " argument(s), got " +
-                    std::to_string(args.size()));
+                    std::to_string(fixed) + (variadic ? " or more" : "") +
+                    " argument(s), got " + std::to_string(args.size()));
             }
-            for (size_t i = 0; i < args.size(); i++) {
+            for (size_t i = 0; i < args.size() && i < fixed; i++) {
                 if (!args[i]) continue;
                 llvm::Type* want = fty->getParamType(i);
                 llvm::Type* got = args[i]->getType();
@@ -10368,6 +10503,20 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
     }
 
     llvm::Value* emitCall(CallExprAST* call) {
+        // Phase 2 / 2D: every argument may be retained by the callee, so a
+        // closure argument must not point into this frame. A bound closure
+        // is promoted BEFORE its value is read; a lambda literal is created
+        // on the heap for the duration of the call. This is what makes
+        // `store_it(cb)` -- STATE.md §4.4's "done when" -- sound: the callee
+        // may store the value in a global or return it, and it still points
+        // at live storage.
+        for (auto& a : call->args) {
+            if (!a || a->kind != NodeKind::Variable) continue;
+            auto* vn = static_cast<VariableExprAST*>(a.get());
+            Symbol* s = symTable.lookup(vn->name);
+            if (s && s->isLambda && !s->lambdaHeapBox) promoteLambdaBox(s);
+        }
+        ScopedEscape escapeArgs(lambdaEscapesNow);
         // Lambda call rewrite (P0-6): a direct call to a lambda bound in an
         // accessible function passes user args + frozen by-value captures.
         // Cross-function calls are rejected (closures don't escape).
@@ -10663,7 +10812,6 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             auto fIt = functionMap.find(nameLit->value);
             if (fIt == functionMap.end()) { return codegenError("E0078", std::string("flint_thread_spawn: unknown function '") + nameLit->value + "'"); }
             auto* targetFn = fIt->second;
-            auto* wrapperTy = llvm::FunctionType::get(i8PtrTy, {i8PtrTy}, false);
             auto* wrapperPtr = builder->CreateBitCast(targetFn, llvm::PointerType::get(*ctx, 0), "thread_fn");
             auto* createFn = functionMap["flint_thread_create"];
             if (!createFn) { return codegenError("E0076", "flint_thread_spawn: runtime function 'flint_thread_create' not found"); }
@@ -10890,7 +11038,6 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 return codegenError("E0120", std::string("undefined function '") + call->callee + "'", near);
             }
         }
-        bool isExtern = externFunctions.count(call->callee) > 0;
         std::vector<llvm::Value*> args;
         for (size_t ai = 0; ai < call->args.size(); ai++) {
             ExprAST* a = call->args[ai].get();
@@ -11681,7 +11828,6 @@ llvm::Value* Parser::parseIdentEmit() {
             auto fIt = cg->functionMap.find(funcName);
             if (fIt == cg->functionMap.end()) { parseError("E0078", "flint_thread_spawn: unknown function '" + funcName + "'"); return nullptr; }
             auto* targetFn = fIt->second;
-            auto* wrapperTy = llvm::FunctionType::get(cg->i8PtrTy, {cg->i8PtrTy}, false);
             auto* wrapperPtr = cg->builder->CreateBitCast(targetFn, llvm::PointerType::get(*cg->ctx, 0), "thread_fn");
             auto* createFn = cg->functionMap["flint_thread_create"];
             if (!createFn) { parseError("E0077", "flint_thread_spawn: runtime function not found"); return nullptr; }
@@ -11772,7 +11918,11 @@ llvm::Value* Parser::emitBinaryOpEmit(Token opTok, llvm::Value* l, llvm::Value* 
     // once. Aggregate operands short-circuit BEFORE the arithmetic and
     // boolean branches: `||` does ICmpNE against zero and `+` would build an
     // FAdd on a struct -- either aborts the compiler.
-    if (l && r) {
+    //
+    // A null operand means an earlier emit already failed (cgHadError); every
+    // branch below dereferences l and r, so return before touching them.
+    if (!l || !r) return nullptr;
+    {
         const std::string& o = opTok.lexeme;
         bool isCompare = (o == "==" || o == "!=" || o == "<" || o == ">" ||
                           o == "<=" || o == ">=");
@@ -15026,7 +15176,10 @@ private:
         auto eit = externFns.find(name);
         if (eit != externFns.end()) {
             const ExternFn* ex = eit->second;
-            if (argv.size() <= ex->paramTypes.size() || !ex->isVararg) {
+            // Always check the fixed parameters. The old condition skipped
+            // every type check for a variadic call with extra arguments,
+            // which is exactly the printf case.
+            {
                 for (size_t i = 0; i < argv.size() && i < ex->paramTypes.size(); i++) {
                     ExprAST* a = call->args[i].get();
                     if (!a || !argv[i].known || argv[i].t.kind == TypeKind::Void) continue;

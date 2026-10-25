@@ -14,16 +14,19 @@ cd "$(dirname "$0")/.."
 FLINTC="${FLINTC:-./flintc}"
 T="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/bench_tooling"
 mkdir -p "$T"
-# A unique source path per run: flintc caches compiled modules by content
-# and path, so a reused path would report a cache hit instead of a build.
+# flintc's binary cache is keyed by source content (plus compiler identity
+# and codegen flags), not by path or output name: identical bytes at a new
+# path still hit. Append a unique comment so every run is a real build.
 RUNID="run_$$_$(date +%s)"
 mkdir -p "$T/$RUNID"
 T="$T/$RUNID"
 
-cat > "$T/hello.fl" <<'EOF'
+cat > "$T/hello.fl" <<EOF
 fn main() {
-    print("hello")
+    safe_x = 5
+    print(safe_x)
 }
+# size probe $RUNID
 EOF
 
 cat > "$T/hello.c" <<'EOF'
@@ -77,7 +80,14 @@ bt() { # $1=label $2=command...
     t1=$(date +%s%N)
     printf "  %-24s %8.0f ms\n" "$label" "$(( (t1 - t0) / 1000000 ))"
 }
-bt "Flint" "$FLINTC" "$T/hello.fl" -o "$T/bt.flint"
+cat > "$T/bt.fl" <<EOF
+fn main() {
+    safe_x = 5
+    print(safe_x)
+}
+# build-time probe $RUNID
+EOF
+bt "Flint" "$FLINTC" "$T/bt.fl" -o "$T/bt.flint"
 bt "C (clang -O2)" clang -O2 -o "$T/bt.c" "$T/hello.c"
 bt "C++ (clang++ -O2)" clang++ -O2 -o "$T/bt.cpp" "$T/hello.cpp"
 bt "Rust (rustc -O)" rustc -O -o "$T/bt.rs" "$T/hello.rs"

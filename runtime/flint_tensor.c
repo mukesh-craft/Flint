@@ -2,12 +2,18 @@
 #include "flint_blas.h"
 #include <float.h>
 
+// runtime.c's panic path: cold and never returns. Declaring the attribute here
+// keeps the compiler from assuming control continues after an OOM panic.
+extern void flint_panic(const char* msg) __attribute__((cold, noreturn));
+
 // =========================================================================
 // Internal helpers
 // =========================================================================
 static int64_t* _shape_copy(int64_t ndim, int64_t* shape) {
-    int64_t* s = malloc(ndim * sizeof(int64_t));
-    memcpy(s, shape, ndim * sizeof(int64_t));
+    if (ndim <= 0) return NULL;
+    int64_t* s = malloc((size_t)ndim * sizeof(int64_t));
+    if (!s) flint_panic("out of memory");
+    memcpy(s, shape, (size_t)ndim * sizeof(int64_t));
     return s;
 }
 
@@ -95,12 +101,24 @@ void flt_set_all(void* t, const double* vals, int64_t n) {
 // Allocate with no element type yet; callers fill in one of data/data32.
 static FlintTensor* _alloc(int64_t ndim, int64_t* shape, int is_f32) {
     FlintTensor* t = calloc(1, sizeof(FlintTensor));
+    if (!t) flint_panic("out of memory");
     t->ndim = ndim;
     t->shape = _shape_copy(ndim, shape);
     t->size = _calc_size(ndim, shape);
     t->dtype = is_f32 ? FLT_F32 : FLT_F64;
-    if (is_f32) t->data32 = calloc((size_t)t->size, sizeof(float));
-    else        t->data = calloc((size_t)t->size, sizeof(double));
+    if (is_f32) {
+        t->data32 = calloc((size_t)t->size, sizeof(float));
+        if (!t->data32 && t->size > 0) {
+            free(t->shape); free(t);
+            flint_panic("out of memory");
+        }
+    } else {
+        t->data = calloc((size_t)t->size, sizeof(double));
+        if (!t->data && t->size > 0) {
+            free(t->shape); free(t);
+            flint_panic("out of memory");
+        }
+    }
     t->device = DEVICE_CPU;
     t->grad = NULL;
     t->grad_id = -1;
@@ -444,7 +462,7 @@ void* flt_matmul(void* a, void* b) {
         // for any size worth calling it on.
         float* A = (float*)malloc((size_t)(M * K) * sizeof(float));
         float* B = (float*)malloc((size_t)(K * N) * sizeof(float));
-        if (!A || !B) { free(A); free(B); return NULL; }
+        if (!A || !B) { free(A); free(B); flt_destroy(out); return NULL; }
         for (int64_t i = 0; i < M * K; i++)
             A[i] = (ta->dtype == FLT_F32) ? ta->data32[i] : (float)ta->data[i];
         for (int64_t i = 0; i < K * N; i++)
@@ -457,13 +475,13 @@ void* flt_matmul(void* a, void* b) {
         double* Aw = NULL; double* Bw = NULL;
         if (ta->dtype == FLT_F32) {
             Aw = (double*)malloc((size_t)(M * K) * sizeof(double));
-            if (!Aw) return NULL;
+            if (!Aw) { flt_destroy(out); return NULL; }
             for (int64_t i = 0; i < M * K; i++) Aw[i] = (double)ta->data32[i];
             Ad = Aw;
         }
         if (tb->dtype == FLT_F32) {
             Bw = (double*)malloc((size_t)(K * N) * sizeof(double));
-            if (!Bw) { free(Aw); return NULL; }
+            if (!Bw) { free(Aw); flt_destroy(out); return NULL; }
             for (int64_t i = 0; i < K * N; i++) Bw[i] = (double)tb->data32[i];
             Bd = Bw;
         }
@@ -493,7 +511,7 @@ void* flt_matmul_blas(void* a, void* b) {
     if (out_f32) {
         float* A = (float*)malloc((size_t)(M * K) * sizeof(float));
         float* B = (float*)malloc((size_t)(K * N) * sizeof(float));
-        if (!A || !B) { free(A); free(B); return NULL; }
+        if (!A || !B) { free(A); free(B); flt_destroy(out); return NULL; }
         for (int64_t i = 0; i < M * K; i++) A[i] = (float)(ta->dtype == FLT_F32 ? ta->data32[i] : ta->data[i]);
         for (int64_t i = 0; i < K * N; i++) B[i] = (float)(tb->dtype == FLT_F32 ? tb->data32[i] : tb->data[i]);
         flint_blas_matmul_f32_reference(M, K, N, A, B, out->data32);
@@ -503,13 +521,13 @@ void* flt_matmul_blas(void* a, void* b) {
         double *Aw = NULL, *Bw = NULL;
         if (ta->dtype == FLT_F32) {
             Aw = (double*)malloc((size_t)(M * K) * sizeof(double));
-            if (!Aw) return NULL;
+            if (!Aw) { flt_destroy(out); return NULL; }
             for (int64_t i = 0; i < M * K; i++) Aw[i] = (double)ta->data32[i];
             Ad = Aw;
         }
         if (tb->dtype == FLT_F32) {
             Bw = (double*)malloc((size_t)(K * N) * sizeof(double));
-            if (!Bw) { free(Aw); return NULL; }
+            if (!Bw) { free(Aw); flt_destroy(out); return NULL; }
             for (int64_t i = 0; i < K * N; i++) Bw[i] = (double)tb->data32[i];
             Bd = Bw;
         }
@@ -709,6 +727,8 @@ static void _ag_capture(AGNode* n, void* const* tensors, int n_tensors) {
     }
     n->values = total > 0 ? (double*)malloc((size_t)total * sizeof(double)) : NULL;
     n->value_shapes = shape_total > 0 ? (int64_t*)malloc((size_t)shape_total * sizeof(int64_t)) : NULL;
+    if ((total > 0 && !n->values) || (shape_total > 0 && !n->value_shapes))
+        flint_panic("out of memory");
     int64_t off = 0, soff = 0;
     for (int i = 0; i < n_tensors; i++) {
         FlintTensor* t = (FlintTensor*)tensors[i];
@@ -720,10 +740,11 @@ static void _ag_capture(AGNode* n, void* const* tensors, int n_tensors) {
         // floats as 8-byte doubles and produce silent garbage.
         if (t->dtype == FLT_F32) {
             for (int64_t k = 0; k < t->size; k++) n->values[off + k] = (double)t->data32[k];
-        } else {
+        } else if (t->size > 0 && t->data) {
             memcpy(n->values + off, t->data, (size_t)t->size * sizeof(double));
         }
-        memcpy(n->value_shapes + soff, t->shape, (size_t)t->ndim * sizeof(int64_t));
+        if (t->ndim > 0 && t->shape)
+            memcpy(n->value_shapes + soff, t->shape, (size_t)t->ndim * sizeof(int64_t));
         off += t->size;
         soff += t->ndim;
     }
@@ -732,11 +753,13 @@ static void _ag_capture(AGNode* n, void* const* tensors, int n_tensors) {
 void ag_record(int64_t op_type, int64_t output_id, int64_t* input_ids,
                 int n_inputs, void* extra, int extra_int) {
     AGNode* n = calloc(1, sizeof(AGNode));
+    if (!n) flint_panic("out of memory");
     n->op = (AGOpType)op_type;
     n->output_id = output_id;
     n->n_inputs = n_inputs;
-    n->input_ids = malloc(n_inputs * sizeof(int64_t));
-    memcpy(n->input_ids, input_ids, n_inputs * sizeof(int64_t));
+    n->input_ids = n_inputs > 0 ? malloc((size_t)n_inputs * sizeof(int64_t)) : NULL;
+    if (n_inputs > 0 && !n->input_ids) flint_panic("out of memory");
+    if (n_inputs > 0) memcpy(n->input_ids, input_ids, (size_t)n_inputs * sizeof(int64_t));
     n->extra = extra;
     n->extra_int = extra_int;
     n->next = NULL;
@@ -752,7 +775,10 @@ static void ag_record_values(int64_t op_type, int64_t output_id, int64_t* input_
                              void* const* tensors) {
     ag_record(op_type, output_id, input_ids, n_inputs, extra, extra_int);
     AGNode* n = ag_graph_last;
-    n->value_ndims = (int64_t*)calloc((size_t)n_inputs, sizeof(int64_t));
+    n->value_ndims = n_inputs > 0
+        ? (int64_t*)calloc((size_t)n_inputs, sizeof(int64_t))
+        : NULL;
+    if (n_inputs > 0 && !n->value_ndims) flint_panic("out of memory");
     _ag_capture(n, tensors, n_inputs);
 }
 
@@ -831,7 +857,6 @@ static void _acc_grad(FlintTensor* t, double* grad, int64_t n) {
 void ag_backward(int64_t output_id) {
     AGNode* n = _find_node(output_id);
     if (!n) return;
-    FlintTensor* out = NULL; // will be set during traversal
 
     // Traverse the DAG backwards breadth-first.
     //
@@ -867,6 +892,7 @@ void ag_backward(int64_t output_id) {
         if (ot && ot->size > 0) seed_n = ot->size;
     }
     double* seed = (double*)malloc((size_t)seed_n * sizeof(double));
+    if (!seed) { free(stack); free(grad_stack); return; }
     if (g_seed_tensor && g_seed_tensor->size == seed_n) {
         // ag_seed supplied dL/doutput. This is the value that must enter the
         // graph; seeding ones instead silently trained a fabricated objective.
@@ -878,22 +904,12 @@ void ag_backward(int64_t output_id) {
     }
     grad_stack[stack_size] = seed;
     stack_size++;
-    // Every gradient buffer in the traversal is n_seed wide; a node's total is
-    // accumulated in a buffer of that size.
-    const int64_t n_seed = seed_n;
 
-    // Accumulated incoming gradient per node, keyed by the node itself.
-    //
-    // A node can be reached by more than one path -- ag_mul(d, d) contributes
-    // two chains to the SAME node -- and each visit used to apply its own chain
-    // independently, so the leaf accumulated the combined effect several times
-    // (gradients came out 4x instead of 2x). Merging into one buffer per node,
-    // and processing the node once its total is known, is both correct and
-    // cheaper. Plain arrays keep this C99; the graph is small and short-lived.
-    AGNode**   acc_nodes = (AGNode**)malloc(sizeof(AGNode*) * 256);
-    double**   acc_grads = (double**)malloc(sizeof(double*) * 256);
-    int        acc_cap = 256;
-    int        acc_n = 0;
+    // Duplicate-input merging (ag_mul(d, d)) is handled below: a pending
+    // stack entry is merged into instead of being pushed twice. The previous
+    // accumulator here was written but never read, leaked its arrays on every
+    // backward pass, and its realloc pattern lost the original pointer on
+    // failure -- removed rather than "fixed".
 
     while (stack_size > 0) {
         stack_size--;
@@ -901,43 +917,6 @@ void ag_backward(int64_t output_id) {
         double* grad_out = grad_stack[stack_size];
 
         if (!node) { free(grad_out); continue; }
-
-        // Merge this arrival into the node's running total. A node already
-        // expanded earlier in this pass must NOT be expanded again, so if it
-        // has been seen the accumulated buffer is simply updated and the node
-        // is not re-queued.
-        {
-            int slot = -1;
-            for (int q = 0; q < acc_n; q++) if (acc_nodes[q] == node) { slot = q; break; }
-            if (slot >= 0) {
-                int64_t w = n_seed;
-                {
-                    FlintTensor* ot = _ag_reg_get(node->output_id);
-                    if (ot && ot->size > 0) w = ot->size;
-                }
-                for (int64_t i = 0; i < w; i++) acc_grads[slot][i] += grad_out[i];
-                free(grad_out);
-                continue;   // already accounted for
-            }
-            if (acc_n == acc_cap) {
-                int ncap = acc_cap * 2;
-                acc_nodes = (AGNode**)realloc(acc_nodes, sizeof(AGNode*) * ncap);
-                acc_grads = (double**)realloc(acc_grads, sizeof(double*) * ncap);
-                acc_cap = ncap;
-            }
-            int64_t w = n_seed;
-            {
-                FlintTensor* ot = _ag_reg_get(node->output_id);
-                if (ot && ot->size > 0) w = ot->size;
-            }
-            double* keep = (double*)malloc((size_t)w * sizeof(double));
-            for (int64_t i = 0; i < w; i++) keep[i] = grad_out[i];
-            acc_nodes[acc_n] = node;
-            acc_grads[acc_n] = keep;
-            acc_n++;
-            free(grad_out);
-            grad_out = keep;
-        }
 
         // Find output tensor by grad_id (crude: iterate all tensors)
         // For now, compute gradients using op-specific math
@@ -1048,7 +1027,7 @@ void ag_backward(int64_t output_id) {
                 for (int64_t i = 0; i < n; i++) grad_inputs[i] = grad_out[0];
                 n_grad = n;
                 // The chain handed downstream is n wide, which may exceed the
-                // traversal width; the accumulator is sized to n_seed.
+                // traversal width.
                 break;
             }
             case AG_MEAN: {
@@ -1214,8 +1193,6 @@ void ag_backward(int64_t output_id) {
                     // the snapshot already has the expanded size, so it cannot
                     // distinguish "same shape" from "was broadcast".
                     int64_t lsz = leaf->size;
-                    int64_t lnd = leaf->ndim;
-                    const int64_t* lsh = leaf->shape;
                     if (lsz > 0 && lsz < nk) {
                         // The operand's elements are repeated `reps` times each
                         // in row-major order, so reps = nk / lsz. Reduce by
@@ -1790,11 +1767,18 @@ void* flt_weights_load(const char* path, int64_t index) {
             if (!out) { fprintf(stderr, "weights_load: rank %u is not supported for this dtype\n", (unsigned)rank); break; }
             FlintTensor* to = _as_tensor(out);
             if (dtype == 1) {
-                if (fread(to->data32, sizeof(float), (size_t)n, fp) != (size_t)n) { fprintf(stderr, "weights_load: truncated record\n"); break; }
+                if (fread(to->data32, sizeof(float), (size_t)n, fp) != (size_t)n) {
+                    fprintf(stderr, "weights_load: truncated record\n");
+                    flt_destroy(to);   // allocated above; error path must free it
+                    break;
+                }
             } else {
-                if (fread(to->data, sizeof(double), (size_t)n, fp) != (size_t)n) { fprintf(stderr, "weights_load: truncated record\n"); break; }
+                if (fread(to->data, sizeof(double), (size_t)n, fp) != (size_t)n) {
+                    fprintf(stderr, "weights_load: truncated record\n");
+                    flt_destroy(to);
+                    break;
+                }
             }
-            if (!out) { fclose(fp); return NULL; }
             found = out;
             break;
         }

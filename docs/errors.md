@@ -177,5 +177,9 @@ are prefixed `parse error` with line/col and are not catalogued here.
 - `emit error[E0287]: signature file parameter count disagrees`
 - `emit error[E0288]: signature file type parameters disagree`
 - `emit error[E0289]: signature file type is not supported here`
+- `emit error[E0295]: explicit type arguments need a (targs ...) list`
+- `emit error[E0296]: explicit type argument count disagrees`
+- `emit error[E0297]: explicit type argument is not a type`
+- `emit error[E0298]: explicit type arguments are only allowed on a generic function`
 
-Total: 145 messages.
+Total: 149 messages.

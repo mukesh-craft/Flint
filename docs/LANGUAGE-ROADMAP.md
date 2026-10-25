@@ -16,6 +16,20 @@ kind:
 because it sounds right. Where a number could not be measured on this device,
 it is marked [P]/[R] or omitted.
 
+**Update 2026-10-25 (post-assessment).** Phase 2C–2E landed after this
+assessment: loop-range facts (2C), escaping capturing closures (2D), and
+the pipeline's generics/traits/query-mode/explicit-argument work
+(2E.1–2E.6). The self-host pipeline now accepts generic, trait, and
+`f::<T>(...)` programs; the differential gate is 14/14. A capturing
+closure can escape its defining frame: its environment box is promoted to
+the heap at the escape site (return, global store, call argument), while a
+non-escaping closure keeps its stack box and allocates nothing. Current
+counts and the current artifact size live in `STATE.md` §1/§2.2 and §6.1;
+the measurement tables below keep their 2026-10-20 session date, and the
+hello-world size row was re-measured on 2026-10-25. Statements below that
+say the pipeline has no generics/traits or that closures cannot escape
+describe the assessment date and are superseded by this paragraph.
+
 **Companion documents:** `memory.md` (project ledger and audit),
 `STATE.md` (pick-up guide: how to build, verify, and continue),
 `COMPATIBILITY.md` (C++ vs self-host divergence log, D1–D5).
@@ -36,7 +50,7 @@ assessment, and both re-runnable):
 | primes 10M | 495 ms | 220 ms | 192 ms | 207 ms | 2051 ms |
 | fib(45) | 12.9 s | 9.6 s | 9.3 s | 8.9 s | 579 s |
 | pi 100M | 779 ms | 783 ms | 778 ms | 779 ms | 97.8 s |
-| hello-world, stripped | **4,536 B** | 4,368 B | 4,416 B | 339,656 B | ~276 MB (stdlib) |
+| hello-world, stripped | **4,160 B** | 4,064 B | 4,112 B | 339,120 B | ~276 MB (stdlib) |
 | hello-world, raw | **8,048 B** | 5,776 B | 5,824 B | 532,624 B | — |
 | build time (hello, cold) | 144 ms | 439 ms | 404 ms | 674 ms | — |
 | cold start (hello) | 37 ms | 33 ms | 39 ms | 42 ms | 150 ms |
@@ -45,8 +59,10 @@ assessment, and both re-runnable):
 
 Flint is **1.35–2.25× slower than C/C++/Rust on integer loops, at C parity
 on floating-point loops** [M], **4–45× faster than Python** [M], and — after
-the link fix described in §6 — it now produces a **hello-world the size of
-C's** [M].
+the link fix described in §6 — its **hello-world is within 2.4 % of C's
+stripped size** (4,160 B vs 4,064 B; both re-measured 2026-10-25) [M]. The
+timing rows are the 2026-10-20 session; the size rows are today's build of
+the same sources.
 
 The binary-size, build-time and startup rows above are **post-fix**. Before
 the link fix (§6) the same measurements were: hello-world 743,520 B
@@ -62,8 +78,9 @@ libc + libm + libdl + libsqlite3 + libcurl + libopenblas, and 72 MB of
    runtime backstop [M: `memory.md` §AEGIS, audited 2026-09-05].
 2. **A safety story that is broader than "no UB"**: compile-time
    use-after-free detection, bounds checks, overflow checks, div-by-zero
-   traps, and a catalogued diagnostic set (135 messages, two-way sync gate)
-   [M: `docs/errors-cpp.md`, `tests/test_errors_cpp.sh`].
+   traps, and a catalogued diagnostic set (145 stable C++ codes, 137 fixed
+   patterns, two-way sync gate) [M: `docs/errors-cpp.md`,
+   `tests/test_errors_cpp.sh`].
 3. **Toolchain surface**: one compiler binary that compiles, JIT-runs, emits
    LLVM IR, emits/reuses interfaces, and runs `test_` functions; plus a
    language server, a formatter, an agent-facing benchmark and a token dump
@@ -72,7 +89,7 @@ libc + libm + libdl + libsqlite3 + libcurl + libopenblas, and 72 MB of
    SQLite, HTTP, crypto, PNG, Brotli, Argon2, regex, CSV, FTS5, bigint, time,
    TOML/YAML, channels, AI/NN layers [M: `runtime/`, `runtime/rust/src/`].
 5. **A self-hosting pipeline** whose lexer/parser/emitter are written in
-   Flint itself, gated by a 132-case fixed point [M: `tests/test_fixpoint.sh`].
+   Flint itself, gated by a 149-case fixed point [M: `tests/test_fixpoint.sh`].
 
 ### 0.3 Weakest areas
 
@@ -82,14 +99,17 @@ libc + libm + libdl + libsqlite3 + libcurl + libopenblas, and 72 MB of
    compensates, but a language without a package story cannot attract
    contributors.
 3. **Type system gaps**: no async/await, no associated types, no operator
-   overloading, no type-level programming, closures cannot escape their frame,
-   generics are monomorphization-only with no `dyn` escape hatch
-   [M: `memory.md` §5 M2, §8 decision 2].
+   overloading, no type-level programming, and no full NLL region inference
+   (escaped closures are heap-promoted at the escape site; non-escaping ones
+   stay on the stack), generics are monomorphization-only with no `dyn`
+   escape hatch [M: `memory.md` §5 M2, §8 decision 2; `STATE.md` §4.4].
 4. **No static concurrency safety**: no `Send`/`Sync` equivalent; `parallel for`
    was removed rather than fixed [M: `memory.md` B6].
-5. **Two compiler frontends** (C++ and the Flint stage2/stage3 pipeline) that
-   have already drifted: the pipeline has no traits, no generics, no `::<`,
-   no enum equality [M: `COMPATIBILITY.md` D5].
+5. **Two compiler frontends** (C++ and the Flint stage2/stage3 pipeline).
+   At the assessment date they had already drifted (no traits, no generics,
+   no `::<`); 2E.2–2E.6 closed those, and what remains is representational
+   (bool mangling, a single-entry method table, a one-file query), not a
+   missing syntax [M: `COMPATIBILITY.md` D5].
 
 ### 0.4 Biggest architectural risks
 
@@ -232,7 +252,7 @@ build is served verbatim — a stale-size measurement can survive a source fix.
 
 ### 6.5 The fix and its measured effect [M]
 
-| metric | before | after |
+| metric | before | after (at the fix, `46a007e`) |
 |---|---|---|
 | hello-world, raw | 743,520 B | **8,048 B** (−98.9 %) |
 | hello-world, stripped | 565,600 B | **4,536 B** (−99.2 %) |
@@ -242,7 +262,10 @@ build is served verbatim — a stale-size measurement can survive a source fix.
 | dynamic dependencies | libc, libm, libdl, libsqlite3, libcurl, libopenblas | **libc only** |
 | C's hello-world, stripped (reference) | 4,368 B | — |
 
-Flint is now within 4 % of C's stripped hello-world [M].
+At the fix (`46a007e`) Flint was within 4 % of C's 4,368 B reference. In
+today's tree the same measurement is 8,048 B raw / 4,160 B stripped vs C's
+4,064 B (both re-measured 2026-10-25), still within 3 % [M]. The "after"
+column above is the fix-time measurement, not today's.
 
 ### 6.6 Two traps discovered while fixing it [M]
 
@@ -260,24 +283,32 @@ Both are the same failure mode as B1 (silently wrong answers): a *performance*
 regression that no test noticed because the program still produced correct
 results.
 
-### 6.7 What the compiler should be able to answer
+### 6.7 What the compiler can answer now
 
-`flintc --print-size` should report an attribution like:
+`flintc --print-size` reports the attribution from the link step; a fresh
+artifact on 2026-10-25 printed:
 
 ```
-Binary size: 8,048 B (stripped 4,536 B)
-  .text                       328 B   (application + pulled-in runtime)
-  .rodata                      13 B
-  .bss                         24 B   (was 72 MB before the link fix)
-  unwind tables               280 B
-  dynamic dependencies: libc only
-  modules pulled in: runtime.o only
+size: hello.bin
+  file bytes:      8048 (7.9 KB)
+  section bytes:   7389
+  header/metadata: 659
+  .bss reserved:   24 (not in the file)
+  attributed (symbols, overlaps sections):
+    Rust stdlib:    0
+    C runtime:     32
+    application:   492
+  sections: .interp=21 ... .rodata=23 .eh_frame_hdr=68 .eh_frame=212
+            .text=320 ... .bss=24 ...
+  dynamic deps: libc.so
+  objects offered to the linker (unused ones are dropped by --gc-sections):
+    runtime.o flint_tensor.o ...
 ```
 
-The data needed is already in the link step (section sizes, `DT_NEEDED`,
-the object set) — it just is not reported. **Design [D]:** make the link step
-emit this attribution as a machine-readable JSON sidecar
-(`out.size.json`), so the benchmark dashboard (§21) can diff it per commit.
+`--print-size-json=PATH` writes the same attribution as JSON, so a script
+can diff it per commit. A cache hit prints no size report, so clear
+`~/.cache/flintc` (or change the source bytes) before measuring; a fresh
+output path alone still hits the content-keyed cache.
 
 ---
 
@@ -308,8 +339,9 @@ ergonomics and concurrency, and against Python on developer experience.
 ### 2.2 Where Flint is ahead of every language in the set
 
 - **One artifact, one tool, and a documented machine interface**: a stable
-  token dump (`--dump-tokens`), a 141-message diagnostic catalog with a
-  two-way sync gate, and an agent benchmark (`agent-bench/`) [M]. The LSP
+  token dump (`--dump-tokens`), a 145-code diagnostic catalog (137 fixed
+  patterns) with a two-way sync gate, and an agent benchmark (`agent-bench/`)
+  [M]. The LSP
   ecosystem data shows that agents benefit from semantic navigation, not grep
   [P: CircleCI, 2026-06 — LSP cut tool-output tokens by 31–34 % on a 149k-line
   TypeScript repo]. No other language in this comparison ships an
@@ -325,9 +357,10 @@ ergonomics and concurrency, and against Python on developer experience.
 ### 2.3 Where Flint is behind, by category
 
 - **Performance**: 1.35–2.25× behind C/C++/Rust on integer loops [M].
-- **Size**: now at C parity for a hello-world (4,536 B vs 4,368 B) but the
-  *runtime* still carries fixed arenas; Rust's static hello is 340 KB
-  stripped, so Flint's advantage is over Rust, not over C [M].
+- **Size**: within 2.4 % of C for a hello-world (4,160 B vs 4,064 B,
+  re-measured 2026-10-25) but the *runtime* still carries fixed arenas;
+  Rust's static hello is 339 KB stripped, so Flint's advantage is over Rust,
+  not over C [M].
 - **Concurrency**: no static race freedom; `parallel for` removed [M].
 - **Ecosystem**: zero third-party packages; Rust ~150k crates, npm ~3M
   packages, PyPI ~600k [P, order-of-magnitude from registry front pages,
@@ -634,9 +667,9 @@ Design rules:
   compiler.
 - **No profile may enable `--unsafe`** (§10, §17).
 - `tiny` must not change *semantics* — only what is linked and how code is
-  laid out. With the link fix, a hello-world is already 4,536 B [M], so
-  `tiny` is mostly about not linking subsystems and about `.eh_frame`
-  (280 B today) [M].
+  laid out. With the link fix, a hello-world is already 4,160 B
+  (re-measured 2026-10-25) [M], so `tiny` is mostly about not linking
+  subsystems and about `.eh_frame` (280 B today) [M].
 - `ai/ml` legitimately wants a bigger binary: the current AI stack already
   reserves 72 MB of `.bss` (arena 48 MB, compress 16 MB, sqlite 4 MB,
   crypto 1 MB) [M]. That is a *memory* profile decision, and it should be
@@ -686,13 +719,14 @@ enough to be provable".
    ergonomic and already detect use-after-free at compile time).
 2. **Add lexical regions**: every function body and every block is a
    region; a value may not be used after the region that created it ends.
-   This is the missing half of today's rule — today the rule is "a closure
-   may not escape its defining frame" enforced only for closures.
+   This is the missing half of the old rule — before 2D the only
+   enforcement was "a closure may not escape its defining frame".
 3. **Add escape analysis** to the compiler: a value whose uses are all
    inside the region that created it is *stack-allocated and promotable*;
-   a value that escapes is heap-allocated with a precise lifetime. This
-   replaces the current blanket "closures cannot escape" with a precise
-   rule, and it makes the common case free.
+   a value that escapes is heap-allocated with a precise lifetime. 2D.2
+   landed the closure half of this (heap promotion at the escape site, no
+   allocation for the non-escaping case); the general value analysis and
+   the precise lifetime are still open.
 4. **Add const/alias qualifiers to leases** so the optimizer can assume
    no aliasing between a `&T` and a `&mut T` — the precondition for
    better vectorization.
@@ -847,41 +881,55 @@ that is the precedent to break, not to extend.
 
 ## 12. Closure and lifetime model
 
-### 12.1 Why closures cannot escape today [M]
+### 12.1 Why closures used to be frame-bound — and what replaced it [M]
 
 The M4 design makes a closure's value an **env box** `{fnptr, caps...}`
 allocated in the *defining frame*; the call protocol is
-`fn(env, userargs...)`. The box therefore points into a frame, and the
-compiler refuses to return or store it (a "would escape its defining frame"
-diagnostic) [M]. The restriction is not a missing feature — it is a
-consequence of the representation.
+`fn(env, userargs...)`. As long as the box lives in the frame, the value
+cannot outlive the frame, so the compiler refused to return or store it (a
+"would escape its defining frame" diagnostic) [M].
+
+**2D.2 (2026-10-25) removed that restriction for capturing closures.** An
+intraprocedural escape analysis finds the escape sites (return, global
+store, call argument). A closure created there — or a binding carried to
+there — gets its box copied to the heap (`flint_malloc`), and every alias
+of the box is repointed; a closure that stays inside its frame keeps the
+stack box and allocates nothing. Captures are snapshotted by value, so the
+copy preserves the closure. `tests/test_closure_escape.sh` pins five escape
+shapes and checks the emitted IR for the heap call and its absence in the
+local case. The heap box has no destructor yet, so an escaped box is never
+freed — a recorded limitation (`STATE.md` §4.4), not a hidden one.
+
+The representation still matters: without a region solver the analysis is
+syntactic and intraprocedural, and the per-thread-arena placement below is
+not implemented.
 
 ### 12.2 Approaches compared [D]
 
 | approach | how | pros | cons | fit |
 |---|---|---|---|---|
-| **Heap-allocate the env box** | box on the heap, owned by the closure value | trivial to implement, closures escape | every closure allocates; contradicts the "no hidden allocation" goal | partial (escape-only path) |
+| **Heap-allocate the env box** | box on the heap, owned by the closure value | trivial to implement, closures escape | every closure allocates; contradicts the "no hidden allocation" goal | **implemented for escaping closures (2D.2)** — only they allocate |
 | **Reference counting** | `Rc`/`Arc` for the box | escapes naturally | cycles leak; `Rc` is not `Send`; runtime cost on every clone | no |
 | **Generational arena** | box in a per-thread arena, freed with the arena | cheap, deterministic, matches Flint's Rust runtime arena (48 MB [M]) | arena lifetime is the closure lifetime → still frame-bound | **good** |
-| **Escape analysis + promotion** | analyse uses; if all uses are inside the creating region → stack; else arena/heap | zero cost in the common case; precise | needs the compiler to model regions and lifetimes | **best** |
-| **Closure conversion (current)** | env box in the frame | simple, no allocation | cannot escape | baseline |
+| **Escape analysis + promotion** | analyse uses; if all uses are inside the creating region → stack; else arena/heap | zero cost in the common case; precise | needs the compiler to model regions and lifetimes | **implemented (2D.2)**: stack normally, heap at the escape site; region inference still open |
+| **Closure conversion (baseline)** | env box in the frame | simple, no allocation | cannot escape on its own (pre-2D) | baseline |
 | **Lifetime inference** | infer region constraints, reject only real escapes | precise errors | needs a real type/region checker | combined with the above |
 
-### 12.3 Recommended design [D]
+### 12.3 What landed, and what remains [M/D]
 
-1. **Keep closure conversion** (it is the right lowering).
-2. **Add escape analysis**: a closure whose captured values are not used
-   after the defining function returns → the box can live in a
-   **per-thread arena** (already exists in the Rust runtime) instead of the
-   frame, and the escape restriction lifts for it.
-3. **Add region inference** for captures: a capture used only inside the
-   defining function stays in the frame; a capture that outlives it is
-   moved to the arena/heap automatically, with a *copy or move* decision the
-   compiler makes (and can report: "capture `x` is moved into the closure
-   because it escapes").
-4. **Result:** escaping closures become possible for the common cases
-   (callbacks, stored handlers) with **no allocation in the common case**,
-   and the compiler reports the decision instead of refusing.
+1. **Closure conversion stays** (it is the right lowering).
+2. **Escape analysis + promotion landed (2D.2)**: a closure that stays in
+   its frame keeps the stack box; one that escapes is copied to the heap at
+   the escape site and every alias is repointed. The common case does not
+   allocate.
+3. **Still open**: full region inference (the current analysis is
+   intraprocedural and syntactic), the per-thread-arena placement the
+   roadmap originally proposed, a destructor for an escaped box (there is
+   none, so escaping closures in a loop grow the heap), and a compiler
+   report of the promotion decision.
+4. **Result:** callbacks and stored handlers work, with **no allocation in
+   the common case**. The compiler still does not free the escaped box or
+   print a message when it promotes one.
 
 Cost: one escape-analysis pass + region tracking in the typed IR (§13).
 
@@ -900,15 +948,18 @@ source ──► stage1 lexer (Flint) ──► stage2 parser (Flint) ──► 
 ```
 
 The C++ frontend is authoritative for shipping; the Flint pipeline is the
-self-hosting ladder. They have already drifted: the pipeline has no traits,
-no generics, no `::<`, no enum equality [M: `COMPATIBILITY.md` D5].
+self-hosting ladder. They can still drift: 2E closed the generics, traits
+and explicit-`::<T>` gap, so what remains is representational (bool
+mangling, a single-entry method table, a one-file query) or a feature added
+to the C++ compiler after 2026-10-25 [M: `COMPATIBILITY.md` D5].
 
 ### 13.2 Which implementation becomes authoritative [D]
 
 **The C++ implementation stays authoritative**, for three reasons [I]:
 
 1. It is the one with the full feature set (M3–M6, P0-NEW work, the M2
-   residue work) — the Flint pipeline is far behind.
+   residue work); the pipeline covers the subset the differential gate
+   exercises (14 fixtures), not the whole language.
 2. It already owns the LLVM backend, the JIT, the interface system, the
    module cache and the linker integration.
 3. A "rewrite the compiler in Flint" project would take years and would
@@ -1397,7 +1448,7 @@ git bisect run bash tools/bench_size_gate.sh   # prints "ok" or "bad"
 | responsible change | the link line in `src/main.cpp:spawnLinker` never gained the flag (the runtime objects *are* compiled with `-ffunction-sections`, so the capability existed) |
 | root cause | a design that was documented in a comment but never implemented; the comment claimed "743 KB instead of 8 KB" — the number the shipped compiler actually produced |
 | corrective action | `--gc-sections` + `--as-needed` + conditional native libraries (commit `46a007e`) |
-| result | 8,048 B raw / 4,536 B stripped; `.bss` 24 B; `libc` only [M] |
+| result | 8,048 B raw / 4,160 B stripped (re-measured 2026-10-25); `.bss` 24 B; `libc` only [M] |
 
 **Two sub-findings that make this a class, not an incident [M]:**
 
@@ -1460,7 +1511,7 @@ optimizations come after the IR exists (§13).
 
 Before the link fix: yes, entirely — the whole stdlib was linked into every
 program (743 KB). After the fix: no — a hello-world pulls in `runtime.o`
-only, and the binary is 4,536 B stripped [M]. The stdlib's *code* is not
+only, and the binary is 4,160 B stripped (re-measured 2026-10-25) [M]. The stdlib's *code* is not
 the problem any more.
 
 What remains:
@@ -1544,14 +1595,15 @@ What remains:
 - **stage3** — emitter (S-expr → LLVM IR text), in Flint.
 - **C++ compiler** — the authoritative front end and the LLVM backend.
 - The fixed-point gate proves stage3 re-compiles itself byte-identically
-  over 132 cases [M].
+  over 149 cases [M].
 
 ### 26.2 The problem [M]
 
 The ladder is a *second implementation of the language's semantics*, and it
-has drifted (D5: no traits, no generics, no `::<`, no enum equality). Every
-feature now costs two implementations, and the differential gate only
-covers the 11 fixtures in its manifest [M].
+can drift. 2E closed the generics/traits/`::<T>` gap; what remains is
+representational (D5), not a missing syntax. Every feature still costs two
+implementations, and the differential gate covers the 14 fixtures in its
+manifest [M].
 
 ### 26.3 Target bootstrap strategy [D]
 
@@ -1614,11 +1666,11 @@ improving at every step.
 | category | score /100 | evidence | main weakness | priority |
 |---|---|---|---|---|
 | **Runtime performance** | 70 | [M] sum_array 10M is now **12.0 ms vs C's 8.3 ms (1.44×)** — down from 1.89× after the length fact reached the array builtins (2b45516), and the final IR has **0 bounds-check calls**; f64 parity; 4–45× faster than Python. The checks that remain are the ones needing **range analysis** (primes: `i*i <= limit` does not give LLVM `i <= limit+1`) | no range analysis yet, so the checks that block vectorization still survive | P1 |
-| **Binary size** | 92 | [M] 4,536 B stripped hello (C: 4,368 B; Rust: 339,656 B) after the link fix; `.bss` 24 B; one dependency | 72 MB of arenas in library-heavy programs; one monolithic `flint_std.o` | P2 |
-| **Memory safety** | 78 | [M] compile-time use-after-free, bounds/overflow/div-zero checks, leases + runtime backstop, deterministic free, 141-message diagnostic catalog | no precise regions; closures cannot escape; FFI contracts unchecked | P1 |
+| **Binary size** | 92 | [M] 4,160 B stripped hello (C: 4,064 B; Rust: 339,120 B) after the link fix; `.bss` 24 B; one dependency | 72 MB of arenas in library-heavy programs; one monolithic `flint_std.o` | P2 |
+| **Memory safety** | 78 | [M] compile-time use-after-free, bounds/overflow/div-zero checks, leases + runtime backstop, deterministic free, 145-code diagnostic catalog | no full NLL regions; an escaped closure box is never freed; FFI contracts unchecked | P1 |
 | **Concurrency safety** | 42 | [M] threads + channels exist; no static race freedom; `parallel for` removed | no capability model | P1 |
 | **Type system** | 55 | [M] inference, generics (monomorphization), traits (M3), lambdas/closures (M4), enums, structs, maps, explicit type args (M2b) | no async, no associated types, no `dyn`, no operator overloading, no nullable types | P2 |
-| **Compiler maturity** | 70 | [M] 21 green suites, differential + fixed point + no-hang gates, self-hosting ladder, 141-message catalog | two frontends that drift (D5); the link regression shipped for months | P0 (D5) |
+| **Compiler maturity** | 70 | [M] 27-gate battery, differential + fixed point + no-hang gates, self-hosting ladder, 145-code catalog | two frontends that can drift (D5); the link regression shipped for months | P0 (D5) |
 | **LSP/tooling** | 42 | [M] separate Rust LSP (5/5 tests), formatter, token dump, agent benchmark, agent-bench tasks | no compiler-backed semantics, no rename/refactor, no incremental analysis | P2 |
 | **Ecosystem** | 12 | [M] zero third-party packages; strong stdlib; binary registry exists | no package manager, registry, resolver, lockfile, signing, audit | P1 |
 | **Developer experience** | 66 | [M] one binary for compile/JIT/IR/interface/test; 8-lesson tutorial; one-error-per-input contract; agent-friendly contracts | young tooling, no package story, `flt_` naming inconsistencies, limited docs | P2 |
@@ -1648,7 +1700,7 @@ phase-exit criteria are below.
 
 | step | goal | exit criterion | status |
 |---|---|---|---|
-| **2A** | a real type checker + facts in types | the checker rejects provable type errors with structured diagnostics, never rejects what the compiler accepts (differential over the corpus), `--type-audit` shows 0 contract violations and 0 drift, and the resolved trait / instantiated type arguments are inspectable | **landed**: checker phase (`E0290`–`E0294`), 174/174 differential, 0 drift / 0 contract violations, call facts inspectable |
+| **2A** | a real type checker + facts in types | the checker rejects provable type errors with structured diagnostics, never rejects what the compiler accepts (differential over the corpus), `--type-audit` shows 0 contract violations and 0 drift, and the resolved trait / instantiated type arguments are inspectable | **landed**: checker phase (`E0290`–`E0294`), 181/181 differential, 0 drift / 0 contract violations, call facts inspectable |
 | **2B** | checks become IR-level data | bounds/overflow are IR operations with a safety policy, not inline code | landed |
 | **2C** | analyses | loop-range facts (landed) and escape analysis (open) | partial |
 | **2D** | regions | capturing closures escape safely (NLL-style regions) | partial |
@@ -1819,7 +1871,7 @@ binary size + excellent tooling + unified compiler architecture + simple
 developer experience + domain-aware optimization.**
 
 Flint is closer to that target than it was a week ago: the binary-size
-regression is fixed (743 KB → 8 KB, C parity) [M], the type system has
+regression is fixed (743 KB → 8 KB, within 3 % of C) [M], the type system has
 inference, traits, closures, generics and explicit type arguments [M], the
 diagnostics are a catalogued contract [M], and the toolchain is one binary
 [ M]. The three gaps that matter most are: **no typed IR** (which blocks

@@ -6,8 +6,8 @@
 # module-level constant, so it can be returned, stored in a global, or handed
 # to a callee that keeps it.
 #
-# A closure that DOES capture keeps its frame-bound box, and the escape
-# rules still apply to it (that is the whole point of the rule).
+# A closure that DOES capture may also escape: at the escape site its box is
+# copied to the heap (Phase 2 / 2D; see t_capturing_escape.fl).
 
 fn make_adder() -> fn(i64) -> i64 {
     # A capture-less closure, returned from a function: allowed now.

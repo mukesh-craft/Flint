@@ -8,8 +8,10 @@ fn main() -> i64 {
     print(p.x)
     print(p.y)
 
-    // Struct assignment (copy)
-    q = p
+    // Struct assignment is a move in Flint: a struct may own heap values
+    // (a str field), so copying it implicitly would alias ownership. Copy
+    // plain data explicitly with a struct literal.
+    q = Point { x: p.x, y: p.y }
     print(q.x)
     print(q.y)
 

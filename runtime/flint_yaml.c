@@ -58,11 +58,19 @@ static int _split(Y* y) {
         copy[n] = '\0';
         if (y->n == y->cap) {
             int64_t nc = y->cap ? y->cap * 2 : 64;
+            // Grow one array at a time and store each result immediately.
+            // Assigning three realloc results at once loses the old pointer
+            // (and the memory it owned) when any one of them fails.
             char** nl = (char**)realloc(y->lines, (size_t)nc * sizeof(char*));
+            if (!nl) { free(copy); return 0; }
+            y->lines = nl;
             int64_t* ni = (int64_t*)realloc(y->indent, (size_t)nc * sizeof(int64_t));
+            if (!ni) { free(copy); return 0; }
+            y->indent = ni;
             int64_t* nn = (int64_t*)realloc(y->line_no, (size_t)nc * sizeof(int64_t));
-            if (!nl || !ni || !nn) { free(copy); return 0; }
-            y->lines = nl; y->indent = ni; y->line_no = nn; y->cap = nc;
+            if (!nn) { free(copy); return 0; }
+            y->line_no = nn;
+            y->cap = nc;
         }
         int64_t ind = 0;
         while (copy[ind] == ' ') ind++;

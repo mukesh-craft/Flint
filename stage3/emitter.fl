@@ -220,6 +220,11 @@ EARGCODE = flint_vec_new()
 mut EARGTEXT: str = ""
 # The inferred type argument codes of one template call.
 ECODES = flint_vec_new()
+# Explicit type arguments (`f::<T>(...)`) live in one global stack so a
+# NESTED call cannot clobber the outer call's list: e_call_explicit records
+# the window base before its arguments are parsed, and the template reads
+# its own window after them (the same discipline as EARGTEXT/EARGVO).
+EEXPV = flint_vec_new()
 # The trait method names. A trait declares SIGNATURES only: the method
 # names and their arity. The implementations are ordinary functions, and
 # a call site resolves by NAME + ARITY (the C++ compiler's M3 rule).
@@ -4502,6 +4507,12 @@ fn e_instantiate(name: str, tidx: i64, mangled: str) -> i64 {
 # parameter. A type parameter that cannot be inferred is an error, never
 # a guess (the C++ compiler says the same).
 fn e_call_template(name: str) -> str {
+    e_call_template_ex(name, 0, 0)
+}
+# explicit=1: the call site carried `::<T,...>` and its codes are the
+# EEXPV window [exbase, exbase+nt). Inference is skipped in that case --
+# the explicit list is the C++ compiler's M2b rule.
+fn e_call_template_ex(name: str, explicit: i64, exbase: i64) -> str {
     tidx = ETPLMAP.get(name)
     # The argument scratch is global, so a NESTED generic call would
     # overwrite the outer call's arguments. Every call therefore works on
@@ -4539,35 +4550,53 @@ fn e_call_template(name: str) -> str {
     flint_vec_clear(ECODES)
     mut infok: i64 = 1
     mut failed: str = ""
-    mut ai: i64 = 0
-    while ai < nt {
-        tname = flint_str_substring(ETPLTEXT, flint_vec_get(ETPLTPO, tb + ai), flint_vec_get(ETPLTPO, tb + ai) + flint_vec_get(ETPLTPL, tb + ai))
-        # the first parameter that mentions this type parameter
-        mut argi: i64 = -1
-        mut pi: i64 = 0
-        while pi < np {
-            pword = flint_str_substring(ETPLTEXT, flint_vec_get(ETPLPWO, pbase + pi), flint_vec_get(ETPLPWO, pbase + pi) + flint_vec_get(ETPLPWL, pbase + pi))
-            if flint_str_compare(pword, tname) == 0 {
-                argi = pi
-                pi = np
-            } else {
-                pi = pi + 1
-            }
+    if explicit == 1 {
+        # M2b: an explicit list overrides inference. The count is the
+        # C++ compiler's check (src/main.cpp:10487) -- the pipeline may
+        # not be MORE permissive than the oracle.
+        if flint_vec_len(EEXPV) - exbase != nt {
+            EERR = EERR + 1
+            print("emit error[E0296]: explicit type argument count disagrees")
+            print(name)
+            ETYPE = 0
+            return ""
         }
-        mut code: i64 = 0
-        if argi >= 0 {
-            if argi < nargs {
-                code = flint_vec_get(EARGCODE, argbase + argi)
-            }
+        mut ei: i64 = 0
+        while ei < nt {
+            flint_vec_push(ECODES, flint_vec_get(EEXPV, exbase + ei))
+            ei = ei + 1
         }
-        if code == 0 {
-            infok = 0
-            if failed == "" {
-                failed = tname
+    } else {
+        mut ai: i64 = 0
+        while ai < nt {
+            tname = flint_str_substring(ETPLTEXT, flint_vec_get(ETPLTPO, tb + ai), flint_vec_get(ETPLTPO, tb + ai) + flint_vec_get(ETPLTPL, tb + ai))
+            # the first parameter that mentions this type parameter
+            mut argi: i64 = -1
+            mut pi: i64 = 0
+            while pi < np {
+                pword = flint_str_substring(ETPLTEXT, flint_vec_get(ETPLPWO, pbase + pi), flint_vec_get(ETPLPWO, pbase + pi) + flint_vec_get(ETPLPWL, pbase + pi))
+                if flint_str_compare(pword, tname) == 0 {
+                    argi = pi
+                    pi = np
+                } else {
+                    pi = pi + 1
+                }
             }
+            mut code: i64 = 0
+            if argi >= 0 {
+                if argi < nargs {
+                    code = flint_vec_get(EARGCODE, argbase + argi)
+                }
+            }
+            if code == 0 {
+                infok = 0
+                if failed == "" {
+                    failed = tname
+                }
+            }
+            flint_vec_push(ECODES, code)
+            ai = ai + 1
         }
-        flint_vec_push(ECODES, code)
-        ai = ai + 1
     }
     if infok == 0 {
         EERR = EERR + 1
@@ -4656,6 +4685,67 @@ fn e_call_template(name: str) -> str {
             t3
         }
     }
+}
+# `(call-t NAME (targs T*) ARGS...)`: the source wrote an explicit list,
+# `NAME::<T,...>(...)`. Stage2 always emits the list for that form, so the
+# emitter never re-derives it. The codes use the same annotation mapping
+# declarations use (e_ann_code), which means a struct type and `i64` behave
+# alike -- and inside a generic instance a type parameter still resolves
+# through the active type environment.
+fn e_call_explicit(name: str) -> str {
+    e_skip()
+    if e_peek() != 40 {
+        EERR = EERR + 1
+        print("emit error[E0295]: explicit type arguments need a (targs ...) list")
+        print(name)
+        ETYPE = 0
+        return ""
+    }
+    e_adv()
+    # '('
+    e_skip()
+    tw = e_word()
+    if tw != "targs" {
+        EERR = EERR + 1
+        print("emit error[E0295]: explicit type arguments need a (targs ...) list")
+        print(name)
+        ETYPE = 0
+        return ""
+    }
+    base = flint_vec_len(EEXPV)
+    mut go: i64 = 1
+    while go == 1 {
+        e_skip()
+        if e_peek() == 41 {
+            e_adv()
+            go = 0
+        } else {
+            w = e_word()
+            # Plain mapping, NOT e_ann_code: inside a generic instance the
+            # environment would make `idc::<A>` resolve to A's binding, but
+            # the C++ compiler rejects a type parameter as an explicit type
+            # argument ("must be a concrete type", E0117). The pipeline is
+            # the second implementation and may not be more permissive.
+            c = e_ann_code_plain(w)
+            if c == 0 {
+                EERR = EERR + 1
+                print("emit error[E0297]: explicit type argument is not a type")
+                print(w)
+                print(name)
+                ETYPE = 0
+                return ""
+            }
+            flint_vec_push(EEXPV, c)
+        }
+    }
+    if ETPLMAP.has(name) == 0 {
+        EERR = EERR + 1
+        print("emit error[E0298]: explicit type arguments are only allowed on a generic function")
+        print(name)
+        ETYPE = 0
+        return ""
+    }
+    e_call_template_ex(name, 1, base)
 }
 fn e_call(name: str) -> str {
     if ELAMMAP.has(name) == 1 {
@@ -4850,6 +4940,13 @@ fn e_expr() -> str {
     }
 }
 fn e_expr_tagged(tag: str) -> str {
+    # Explicit type arguments have their own tag from stage2, so this is an
+    # early branch rather than one more level in the giant if/else chain.
+    if tag == "call-t" {
+        e_skip()
+        nm = e_word()
+        return e_call_explicit(nm)
+    }
     if tag == "num" {
         e_num()
     } else {

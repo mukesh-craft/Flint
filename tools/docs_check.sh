@@ -9,7 +9,7 @@ ROOT="${1:-.}"
 fail=0
 check() { # $1=desc $2=want $3=got
     if [ "$2" = "$3" ]; then echo "ok: $1 ($3)";
-    else echo "FAIL: $1 (want [$2] got [$3]; update README.md Testing table)"; fail=$((fail+1)); fi
+    else echo "FAIL: $1 (want [$2] got [$3]; update README.md Testing table and this check)"; fail=$((fail+1)); fi
 }
 lines() { wc -l < "$ROOT/$1" | tr -d ' '; }
 
@@ -19,10 +19,10 @@ check "t_flow.fl" 48 "$(lines tests/t_flow.fl)"
 check "t_funcs.fl" 15 "$(lines tests/t_funcs.fl)"
 check "t_types.fl" 23 "$(lines tests/t_types.fl)"
 check "smoke total" 120 "$(( $(lines tests/t_hello.fl) + $(lines tests/t_arith.fl) + $(lines tests/t_flow.fl) + $(lines tests/t_funcs.fl) + $(lines tests/t_types.fl) ))"
-check "run.sh" 109 "$(lines tests/run.sh)"
+check "run.sh" 116 "$(lines tests/run.sh)"
 check "run_tutorial.sh" 18 "$(lines tests/run_tutorial.sh)"
 check "test_registry.sh" 43 "$(lines tests/test_registry.sh)"
-check "runners total" 170 "$(( $(lines tests/run.sh) + $(lines tests/run_tutorial.sh) + $(lines tests/test_registry.sh) ))"
+check "runners total" 177 "$(( $(lines tests/run.sh) + $(lines tests/run_tutorial.sh) + $(lines tests/test_registry.sh) ))"
 check "fib.fl" 15 "$(lines benchmarks/fib.fl)"
 check "fib2.fl" 11 "$(lines benchmarks/fib2.fl)"
 check "pi.fl" 23 "$(lines benchmarks/pi.fl)"

@@ -18,3 +18,6 @@ t_generic.fl 0 t_generic.txt same
 # 2E.4: a trait declares signatures only; the call site resolves the
 # method by name + arity, exactly like the C++ compiler.
 t_trait.fl 0 t_trait.txt same
+# 2E: explicit type arguments `f::<T>(...)` -- the last 2E gap. Same calls,
+# same mangled instance names, same output as the C++ compiler.
+t_explicit_targs.fl 0 t_explicit_targs.txt same

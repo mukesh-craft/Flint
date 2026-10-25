@@ -99,10 +99,17 @@ check_fail tests/t_pfor_removed.fl "'parallel for' was removed: it could not cap
 # M2b: explicit type arguments — wrong count, and a non-generic callee.
 check_fail tests_manual/t_explicit_targs_bad.fl "'idc' expects 1 type argument(s), got 2"
 check_fail tests_manual/t_explicit_targs_nongen.fl "explicit type arguments are only allowed on a generic function"
-# Phase 2 / 2D: a named function's value may escape (it captures nothing),
-# and a closure that CAPTURES may not (its box is frame-bound).
+# Phase 2 / 2D: every function value may escape. A capture-less closure or a
+# named function already has a module-level box; a CAPTURING closure is
+# promoted to the heap at the escape site. All five shapes print 42 if the
+# closure survived the defining frame; tests/test_closure_escape.sh also
+# checks the emitted IR for the heap allocation.
 check tests_manual/t_named_fn_escape.fl "6"
-check_fail tests_manual/t_capturing_escape.fl "cannot return a lambda: it would escape its defining frame"
+check tests_manual/t_capturing_escape.fl "42"
+check tests_manual/t_capturing_alias.fl "42"
+check tests_manual/t_capturing_global.fl "42"
+check tests_manual/t_capturing_arg.fl "42"
+check tests_manual/t_capturing_assign.fl "42"
 # M2c: an argument whose type cannot be determined is reported by name.
 check_fail tests_manual/t_generic_no_infer.fl "cannot infer type parameter 'T' for 'idc'; the argument's type could not be determined"
 echo "smoke: $pass passed, $fail failed"

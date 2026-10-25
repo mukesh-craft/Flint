@@ -583,6 +583,62 @@ fn p_arg_list() -> str {
     }
     s
 }
+# M2b / 2E: explicit type arguments, `f::<T, U>(args)`. `::` is TWO ':'
+# tokens (kind 58) to the lexer, so no lexer change is needed and the token
+# contract (lexdiff) stays intact -- exactly the C++ parser's rule
+# (src/main.cpp:5445). The form is unambiguous: nothing else in the
+# language uses `::`.
+#
+# Emits `(call-t NAME (targs T*) ARGS...)`; the emitter resolves the type
+# words with the same mapping annotations use.
+fn p_explicit_call(name: str) -> str {
+    p_next()
+    # first ':'
+    p_next()
+    # second ':'
+    if p_accept(78) == 0 {
+        # '<'
+        p_note_err()
+        return ""
+    }
+    mut ts: str = ""
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        t = p_type_token()
+        if p_is_err(t) == 1 {
+            return ""
+        }
+        if first == 0 {
+            ts = ts + " "
+        }
+        ts = ts + t
+        first = 0
+        if p_accept(57) == 1 {
+            # ','
+            go = 1
+        } else {
+            go = 0
+        }
+    }
+    if p_accept(80) == 0 {
+        # '>'
+        p_note_err()
+        return ""
+    }
+    if p_accept(50) == 0 {
+        # '('
+        p_note_err()
+        return ""
+    }
+    a = p_arg_list()
+    if p_accept(51) == 0 {
+        # ')'
+        p_note_err()
+        return ""
+    }
+    "(call-t " + name + " (targs " + ts + ")" + a + ")"
+}
 # Array literal [a, b, ...spread] (mirrors C++, trailing comma tolerated),
 # or Phase-2 f64 tensor literal `(tensor ...)`: every element a bare numeric
 # with at least one float (flat), or every element a flat-numeric row tensor
@@ -854,6 +910,12 @@ fn p_primary() -> str {
 fn p_primary_ident() -> str {
     w = p_text()
     p_next()
+    # M2b: `f::<T>(...)` -- two ':' tokens, then the type list.
+    if p_kind() == 58 {
+        if p_next_kind() == 58 {
+            return p_explicit_call(w)
+        }
+    }
     if w == "true" {
         "(true)"
     } else {
@@ -2753,6 +2815,55 @@ fn pp_number(src: str) -> str {
 fn pp_quote(raw: str) -> str {
     "\"" + raw + "\""
 }
+# M2b / 2E: `(call-t NAME (targs T*) ARGS...)` prints back as
+# `NAME::<T*, ...>(ARGS)`. `::` is two ':' tokens, so the token stream is
+# unchanged across the round trip; the explicit list re-parses to the same
+# node, which is what the fixpoint gate compares.
+fn pp_call_t(src: str) -> str {
+    pp_skip(src)
+    nm = pp_word(src)
+    pp_skip(src)
+    pp_pexpect(src, 40)
+    pp_skip(src)
+    tw = pp_word(src)
+    if flint_str_compare(tw, "targs") == 0 {
+        pp_skip(src)
+    } else {
+        PERR = PERR + 1
+    }
+    sb = flint_sb_new()
+    mut first: i64 = 1
+    mut go: i64 = 1
+    while go == 1 {
+        pp_skip(src)
+        c = pp_peek(src)
+        if c == 41 {
+            go = 0
+        } else {
+            if c == -1 {
+                go = 0
+            } else {
+                t = pp_word(src)
+                if first == 1 {
+                    first = 0
+                } else {
+                    flint_sb_append(sb, ", ")
+                }
+                flint_sb_append(sb, t)
+            }
+        }
+    }
+    ts = flint_sb_build(sb)
+    flint_sb_free(sb)
+    if pp_pexpect(src, 41) == 1 {
+        a = pp_comma_list(src)
+        PPPREC = 100
+        nm + "::<" + ts + ">(" + a + ")"
+    } else {
+        PPPREC = 100
+        nm + "::<" + ts + ">()"
+    }
+}
 fn pp_node(src: str) -> str {
     pp_skip(src)
     if pp_peek(src) == 40 {
@@ -2775,39 +2886,43 @@ fn pp_node(src: str) -> str {
     }
 }
 fn pp_tagged(src: str, tag: str) -> str {
-    if tag == "true" {
-        PPPREC = 100
-        "true"
+    if tag == "call-t" {
+        pp_call_t(src)
     } else {
-        if tag == "false" {
+        if tag == "true" {
             PPPREC = 100
-            "false"
+            "true"
         } else {
-            if tag == "num" {
-                pp_skip(src)
-                w = pp_word(src)
+            if tag == "false" {
                 PPPREC = 100
-                # Strip the float `d` marker the parser adds (re-lex restores it).
-                if flint_str_length(w) == 0 {
-                    w
-                } else {
-                    if flint_str_char_at(w, flint_str_length(w) - 1) == 100 {
-                        flint_str_substring(w, 0, flint_str_length(w) - 1)
-                    } else {
-                        w
-                    }
-                }
+                "false"
             } else {
-                if tag == "str" {
-                    pp_str_node(src)
-                } else {
-                    if tag == "var" {
-                        pp_skip(src)
-                        w = pp_word(src)
-                        PPPREC = 100
+                if tag == "num" {
+                    pp_skip(src)
+                    w = pp_word(src)
+                    PPPREC = 100
+                    # Strip the float `d` marker the parser adds (re-lex restores it).
+                    if flint_str_length(w) == 0 {
                         w
                     } else {
-                        pp_tagged2(src, tag)
+                        if flint_str_char_at(w, flint_str_length(w) - 1) == 100 {
+                            flint_str_substring(w, 0, flint_str_length(w) - 1)
+                        } else {
+                            w
+                        }
+                    }
+                } else {
+                    if tag == "str" {
+                        pp_str_node(src)
+                    } else {
+                        if tag == "var" {
+                            pp_skip(src)
+                            w = pp_word(src)
+                            PPPREC = 100
+                            w
+                        } else {
+                            pp_tagged2(src, tag)
+                        }
                     }
                 }
             }
