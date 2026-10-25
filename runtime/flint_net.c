@@ -59,7 +59,10 @@ static int flint_sock_init(void) { return 0; }
 #endif
 #endif
 
-extern void flint_panic(const char* msg);
+// noreturn must be visible here too: without it the compiler (and static
+// analyzers) assume control continues after a panic, which turns every
+// "free-then-panic" cleanup path into a phantom double free.
+extern void flint_panic(const char* msg) __attribute__((cold, noreturn));
 extern int64_t flint_g_err;
 extern void flint_set_err(int64_t err);
 

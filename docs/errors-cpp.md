@@ -6,7 +6,13 @@ and the tools link to it), and the pattern is the literal text with
 `<...>` where a value is interpolated. A user searching for a message
 finds the pattern that starts like their message.
 
-The codes live in the source, next to the diagnostic (`codegenError("E0042",
+This file lists the **137 diagnostics with a fixed pattern**. The compiler
+has **145 stable codes**: eight (E0137–E0144) build their message from a
+variable and are listed in `docs/error-codes.csv` as `<variable message>`.
+Four codes retired by Phase 2 / 2D (E0041–E0044, the closure-escape
+refusals) are not reused.
+
+The codes live in the source, next to the diagnostic (`codegenError("E0001",
 "...")`) — the same shape as Clang's DiagnosticIDs.td. The table is
 `docs/error-codes.csv`, and `tests/test_diagnostic_codes.sh` keeps the two
 in sync and checks that a code never changes its meaning.
@@ -53,7 +59,7 @@ Regenerate: `python3 tools/errors_cpp.py --format md` (or
 
 ## Complete message list
 
-- `E0001  ' <...> ' expects <...> argument(s), got <...>`
+- `E0001  ' <...> ' expects <...> <...> argument(s), got <...>`
 - `E0002  ' <...> ' expects <...> type argument(s), got <...>`
 - `E0003  ' <...> ' is not defined for structs or enums; use == or !=`
 - `E0004  'parallel for' was removed: it could not capture variables and had no result channel. Use a plain 'for' loop, or move the work into a Rust runtime function such as flint_parallel_reduce`
@@ -93,10 +99,6 @@ Regenerate: `python3 tools/errors_cpp.py --format md` (or
 - `E0038  cannot pass a lambda to parameter ' <...> ' of ' <...> ': the parameter is not a fn type`
 - `E0039  cannot rebind ' <...> ' as lambda`
 - `E0040  cannot rebind lambda ' <...> '`
-- `E0041  cannot return a function value: it would escape its defining frame`
-- `E0042  cannot return a lambda: it would escape its defining frame`
-- `E0043  cannot store a function value into global ' <...> ': it would escape its defining frame`
-- `E0044  cannot store a lambda into global ' <...> ': it would escape its defining frame`
 - `E0045  continue outside loop`
 - `E0046  empty lambda body`
 - `E0047  expected '<' after '::' before explicit type arguments`
@@ -195,4 +197,4 @@ Regenerate: `python3 tools/errors_cpp.py --format md` (or
 - `E0293  call to ' <...> ': argument <...> is <...> , but parameter <...> is <...>`
 - `E0294  cannot compare <...> with <...> ; convert one side explicitly`
 
-Total: 141 diagnostics.
+Total: 137 fixed-pattern diagnostics (145 stable codes; the other 8 build their message at runtime and are listed as `<variable message>` in docs/error-codes.csv).

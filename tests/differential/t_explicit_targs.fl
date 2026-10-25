@@ -1,0 +1,21 @@
+# 2E: explicit type arguments, `f::<T>(...)`.
+#
+# The pipeline parses `::` as two ':' tokens (no lexer change) and emits
+# `(call-t NAME (targs T*) ARGS...)`; the emitter resolves the list with the
+# same mapping annotations use, then skips inference. The C++ compiler is
+# the oracle: same calls, same mangled instance names, same output.
+fn idc<T>(x: T) -> T { return x }
+
+struct S { a: i64 }
+
+# Inference would choose str here from the argument; the explicit list says
+# nothing about T is inferable from `n`, which is why the syntax exists.
+fn tag<T>(n: i64) -> i64 { return n }
+
+fn main() {
+    print(idc::<i64>(5))
+    print(idc::<S>(S { a: 7 }).a)
+    print(idc::<str>("hi"))
+    print(tag::<f64>(9))
+    0
+}

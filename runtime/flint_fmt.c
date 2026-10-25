@@ -91,13 +91,16 @@ static int emit_conv(SBuf* s, int left, int plus, int space,
 char* flint_vformat(const char* fmt, void* va) {
     if (!fmt) return NULL;
     va_list ap;
-    // The header takes void* to avoid dragging <stdarg.h> into consumers;
-    // va_list is an array type, so it must be copied through, not aliased.
-    memcpy(&ap, va, sizeof(ap));
+    // The header takes void* to avoid dragging <stdarg.h> into consumers.
+    // `va` points at the caller's va_list, so restore the type and use
+    // va_copy: it is the standard way to pass a va_list through, and unlike
+    // a raw memcpy it tells analyzers (and the compiler) what is happening.
+    va_copy(ap, *(va_list*)va);
 
     SBuf s;
     s.buf = NULL; s.len = 0; s.cap = 0;
-    if (!sb_reserve(&s, 128)) return NULL;
+    char* result = NULL;
+    if (!sb_reserve(&s, 128)) goto done;
     s.buf[0] = '\0';
 
     const char* p = fmt;
@@ -105,11 +108,11 @@ char* flint_vformat(const char* fmt, void* va) {
         if (*p != '%') {
             const char* start = p;
             while (*p && *p != '%') p++;
-            if (!sb_putn(&s, start, (size_t)(p - start))) { free(s.buf); return NULL; }
+            if (!sb_putn(&s, start, (size_t)(p - start))) { free(s.buf); goto done; }
             continue;
         }
         p++;                                  // past '%'
-        if (*p == '%') { if (!sb_puts(&s, "%")) { free(s.buf); return NULL; } p++; continue; }
+        if (*p == '%') { if (!sb_puts(&s, "%")) { free(s.buf); goto done; } p++; continue; }
 
         int left = 0, plus = 0, space = 0, zero = 0;
         for (;;) {
@@ -176,8 +179,14 @@ char* flint_vformat(const char* fmt, void* va) {
                 break;
         }
     }
-    if (!s.buf) { if (!sb_reserve(&s, 1)) return NULL; s.buf[0] = '\0'; }
-    return s.buf;
+    if (!s.buf) {
+        if (!sb_reserve(&s, 1)) goto done;
+        s.buf[0] = '\0';
+    }
+    result = s.buf;
+done:
+    va_end(ap);
+    return result;
 }
 
 char* flint_format(const char* fmt, ...) {

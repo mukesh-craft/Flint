@@ -17,6 +17,9 @@ the owning document; elsewhere, link.**
 | [`docs/IMPROVEMENT-PLAN.md`](IMPROVEMENT-PLAN.md) | the 2026-10-03 measurement report (archive) | current recommendations |
 | [`COMPATIBILITY.md`](../COMPATIBILITY.md) | the C++ compiler vs self-host pipeline divergence log (D1–D5) | language design |
 | [`docs/PIPELINE-GENERICS.md`](PIPELINE-GENERICS.md) | the pipeline's generics/trait S-expression contract, the monomorphizer design, the known deviations | whether the work is done (that is `STATE.md`) |
+| [`docs/DESIGN-PHILOSOPHY.md`](DESIGN-PHILOSOPHY.md) | the why, the non-goals, the known trade-offs | status counts, measurements, the phase order |
+| [`benchmarks/README.md`](../benchmarks/README.md) | the benchmark device, method, and reproduction commands | the historical result tables (they live in `README.md`) |
+| [`CREDITS.md`](../CREDITS.md) | the maintainer, the AI-assistance disclosure, third-party components | design rationale, status |
 | [`docs/errors-cpp.md`](errors-cpp.md) | the C++ compiler's diagnostic catalogue (patterns + codes) | the pipeline's messages |
 | [`docs/errors.md`](errors.md) | the self-hosted emitter's diagnostic catalogue | the C++ compiler's messages |
 | [`docs/error-codes.csv`](error-codes.csv), [`docs/error-codes-pipeline.csv`](error-codes-pipeline.csv) | the stable code → message tables, machine-readable | prose |

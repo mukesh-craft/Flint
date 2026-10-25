@@ -44,12 +44,12 @@ next action is. It is the first thing to read and the first thing to update.
 
 | field | value |
 |---|---|
-| current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D escaping capture-less closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5` — the pipeline now compiles generics, with the C++ compiler's own symbol names); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution** (the pipeline now compiles trait programs); **2A the type-checking phase + call facts** (the 2A landing commit: `E0290`–`E0294`, 0 contract violations / 0 drift over the whole tree, 174/174 differential, 74 inspectable call facts); **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`; the measured `show("hi")` drift is fixed) |
-| in flight | (none — see the git log for the newest commit) |
-| next action | **the explicit `::<T>` call syntax** — the last 2E gap (stage2 does not lex `::`; `docs/PIPELINE-GENERICS.md`). Then the pipeline's S-expression positions and the escape analysis for capturing closures (2D.2) |
-| build | `bash build.sh` — ~2.5 min; poll at 60-120 s, never with a long sleep |
-| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 25 gates, ~25-30 min; run it detached and poll |
+| current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; the remaining Phase 2 work is typed HIR, full NLL regions, and capability types |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14) |
+| in flight | (none — the tree is green; the documentation authenticity pass is recorded in `memory.md`) |
+| next action | **Phase 2's remaining gaps**, in this order: typed HIR (§4.2), full NLL region inference (§4.4), capability types (§4.5). Then close D5's remaining surface (`STATE.md` §4.9.1) |
+| build | `bash build.sh` — ~12–15 min on this device; poll at 60–120 s, never with a long sleep |
+| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 27 gates, ~25–30 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
 | do not | hand-write a vectorizer (the roadmap rejects it); use `llvm.assume` for range facts instead |
 
@@ -62,7 +62,7 @@ before running anything), and the git log has one commit per completed step.
 
 **Flint is a 0.22.0 systems language with a safety model, a
 batteries-included standard library, and a compiler that is also its
-toolchain.** The C++ compiler (`src/main.cpp`, ~13K lines) is authoritative;
+toolchain.** The C++ compiler (`src/main.cpp`, ~16K lines) is authoritative;
 a self-hosted Flint pipeline (stage1/2/3) exists as the bootstrap ladder.
 
 Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
@@ -71,13 +71,14 @@ Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
 controls and the per-workload method); this file does not repeat it.
 Reproduce with §2.3.
 
-**The v1 battery is green: 25 gates** (measured 2026-10-24; per-gate counts
+**The v1 battery is green: 27 gates** (measured 2026-10-25; per-gate counts
 in §2.2), and the standalone gates are green with it. The whole battery runs
-as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 25/25). The
-checker's differential is 174/174 over every `.fl` in the tree, the type
+as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 27/27). The
+checker's differential is 181/181 over every `.fl` in the tree, the type
 audit reports **0 contract violations and 0 drift**, the two frontends are
-compared by the differential gate (13/13), the query-mode gate is 14/14,
-and the bootstrap's fixed point is byte-identical.
+compared by the differential gate (14/14), the query-mode gate is 14/14,
+the explicit-type-argument gate is 6/6, the closure-escape gate is 7/7, and
+the bootstrap's fixed point is byte-identical.
 
 ---
 
@@ -106,16 +107,18 @@ and `/usr/bin/env` does not exist on Termux.
 
 ```bash
 T=/data/data/com.termux/files/usr/tmp/opencode
-bash tests/run.sh                  # smoke (56)
+bash tests/run.sh                  # smoke (60)
 bash tests/test_lexdiff.sh         # token contract
-bash tests/test_parse_gate.sh      # 146/146 — parser contract
-bash tests/test_fixpoint.sh        # 146/146 — self-host byte-identical
+bash tests/test_parse_gate.sh      # 149/149 — parser contract
+bash tests/test_fixpoint.sh        # 149/149 — self-host byte-identical
 bash tests/test_errors.sh          # 145/145 — stage3 emitter catalog
-bash tests/test_errors_cpp.sh      # 141/141 — C++ compiler catalog
-bash tests/test_differential.sh    # 13/13  — C++ vs self-host pipeline
+bash tests/test_errors_cpp.sh      # 137/137 — C++ fixed-pattern catalog
+bash tests/test_differential.sh    # 14/14  — C++ vs self-host pipeline
 bash tests/test_signatures.sh      # 14/14  — query mode + pipeline overlay
-bash tests/test_type_check.sh      # 174/174 — checker + differential (whole tree)
-bash tests/test_type_audit.sh      # 139 files clean, 0 drift, 74 facts
+bash tests/test_explicit_targs.sh  # 6/6    — pipeline `::<T>` (2E)
+bash tests/test_closure_escape.sh  # 7/7    — escaping closures (2D)
+bash tests/test_type_check.sh      # 181/181 — checker + differential (whole tree)
+bash tests/test_type_audit.sh      # 156 checks, 16 skipped, 0 drift, 82 facts
 bash tests/test_generics.sh        # 7
 bash tests/test_no_hang.sh         # 88
 bash tests/test_ai.sh tests/test_rust_stdlib.sh tests/test_rust_ffi.sh \
@@ -125,29 +128,37 @@ bash tests/test_ai.sh tests/test_rust_stdlib.sh tests/test_rust_ffi.sh \
 bash tools/docs_check.sh           # README counts vs tree
 ```
 
-**The v1 battery (2026-10-24, 25 gates, all green):**
-`bash tests/v1_gate_check.sh ./flintc --full` → **25 passed, 0 failed**.
-Every gate prints its own count; the counts re-measured at the 2E.5 landing:
+The pipeline/corpus gates use the AOT stage binaries in
+`$TMPDIR/slipstream/self` (`lex.0`, `parse.0`, `emit.0`). Build them once
+with `bash tests/test_selfhost.sh A`; `test_explicit_targs.sh` fails rather
+than skipping when they are absent, and the corpus gates use them when
+`SELF_DIR` points at that directory.
 
-| gate | measured 2026-10-24 |
+**The v1 battery (2026-10-25, 27 gates, all green):**
+`bash tests/v1_gate_check.sh ./flintc --full` → **27 passed, 0 failed**.
+Every gate prints its own count; the counts re-measured at the 2D/2E landing:
+
+| gate | measured 2026-10-25 |
 |---|---|
-| type-check (new, in `--full`) | 174/174 — 12 fixtures + one differential pair per `.fl` in the whole tree |
-| type-audit (widened, in `--full`) | 139 files clean, 23 skipped (deliberate error demos), 0 failed, 74 call facts |
-| parse-gate | 146/146 |
-| fixpoint | 146/146 |
-| differential | 13/13 (0 known divergences) |
-| signatures (new) | 14/14 — query-file content + determinism, the untyped fix, the no-file control, a partial overlay, a differential pair, E0284–E0289 |
+| type-check (in `--full`) | 181/181 — 12 fixtures + one differential pair per `.fl` in the whole tree |
+| type-audit (widened, in `--full`) | 156 checks passed, 16 skipped (deliberate error demos), 0 failed, 82 call facts |
+| parse-gate | 149/149 |
+| fixpoint | 149/149 |
+| differential | 14/14 (0 known divergences) |
+| signatures | 14/14 — query-file content + determinism, the untyped fix, the no-file control, a partial overlay, a differential pair, E0284–E0289 |
+| explicit-targs (new) | 6/6 — the fixture, the mangled names, E0295–E0298 |
+| closure-escape (new) | 7/7 — five escape shapes, heap on escape, no heap when local |
 | driver | 7/7 |
 | errors | 145/145 |
-| errors-cpp | 141/141 |
+| errors-cpp | 137/137 fixed patterns / 145 codes |
 | diagnostic-codes | 16/16 |
-| docs | 32 links, 15 documents, 0 duplicate paragraphs |
+| docs | 64 links, 16 documents, 0 duplicate paragraphs |
 
 The gates this work did not touch (smoke, generics, no-hang, the
 Rust/AI/LSP suites, …) keep the counts they print; the pass/fail line is the
-contract. The two diagnostic catalogues are in sync (145 emitter + 141 C++),
-and the three bootstrap phases (`tests/test_selfhost.sh` A/B/C) finish with
-the fixed point byte-identical.
+contract. The two diagnostic catalogues are in sync (149 emitter codes +
+145 C++ codes; 137 C++ fixed patterns), and the three bootstrap phases
+(`tests/test_selfhost.sh` A/B/C) finish with the fixed point byte-identical.
 
 Run long gate sequences **detached** with a results file, because a tool
 timeout kills the group mid-run and you lose the whole sequence:
@@ -295,14 +306,14 @@ A red-team pass found that vague in a way that would have wasted weeks:
 **The delivery order** (each step independently gated; the long design is
 `docs/LANGUAGE-ROADMAP.md` §13/§27, the research §6.11):
 
-| step | deliverable | status (2026-10-23) |
+| step | deliverable | status (2026-10-25) |
 |---|---|---|
-| **2A.0** | a **type checker** for the decidable subset (annotated declarations, function signatures, literal types), with `--type-audit` as its differential instrument | **landed** (2A landing commit): `TypeChecker` runs as a phase, `E0290`–`E0294`, `--no-type-check`, 174/174 differential, 0 drift |
-| **2A.1** | **types carry facts**: an array's exact length, the resolved trait for a call, the instantiated type arguments | **landed**: length (`42b3a04`, `2b45516`); `resolvedImpl` + `instantiatedTypeArgs` (2A landing commit), 74 facts corpus-wide |
+| **2A.0** | a **type checker** for the decidable subset (annotated declarations, function signatures, literal types), with `--type-audit` as its differential instrument | **landed**: `TypeChecker` runs as a phase, `E0290`–`E0294`, `--no-type-check`, 181/181 differential, 0 drift |
+| **2A.1** | **types carry facts**: an array's exact length, the resolved trait for a call, the instantiated type arguments | **landed**: length (`42b3a04`, `2b45516`); `resolvedImpl` + `instantiatedTypeArgs`, 82 facts corpus-wide |
 | **2B** | **checks become IR-level operations** (bounds/overflow as explicit ops) | landed (`37d9b8b`): `SafetyPolicy`, counted and gated |
-| **2C** | **analyses**: loop-range facts, then escape analysis | loop-range landed (`a7c6e2b`); escape analysis open (2D.2) |
-| **2D** | **regions** (NLL-style from the CFG) → escaping closures | partial (`57db1a4`): capture-less values may escape; capturing closures still cannot |
-| **2E** | **the pipeline consumes the same semantics** (D5) | mostly (`16adde0`, `48c12d5`, `317566b`, 2E.5): rename, monomorphizer, traits, the C++ query mode + overlay; `::<T>` call syntax open |
+| **2C** | **analyses**: loop-range facts, then escape analysis | loop-range landed (`a7c6e2b`); escape analysis landed as 2D.2 (intraprocedural, lazy heap promotion) |
+| **2D** | **regions** (NLL-style from the CFG) → escaping closures | **landed for escaping closures**: capture-less and capturing values may escape; a capturing box is promoted at the escape site (`tests/test_closure_escape.sh`). Full NLL region inference is still open |
+| **2E** | **the pipeline consumes the same semantics** (D5) | **landed through 2E.6**: rename, monomorphizer, traits, the C++ query mode + overlay, and explicit `::<T>` (`E0295`–`E0298`) |
 
 **What "finish 2A" means** (the acceptance criteria, not a vibe):
 
@@ -331,9 +342,10 @@ A red-team pass found that vague in a way that would have wasted weeks:
   verifier rejected. `--no-type-check` is the differential oracle, and the
   cache salt includes it. The checker is deliberately conservative: an
   expression shape it does not model is *unknown*, never an invented error.
-- **Zero drift, zero contract violations** (2A landing commit): the whole
-  tree — 162 files, including stage1-3/driver/tools/agent-bench — audits
-  clean; the 23 skipped files are the deliberate borrow/move/error demos.
+- **Zero drift, zero contract violations** (2A landing commit; re-measured
+  2026-10-25): the whole tree — 169 files, including
+  stage1-3/driver/tools/agent-bench — audits clean; the 16 skipped files are
+  the deliberate borrow/move/error demos.
   The last drifts were named function values (no parser signature table for
   `h = inc`), `-> ptr` missing from the declaration pre-pass, a void
   declaration's pre-pass consuming the next signature, and extern
@@ -388,17 +400,31 @@ than compiler intrinsics.
 ### 4.4 P1 — Regions, escape analysis, escaping closures (roadmap Phase 3)
 
 **What**: a closure's value is an env box in the defining frame, so it
-cannot escape (the compiler refuses to return or store it). This is a
-consequence of the representation, not a missing feature.
+cannot escape. Before 2D the compiler refused to return or store it. The
+restriction is a consequence of the representation, not a missing language
+feature.
 
-**Do**: escape analysis → a closure whose captures do not outlive the
-defining function can live in the per-thread arena (already in the Rust
-runtime) instead of the frame, and the restriction lifts for it; a
-capture that does outlive it is moved automatically, with the compiler
-*reporting* the decision.
+**Landed (2D.2, 2026-10-25)**: an intraprocedural escape analysis with
+*lazy* heap promotion. A capturing closure created in an escaping position
+(return value, global store, call argument) allocates its box with
+`flint_malloc`; a closure bound earlier is promoted at the escape site, and
+every alias of the box is repointed. A closure that stays inside its frame
+keeps the stack box, so the non-escaping case allocates nothing.
+`tests/test_closure_escape.sh` pins five escape shapes and checks the
+emitted IR for the heap call (and its absence in the local case).
 
-**Done when**: `let cb = |x| x + 1; store_it(cb)` compiles, and the
-benchmark shows no heap allocation for the non-escaping case.
+**Still open**:
+
+- **full NLL region inference** from the CFG (the current analysis is
+  intraprocedural and syntactic, not a region solver);
+- **freeing an escaped box**: there is no closure destructor yet, so an
+  escaped box is never freed. A loop that creates escaping closures grows
+  the heap; this is a known limitation, not a hidden one;
+- the per-thread arena placement the roadmap originally proposed.
+
+**Done when** (met for the escape shapes): `let cb = |x| x + 1;
+store_it(cb)` compiles, and the emitted IR shows no heap allocation for the
+non-escaping case.
 
 ### 4.5 P1 — Capability types (Send/Sync-like) (roadmap Phase 3)
 
@@ -562,22 +588,23 @@ two competing systems (§8.3).
 **What**: the self-host pipeline (stage2/stage3) still lacks explicit
 `::<T>` calls, enum equality, and named function values, while the C++
 compiler has all three. Generics, traits, and the C++ compiler's resolved
-signatures are now shared (2E.2-2E.5). The differential gate is green
-(13/13) but it only covers the programs both frontends can compile.
+signatures are now shared (2E.2-2E.6). The differential gate is green
+(14/14) but it only covers the programs both frontends can compile.
 
 **Do**: after 4.2, make the pipeline emit the shared HIR rather than
 re-implementing the semantics. Until then, D5 is the honest record.
 
 **Verify**: `grep -c typeParams stage2/parser.fl` → 0 today.
 
-#### 4.9.1 2E status: generics, traits, and the query mode (2E.1-2E.5)
+#### 4.9.1 2E status: generics, traits, and the query mode (2E.1-2E.6)
 
-**Landed** (2026-10-21/24): the rename (`16adde0`), the monomorphizer
+**Landed** (2026-10-21/25): the rename (`16adde0`), the monomorphizer
 (`48c12d5`, the pipeline produces the C++ compiler's own mangled instance
-names), the trait form (2E.3) and its name+arity resolution (2E.4), and the
-query mode (2E.5: `flintc --emit-signatures` + the emitter's overlay). The
-differential gate is **13/13**, the query-mode gate **14/14**, and both
-cover a generic and a trait program.
+names), the trait form (2E.3) and its name+arity resolution (2E.4), the
+query mode (2E.5: `flintc --emit-signatures` + the emitter's overlay), and
+explicit `::<T>` call syntax (2E.6: `(call-t NAME (targs T*) ARGS...)`,
+`E0295`–`E0298`). The differential gate is **14/14**, the query-mode gate
+**14/14**, and the explicit-type-argument gate **6/6**.
 
 **The design, the S-expression contract and the lessons learned are in
 [`docs/PIPELINE-GENERICS.md`](docs/PIPELINE-GENERICS.md)** — that is their
@@ -591,13 +618,13 @@ single home; do not restate them here. The implementation history is in
 | `bool` mangles as `.i64` | the pipeline has no bool type code; the C++ says `.bool`. Same behaviour, different symbol name | give the pipeline a bool code |
 | arrays are `[i64]` only | an array type argument mangles `.arr`; the element type cannot vary (M7 is deferred) | M7 |
 | one entry per method name in the function table | two implementations of one method name cannot coexist; the C++ keeps a multimap and filters on the receiver | make the table a multimap |
-| no explicit `::<T>` call syntax | the *declaration* form works; stage2 does not parse the call form | add it to stage2 |
 | the query file covers one file | a multi-file build passes the main file's signatures; imported functions keep their scanned signatures (safe, not invisible) | query each file, or merge the files in the driver |
 
-**The last open 2E gap is the explicit `::<T>` call syntax** (stage2). The
-query mode landed: the pipeline now consumes the C++ compiler's answers for
-the functions a file lists instead of re-deriving their types
-(`PIPELINE-GENERICS.md` §5.1).
+**2E has no open syntax gap.** The query mode landed: the pipeline consumes
+the C++ compiler's answers for the functions a file lists instead of
+re-deriving their types (`PIPELINE-GENERICS.md` §5.1). The remaining
+deviations in the table are representational (bool, arrays, multimap,
+per-file query), not missing syntax.
 
 ### 4.10 P3 — Items that need a decision or a different machine
 
@@ -672,7 +699,9 @@ tensor API's prefix is `flt_`); OpenBLAS wrapped in `--no-as-needed`
 because `flint_blas.o` references `cblas_dgemm` **weakly** and
 `--as-needed` ignores weak undefined symbols.
 
-**Result**: 8,048 B raw / 4,536 B stripped; `.bss` 24 B; `libc` only.
+**Result**: 8,048 B raw / 4,160 B stripped (re-measured 2026-10-25;
+the fix-day measurement was 4,536 B — later code changes account for the
+difference, not a different measurement method); `.bss` 24 B; `libc` only.
 
 **Two traps that make this a class, not an incident**:
 - The compiler **caches the linked binary** by source hash, so a stale
@@ -884,8 +913,10 @@ typed HIR/MIR"):
   (objection C): cross-language sharing is the 4-year problem Rust still
   has open; the cheap alternative is a query API on the compiler (the
   "flintc api" idea) and it is a maintainer decision.
-- "Write the LSP in Flint" — blocked by D5: the pipeline has no traits or
-  generics yet.
+- "Write the LSP in Flint" — blocked by D5: 2E closed the
+  generics/traits/`::<T>` syntax gap, but the pipeline covers the
+  differential subset (14 fixtures), not the whole language, and its
+  method table holds one entry per name. An LSP would need both fixed.
 
 ### 6.11 Decision log
 

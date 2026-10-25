@@ -1,6 +1,6 @@
 # Flint Compiler — Complete Project Memory
 
-**Last updated:** 2026-10-18
+**Last updated:** 2026-10-25
 **Repository:** https://github.com/shell-bay/Flint
 **Branch:** main
 
@@ -5303,3 +5303,244 @@ driver gate gained a `--signatures` case.
   before querying.
 - The driver does NOT auto-run the C++ query mode: `--signatures` is an
   explicit input, so the driver keeps no new hard dependency on `flintc`.
+
+
+---
+
+## 2026-10-25 — Phase 2D.2 and 2E.6, and the documentation-authenticity pass
+
+**Scope.** Finish the two open Phase 2 items (escaping capturing closures,
+explicit `::<T>` call syntax), then audit the documentation against the tree
+after readers compared the project to the "Goose" incident: a README whose
+claims had drifted from what the code does.
+
+### 2E.6 — explicit `::<T>` in the self-host pipeline
+
+**Decision: no lexer change.** `::` is already two `:` tokens (kind 58).
+stage2 parses `f::<T>(args)` into
+
+    (call-t NAME (targs T*) ARGS...)
+
+and stage3 resolves the list through the ANNOTATION mapping
+(`e_ann_code_plain`) instead of running inference. The plain mapping matters:
+a type parameter written as an explicit concrete type must be REFUSED
+(`E0117`), and the inference mapping would have accepted it. The pipeline may
+never be more permissive than the C++ compiler.
+
+New codes: `E0295` missing `(targs ...)`, `E0296` count disagrees, `E0297`
+not a type, `E0298` non-generic callee. Gate:
+`tests/test_explicit_targs.sh` 6/6 (fixture output, mangled names, the four
+refusals). Differential fixture `tests/differential/t_explicit_targs.fl`
+prints 5/3/7/2.5/42 from both frontends; the suite is **14/14**.
+
+### 2D.2 — escaping capturing closures
+
+**The representation.** A closure value is an env box `{fnptr, caps...}` in
+the defining frame; captures are snapshotted BY VALUE. Before this, every
+function value was refused at a return boundary or a global store. 2D.1
+(`57db1a4`) allowed capture-less values (their box is a module constant).
+
+**The design actually implemented: intraprocedural lazy heap promotion.**
+There is no whole-program escape pre-pass. The escape sites are:
+
+1. `return <closure>`;
+2. storing a closure into a global;
+3. passing a closure as a call argument (the callee may retain it).
+
+A closure LITERAL created at an escape site allocates its box with
+`flint_malloc` directly (`ScopedEscape`). A binding that reaches an escape
+site is promoted by `promoteLambdaBox()`: copy the box to the heap, then
+repoint EVERY visible symbol that names the old box (`forEachSymbol`), so an
+alias cannot keep the stack copy. `h = |...|` copies the box metadata onto
+`h` (the literal itself does not escape), and a later return of `h` promotes
+it like any other binding.
+
+**Why the copy is sound.** Captures are by value, not by reference, so a
+byte copy of the box preserves the closure exactly. Nothing in the box points
+back into the frame.
+
+**The cost, stated rather than hidden.** The escaped box is never freed:
+there is no closure destructor yet. A loop that creates escaping closures
+grows the heap. This is recorded in `STATE.md` §4.4 and
+`docs/DESIGN-PHILOSOPHY.md`, and it is the next piece of work if escaping
+closures become common.
+
+**The gate.** `tests/test_closure_escape.sh` (7/7): the five escape shapes
+(return a literal, return an alias, global store, call argument, local assign
+then return) each print `42`, the escaped module contains `flint_malloc`, and
+a non-escaping closure's module contains none. The `flint_malloc` check is on
+the emitted IR, not the source, so the gate cannot pass on a comment.
+
+The old `tests_manual/t_capturing_escape.fl` was a REJECTION fixture; it is
+now a positive fixture, and its line was removed from `test_one_error.sh`.
+`tests_manual/t_static_fn_value.fl`, `t_named_fn_escape.fl` and
+`t_named_fn_value.fl` had comments saying captures still cannot escape; the
+comments were corrected.
+
+### The diagnostic catalogs after 2D
+
+Retiring the four closure-escape refusals created a discrepancy the gates
+caught: `docs/error-codes.csv` still had `E0041`–`E0044`, so
+`test_diagnostic_codes.sh` reported "TABLE 145 in the source, 149 in the
+table". The four rows were removed; the codes are NOT reused (a code is a
+promise).
+
+A second, older inconsistency surfaced: `docs/errors-cpp.md` claimed 141
+entries while `tools/errors_cpp.py` found **137 fixed patterns**. The missing
+four are the `<variable message>` codes (`E0137`–`E0144`, eight codes) that
+build their text at runtime. The catalog now states the distinction:
+
+- **137 fixed patterns** (`docs/errors-cpp.md`, generated);
+- **145 stable codes** (`docs/error-codes.csv`);
+- **149 emitter codes** (`docs/errors.md`).
+
+`tests/test_errors_cpp.sh --fix` now writes the total with both numbers, and
+`test_diagnostic_codes.sh` is 16/16. `docs/errors-cpp.md` also names the
+retired codes so a search for `E0041` finds the explanation rather than
+nothing.
+
+### The documentation-authenticity pass
+
+The audit found contradictions, not just stale dates:
+
+- **Binary size.** README's feature list said 4,536 B stripped while the
+  same README's old benchmark section said 141 KB raw. Neither matched the
+  tree: `./flintc examples/hello.fl -o hello` produces **8,048 B raw /
+  4,160 B stripped** (2026-10-25), `.text` 320 B, `.bss` 24 B, `libc` only.
+  The 141 KB/111 KB figure is the pre-`--gc-sections` snapshot (the 743 KB
+  regression in `STATE.md` §6.1). The 4,536 B figure was an older
+  post-fix measurement; the current one is 4,160 B. The README now reports
+  the current number and labels the 141 KB line as history.
+- **Packages were described as a subcommand.** There are no
+  `flintc <subcommand>` verbs; `--offline` is a flag and dependency fetch is
+  a build step. README now has a `## Packages` section that says so.
+- **Cross-target was described twice, in opposite directions.** One README
+  line used `--target`; a "not available" section said no `--target` existed.
+  `--target` does exist for `.ll`/`.o` (a real `wasm32-unknown-wasi` object
+  was checked with `file`), but cross-target LINKING fails in the host
+  linker. README now has one `## Cross-target output (emit-only)` section
+  that states both halves.
+- **Counts with no home.** The testing table, the diagnostic counts, and the
+  27-gate claim were repeated in several documents with different values.
+  `docs/INDEX.md` now assigns each fact to one owner, and
+  `tools/docs_check.sh` checks the derived counts (it caught `run.sh`
+  109→116 lines after the new fixtures). `STATE.md` owns the live counts.
+- **Provenance was implicit.** AI assistance was not disclosed anywhere a
+  reader would find it. `CREDITS.md` now names the maintainer, OpenCode, and
+  what the maintainer owns; `docs/DESIGN-PHILOSOPHY.md` records the
+  non-goals and the trade-offs (including the un-freed escaped box);
+  `benchmarks/README.md` records the device, the harness, and the
+  reproduction commands. README links all three.
+
+**What the audit taught (reusable).**
+
+- A number repeated in prose and in a table will drift; generate one from the
+  other (`tools/docs_check.sh`) or delete one.
+- A cache can hide a measurement: `--print-size` prints nothing on a cache
+  hit. Use a fresh output path. The old 141 KB number survived partly
+  because the benchmark section was never re-run after the link fix.
+- "Count" is ambiguous. Fixed patterns, stable codes, and emitter messages
+  are three different numbers; a catalog must say which one it lists.
+- A design note and a status document look alike after a few weeks. The
+  pipeline note (`docs/PIPELINE-GENERICS.md`) still said "stage3 does not
+  accept generics" after 2E.2 landed; it now has a status header with the
+  date and its §1 is evidence, not a plan.
+
+### The fixpoint gap that 2E opened
+
+The 2E fixture `tests/differential/t_explicit_targs.fl` joined the corpus, and
+`tests/test_fixpoint.sh` immediately failed:
+
+    fixpoint pass=148
+    nonzero: tests/differential/t_explicit_targs.fl(1)
+
+Root cause: the parser emits `(call-t NAME (targs T*) ARGS...)`, but the
+pretty-printer's `pp_tagged` had no `call-t` case. The printer therefore
+dropped the node, the re-lexed token stream differed, and the round trip
+failed. A new S-expression node is only half-landed until the printer that
+consumes it knows the node.
+
+Fix: `pp_call_t` prints `NAME::<T*, ...>(ARGS)` and `pp_tagged` dispatches
+`call-t` to it. `::` is two `:` tokens, so printing it verbatim keeps the
+token stream identical. Verified three ways: `parse.0 --fixpoint` prints
+`MATCH` on the fixture, the corpus gate prints `fixpoint pass=149`, and a
+probe with two type arguments and a nested `[i64]` type also prints `MATCH`.
+
+**Lesson:** the fixpoint gate is the detector for a new node that the
+printer cannot round-trip; run it as soon as a parser node is added, not
+after the self-host rebuild.
+
+### The slice drift that the example edit exposed
+
+`examples/slice_demo.fl` had been edited (by the maintainer) to replace the
+unimplemented `for v in sliced` with an index loop. The file now compiles,
+so the type audit stopped skipping it and reported:
+
+    FAIL ./examples/slice_demo.fl: 1 inferred declaration(s) still drift
+    type-audit:   line 8: 'sliced' parse=i64 codegen=str
+
+Root cause: `Parser::inferType` had no `NodeKind::Slice` case, so the parse
+engine guessed i64; codegen types the `flint_array_slice` result (a
+FlintVec*) as `str` through the pointer rule. Fix: a `NodeKind::Slice` case
+returning `Type::str()`, with the same reasoning as the existing Tensor
+case. Re-measured: `type-audit: 156 checks passed, 16 file(s) skipped,
+0 failed`, 82 call facts.
+
+**Lesson:** the audit's "skipped" set is not a clean set — a file that fails
+to compile for an unrelated reason can hide a real drift. Fixing the first
+bug can reveal the second; the gate is only as strong as the set it audits.
+
+### The benchmark protocol that the cache invalidated
+
+While rewriting `benchmarks/README.md` I found the documented compile-speed
+recipe was wrong in three ways:
+
+1. `cp stage2/parser.fl "$T/parser.fl"` broke the relative import
+   (`../stage1/lexer.fl`) and failed with `E9001`. The recipe now copies
+   within `stage2/`.
+2. `$$` in the unique comment is constant across a loop, so runs 2–3 were
+   cache hits. The recipe now appends `$$-$i`.
+3. "Cold" was defined as `rm -rf ~/.cache/flintc`, but imports are inlined
+   into the one cached module, so clearing the cache does not change the
+   compile work once the source bytes differ. The 3,201 ms "cold" number
+   was the first compile of the session (CPU ramp/page cache), not a
+   separate build mode; repeated cache-miss runs measured 841–930 ms.
+
+Verified the cache key directly with `FLINT_LOG_CACHE=1`: identical bytes at
+a new source path or a new output path both print `cache: hit binary`.
+Only changed bytes (or a compiler/flag/runtime change) miss. `--print-size`
+prints nothing on a hit.
+
+The README table is now one same-session set: `flintc` cache-miss medians
+(parser 896 ms, lexer 328 ms) and single `clang` runs (O2 79,700 ms, O0
+32,373 ms, runtime 1,447 ms). A hotter earlier run measured 103,939 /
+43,935 / 1,710 ms; the spread is thermal, so the docs label the session and
+do not mix rows.
+
+**Lesson:** a benchmark's cache story is part of its protocol. Test that the
+"fresh" run is actually fresh (`FLINT_LOG_CACHE=1`), and never call a
+first-run number "cold" without repeating it on a settled device.
+
+### Verification at the end of the session
+
+- `tests/run.sh` 60/60; `test_one_error.sh` 5/5;
+  `test_closure_escape.sh` 7/7; `test_explicit_targs.sh` 6/6;
+  `test_differential.sh` 14/14; `test_errors_cpp.sh` 137/137;
+  `test_diagnostic_codes.sh` 16/16; `test_docs.sh` 64 links / 16 documents;
+  `tools/docs_check.sh` 0 failures; `test_fmt.sh` 0 failures.
+- type-check: **181 passed, 0 failed** (12 fixtures + 169 corpus files).
+- type-audit: **156 checks passed, 16 skipped, 0 failed, 82 call facts**.
+- Self-host A/B/C was rebuilt after the final formatting of
+  `stage2/parser.fl` and `stage3/emitter.fl` (and again after the
+  `call-t` printer fix); the fixed point is byte-identical.
+- The full battery (`tests/v1_gate_check.sh ./flintc --full`) is the release
+  claim; it printed **27 passed, 0 failed** (`RC=0`). Its per-gate counts
+  live in `STATE.md` §2.2, not here.
+
+**The lesson that cost the most time:** formatting the stage sources AFTER
+Phase A invalidates the self-host binaries. Format first, then build, then
+bootstrap. A gate that uses `parse.0` (explicit-targs, fmt) fails with
+"MISSING self binaries" if the order is wrong — that message is informative,
+not a bug. The compiler build itself was about **3 minutes** on 2026-10-25
+(06:34:08 → ~06:37 UTC, warm module cache); the earlier 12–15 minute figure
+was measured under load and is the worst case, not the norm.

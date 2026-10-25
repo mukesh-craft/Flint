@@ -5,8 +5,8 @@
 # module-level constant -- it does not depend on the frame that is going
 # away, and a value that depends on no frame may escape.
 #
-# The other half of the rule (a closure that DOES capture still cannot) is
-# pinned by t_capturing_escape.fl.
+# A CAPTURING closure may also escape now: its box is promoted to the heap
+# at the escape site (Phase 2 / 2D; t_capturing_escape.fl).
 
 fn inc(x: i64) -> i64 { return x + 1 }
 

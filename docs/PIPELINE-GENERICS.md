@@ -1,9 +1,9 @@
 # The self-host pipeline: generics and traits
 
-**Status (2026-10-24): the monomorphizer, the traits, and the query mode
-are IMPLEMENTED.** This note is the specification, written down so it does
-not have to be re-derived. The measurements below are from this device.
-What landed:
+**Status (2026-10-25): all six 2E steps are IMPLEMENTED.** This note is the
+specification, written down so it does not have to be re-derived. The live
+status and the gate counts are in [`STATE.md`](../STATE.md) §4.9.1; the
+measurements here are the ones that define the contract. What landed:
 
 - **2E.1** the pipeline files were renamed to their stage roles
   (`stage1/lexer.fl`, `stage2/parser.fl`, `stage3/emitter.fl`).
@@ -11,13 +11,16 @@ What landed:
   produces the **C++ compiler's own mangled instance names**
   (`idc.i64`, `idc.f64`, `idc.str`, `@"idc.s:Inner"`, `pair.f64.str`) —
   verified symbol for symbol against the C++ IR, and the differential gate
-  now covers a generic program (`tests/differential/t_generic.fl`).
+  covers a generic program (`tests/differential/t_generic.fl`).
 - **2E.5** the C++ query mode (`flintc --emit-signatures`) and the
   pipeline's overlay consumer — the pipeline now reads the C++ compiler's
   resolved signatures instead of re-deriving inference (§5).
-
-What is still open: the explicit `::<T>` call syntax (a stage2 gap: the
-*declaration* form works ✓).
+- **2E.6** explicit type arguments: `f::<T>(args)` is parsed without a
+  lexer change (`::` is two `:` tokens), emitted as
+  `(call-t NAME (targs T*) ARGS...)`, and resolved by the annotation
+  mapping instead of inference. `tests/differential/t_explicit_targs.fl`
+  is the cross-frontend fixture; `tests/test_explicit_targs.sh` (6/6) pins
+  the mangled names and the refusals `E0295`–`E0298`.
 
 **The traits landed too (2E.3/2E.4):** the parser reads
 `trait Name { fn m(self) -> T ... }` into
@@ -31,21 +34,24 @@ parameter is the receiver ✓, so the implementation must take exactly one
 more parameter than the call has arguments ✓.
 
 **The one limitation:** the pipeline's function table holds ONE entry per
-name ✓, so two implementations of the same method name cannot coexist ✓
-— the C++ compiler keeps a multimap and filters the candidates on the
-receiver's type ✓. The fix is a table change, not an algorithm change ✓.
+name, so two implementations of the same method name cannot coexist. The
+single-entry-table consequence is stated in §4.
 
 ## 1. What works today (measured)
 
 | piece | state | evidence |
 |---|---|---|
 | stage2 (parser) accepts a **generic function** | **YES** | `parse.0` on `fn idc<T>(x: T) -> T { return x }` yields `(fn idc (tparams T) ( (x T -)) T (block (return (var x))))` — the type parameters are captured in the `tparams` group |
-| stage3 (emitter) accepts a generic function | **NO** | `emit.0` prints `emit error: generics need G6` (`stage3/emitter.fl:6915`, and again at `:7350`) |
-| stage2 accepts a **trait** | **NO** | `parse.0` on a `trait Shape { fn area(self) -> i64 }` reports `parse error at 2:7 (kind 14)` — a method SIGNATURE (no body) is not parseable; worse, the trait text is mis-parsed as a function named `trait` |
-| stage3 emits a trait | **NO** | no trait form exists in the emitter |
+| stage3 (emitter) accepts a generic function | **YES** | it monomorphizes and emits the C++ compiler's instance names; differential `tests/differential/t_generic.fl` passes 14/14 in the suite |
+| stage2 accepts a **trait** | **YES** | a trait parses into `(trait NAME ( (m (params) ret) ... ))`; `tests/differential/t_trait.fl` passes |
+| stage3 emits a trait | **YES, as declarations only** | the trait itself emits no IR; a method call resolves by name + arity, and an unimplemented one is `E0223` |
+| **explicit `::<T>` arguments** | **YES** (2E.6) | `(call-t NAME (targs T*) ARGS...)`; `tests/test_explicit_targs.sh` 6/6, and the differential fixture prints the same output as the C++ compiler |
 
-The C++ compiler handles all of these (a generic program compiles and runs;
-a trait program compiles and runs), so the gap is entirely in the pipeline.
+The C++ compiler handles all of these, and the pipeline now does too. The
+differential gate compares them on a generic program, a trait program, and
+an explicit-instantiation program (`tests/test_differential.sh`, 14/14,
+0 known divergences). The remaining gaps are representational, not missing
+syntax — they are listed at the end of §4 and in `COMPATIBILITY.md` D5.
 
 ## 2. The S-expression contract
 
@@ -60,25 +66,37 @@ for a generic function. That is the only difference — which is why the
 emitter's check `if (tp != "tparams")` fires for generics: the check
 compares the group's TEXT, and a generic function's group is `(tparams T)`.
 
-**Proposed change (stage2)**: make the trait form explicit, so a trait is
-never mistaken for a function:
+**Implemented (2E.3)**: the trait form is explicit, so a trait is never
+mistaken for a function:
 
 ```
 (trait NAME ( (m1 (self T) RET) (m2 (self T) RET) ))
 ```
 
-The parser needs a new rule for `trait NAME { ... }` where the members are
-method SIGNATURES (no bodies) — the current grammar has no signature-only
-form, which is why it errors.
+The parser has a rule for `trait NAME { ... }` where the members are
+method SIGNATURES (no bodies); the earlier grammar had no signature-only
+form, which is why it errored.
+
+Explicit type arguments (2E.6) add one call form to the same contract:
+
+```
+(call-t NAME (targs T1 T2) ARG1 ARG2 ...)
+```
+
+`::` is lexed as two `:` tokens, so no lexer change was needed. The emitter
+resolves `(targs ...)` through the **annotation** mapping (`e_ann_code_plain`)
+and skips inference. A type parameter used as an explicit concrete type is
+refused (`E0117` in the C++ compiler), so the pipeline cannot be more
+permissive than the reference.
 
 ## 3. Generics in stage3 (monomorphization)
 
-The emitter already keeps a signature table (`e_sig_lookup`, `EFNN`/`EFP`/
+The emitter keeps a signature table (`e_sig_lookup`, `EFNN`/`EFP`/
 `EFRET` ✓) and a set of text helpers for balanced groups
-(`e_skip_balanced_fn` ✓). Monomorphization is therefore mostly table work
-plus one substitution pass.
+(`e_skip_balanced_fn` ✓). Monomorphization is mostly table work plus one
+substitution pass.
 
-Steps, in order:
+The algorithm as implemented, in order:
 
 1. **Read the type parameters.** `(tparams T U)` → the names `T`, `U`.
    A function with a non-empty `tparams` is a TEMPLATE: it is not emitted
@@ -89,13 +107,14 @@ Steps, in order:
      variable → the declared type of that parameter in the ENCLOSING
      function's signature (the table already has it ✓); a call → the
      callee's return type (`EFRET` ✓); a struct literal → the struct
-     name; a field access → the field's type (needs a struct-field table,
-     which the emitter must build by scanning the `(struct NAME ( (f T) ))`
-     forms the parser emits ✓).
+     name; a field access → the field's type (the emitter builds a
+     struct-field table by scanning the `(struct NAME ( (f T) ))` forms
+     the parser emits ✓).
    - the type ARGUMENTS of the template are then the distinct concrete
      types bound to `T`, `U` by the parameters that mention them (the
      by-parameter rule the C++ compiler uses ✓ — the same rule, so both
-     frontends agree).
+     frontends agree). An explicit `(targs T*)` list skips this step
+     entirely and binds the type parameters directly (2E.6).
 3. **Instantiate.** Copy the template's S-expression and bind each type
    parameter to its concrete type in a **type environment** that the
    emitter's type resolution consults (`e_ann_code`, and the named-type
@@ -114,9 +133,9 @@ Steps, in order:
 6. **Rewrite the call site** to the instance name ✓.
 
 **Type parameters that cannot be inferred** (a call that does not mention
-`T` in any argument) must be an error, not a guess — the C++ compiler
-reports `cannot infer type parameter 'T' for 'f'` ✓ and the pipeline should
-say the same.
+`T` in any argument) are an error, not a guess — the C++ compiler reports
+`cannot infer type parameter 'T' for 'f'`, and the pipeline refuses with
+`E0173: cannot infer type parameter`.
 
 ## 4. Traits in stage2 + stage3
 
@@ -125,16 +144,25 @@ implementation is an ordinary function with the same name and arity; the
 call site resolves by NAME + ARITY: exactly one → call it; none → "no
 type in scope implements 'm'"; several → "ambiguous (candidates: ...)".
 
-The pipeline should implement the SAME rule, so the two frontends agree:
+The pipeline implements the SAME rule, so the two frontends agree:
 
 1. stage2: parse a trait into the `(trait NAME ( (m ...) ))` form ✓ (above).
 2. stage3: collect the trait's method signatures; at a method call
    (`x.m(a)` or `m(x, a)`), resolve the method name + arity to an
    implementation function in the signature table ✓; rewrite the call to
-   that implementation ✓; if there is no implementation → the same error
-   the C++ compiler gives ✓; if several → the ambiguity error ✓.
+   that implementation ✓; if there is no implementation, or the arity does
+   not fit, it is `E0223` — the same refusal the C++ compiler gives.
 3. The trait's own signatures are NOT emitted as functions ✓ (they have no
    bodies).
+
+**The limitation**: the pipeline's function table holds ONE entry per name,
+so two implementations of the same method name cannot coexist. The C++
+compiler keeps a multimap and filters the candidates on the receiver's
+type; the pipeline filters on arity only. With one candidate the arity
+decides; with two same-name implementations the table has already
+overwritten one, so the pipeline cannot report the C++ compiler's
+"ambiguous (candidates: ...)" error. The fix is a table change (multimap),
+not an algorithm change; it is recorded in `COMPATIBILITY.md` D5.
 
 ## 5. What "consume the shared semantics" means here
 
@@ -143,7 +171,7 @@ trait-resolution rule, the error messages, and the mangled names. The
 cheapest way to guarantee that is for the pipeline to READ the C++
 compiler's answers instead of re-deriving them:
 
-- the C++ compiler gains a query mode that prints, for each function, its
+- the C++ compiler gained a query mode that prints, for each function, its
   signature, its type parameters and its resolved parameter types — the
   same information the emitter needs for monomorphization;
 - the pipeline consumes that file (like the existing `.flint.bc` interface
@@ -215,6 +243,8 @@ error codes.
 3. **DONE (2E.4): stage3 trait resolution** (by name + arity).
 4. **DONE (2E.5): the query mode** (`flintc --emit-signatures`) and the
    pipeline overlay, so the two frontends stop re-deriving types (§5.1).
+5. **DONE (2E.6): explicit `::<T>` call syntax** — `(call-t NAME (targs T*)
+   ARGS...)`, the annotation mapping, and `E0295`–`E0298`.
 
 ### 6.1 What the monomorphizer learned (worth keeping)
 

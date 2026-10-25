@@ -6,8 +6,10 @@ leases, Python-style ergonomics, batteries-included tooling.
 
 **License:** Apache-2.0 — see [LICENSE](LICENSE).
 
-> Every command below was executed against this tree on Termux AArch64
-> on 2026-10-10. Anything not verified is marked as such — see Status.
+> The Quick Start and Tooling commands were executed against this tree on
+> Termux AArch64 on 2026-10-25 (the dependency-install line was already
+> satisfied on this device). Benchmark rows keep their own session dates.
+> Anything not verified is marked as such — see Status.
 
 ## Quick Start
 
@@ -31,7 +33,7 @@ bash build.sh
 New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 (`bash tests/run_tutorial.sh ./flintc` checks your answers — 8/8 green).
 
-## Status (2026-10-23, verified on Termux AArch64)
+## Status (2026-10-25, verified on Termux AArch64)
 
 - **Working end to end** — compile, JIT, LLVM IR, interface files,
   content-addressed cache, generics (monomorphization), traits, closures,
@@ -41,31 +43,62 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
   [`STATE.md`](STATE.md) §2.2 (one home for status counts).
 - **Self-hosted** — the lexer/parser/emitter are Flint programs
   (`stage1-3/*.fl`); the C++ `flintc` bootstraps them and the bootstrap
-  fixed point is byte-identical. The pipeline compiles generics and traits
-  and consumes the C++ compiler's resolved signatures
-  (`flintc --emit-signatures`); the explicit `::<T>` call syntax is the
-  remaining 2E item ([`COMPATIBILITY.md`](COMPATIBILITY.md) D5,
-  [`docs/PIPELINE-GENERICS.md`](docs/PIPELINE-GENERICS.md)).
+  fixed point is byte-identical. The pipeline compiles generics and traits,
+  consumes the C++ compiler's resolved signatures
+  (`flintc --emit-signatures`), and implements the explicit `::<T>` call
+  syntax (2E; gate: `tests/test_explicit_targs.sh`, differential
+  `tests/differential/t_explicit_targs.fl`). See
+  [`COMPATIBILITY.md`](COMPATIBILITY.md) D5 and
+  [`docs/PIPELINE-GENERICS.md`](docs/PIPELINE-GENERICS.md).
+- **Closures that escape** — a capturing closure may be returned, stored in
+  a global, or passed to a callee that retains it. Its environment box is
+  promoted to the heap at the escape site; a closure that stays inside its
+  defining frame keeps a stack box and allocates nothing (Phase 2 / 2D;
+  gate: `tests/test_closure_escape.sh`, which also checks the emitted IR).
 - **Type checking (Phase 2A, landed)** — a compiler phase rejects provable
   type errors with structured `E0290`–`E0294` diagnostics before codegen,
-  may never reject a program the compiler accepts (174/174 differential over
+  may never reject a program the compiler accepts (181/181 differential over
   every `.fl` in the tree), and `--type-audit` reports **0 contract
   violations / 0 drift** plus the call facts (instantiated type arguments,
   resolved trait impls). `--no-type-check` is the differential oracle. The
-  remaining Phase 2 items (typed HIR, regions, capabilities) are in
+  remaining Phase 2 items (typed HIR, full regions, capability types) are in
   [`STATE.md`](STATE.md) §4.2.
-- **Honest gaps** — `[T]` containers (M7) are deferred by decision, Windows
-  and macOS are not executed from this device, and the self-host pipeline's
+- **Honest gaps** — escaped closure boxes are allocated with `flint_malloc`
+  and are **not freed** (there is no closure destructor yet); `[T]`
+  containers (M7) are deferred by decision; `--target` emits cross-target
+  `.ll`/`.o` but cannot link or run a cross-target executable; Windows and
+  macOS are not executed from this device; and the self-host pipeline's
   function table holds one entry per method name (two trait impls of the
   same name cannot coexist there).
+
+## Project provenance and AI assistance
+
+Flint is maintained by **Mukesh** as a solo project; the repository history
+starts on 2026-07-02. AI coding assistants, including **OpenCode**, are used
+for implementation drafts, test scaffolding, and documentation drafts. The
+architecture, the phase order, release decisions, and the final review are
+the maintainer's, recorded in [`STATE.md`](STATE.md),
+[`docs/LANGUAGE-ROADMAP.md`](docs/LANGUAGE-ROADMAP.md), and
+[`memory.md`](memory.md). The full disclosure is in [`CREDITS.md`](CREDITS.md);
+the design philosophy, non-goals, and known trade-offs are in
+[`docs/DESIGN-PHILOSOPHY.md`](docs/DESIGN-PHILOSOPHY.md).
+
+The project treats a documentation claim like a test: if no command in this
+tree produces the result, the claim is wrong. The status counts are checked
+by `tools/docs_check.sh`, the diagnostic counts by the two catalog gates,
+and every benchmark row carries its session date. If you find a claim that
+is not reproducible, please open an issue with the file and the claim.
 
 ## Documentation
 
 - **[STATE.md](STATE.md)** — the live state, the queue, the gates, the traps
 - **[docs/INDEX.md](docs/INDEX.md)** — which document owns which fact
+- **[docs/DESIGN-PHILOSOPHY.md](docs/DESIGN-PHILOSOPHY.md)** — the why, the non-goals, the trade-offs
 - **[REQUIREMENTS.md](REQUIREMENTS.md)** — setup and build requirements
 - **[ROADMAP.md](ROADMAP.md)** — the historical phase log (not the live queue)
 - **[docs/LANGUAGE-ROADMAP.md](docs/LANGUAGE-ROADMAP.md)** — research assessment and forward phases
+- **[benchmarks/README.md](benchmarks/README.md)** — device, method, and reproduction commands
+- **[CREDITS.md](CREDITS.md)** — maintainer, AI-assistance disclosure, third-party components
 - **[memory.md](memory.md)** — the project ledger for agent-assisted development
 
 ## Features (all verified below)
@@ -75,11 +108,12 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 - **Immutable by default** — variables are immutable unless declared with `mut`
 - **Memory safe** — ownership + borrow checker, generational Aegis leases,
   no null keyword, bounds traps, overflow panics (all loud, never silent)
-- **Small binaries** — hello-world AOT is **8,048 B raw / 4,536 B
-  stripped**, `libc` only (`STATE.md` §6.1; `--print-size` reports it from
-  the artifact)
-- **Faster builds** — parallel import scanning (`--parallel`), `--fast`
-  iteration tier, content-addressed module cache
+- **Small binaries** — hello-world AOT is **8,048 B raw / 4,160 B
+  stripped** (re-measured 2026-10-25; `strip` from the Termux toolchain).
+  `libc` only; the link fix that removed 743,520 B is `STATE.md` §6.1.
+  `--print-size` attributes a freshly linked artifact.
+- **Faster builds** — parallel import scanning (`--parallel`) and a
+  content-addressed module cache that skips unchanged modules
 - **C FFI** — call any C function via `extern "C"` plus `--link` objects
   *and the reverse*: a Flint module with no `main` compiles to an object
   exporting unmangled functions, so C or Rust can link Flint and call it
@@ -96,9 +130,10 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
   `flint_thread_join`, `flint_chan_new/send/recv/free` (verified below).
   `parallel for` bodies currently fail to compile; `chan`-typed
   annotations and method-call syntax (`.send()`) do not exist
-- **Packages** — `flint.toml` next to your program, `import "name`,
+- **Packages** — `flint.toml` next to your program, `import "name"`,
   auto-fetch on first build into `~/.cache/flint_pkgs`, `flint.lock`
-  pins revisions, `--offline` uses cache only (verified: registry gate)
+  pins revisions, and `--offline` (a **flag**, not a subcommand) uses the
+  cache only (verified: registry gate)
 - **Developer tools** — `python3 flint-fmt` (format/`--check`),
   `python3 flint-doc` (docs), `flint-lsp` (Rust language server);
   direct `./flint-*` execution fails on Termux (shebang), always
@@ -222,11 +257,28 @@ fn add(a: i64, b: i64) -> i64 {
 }
 ```
 
-# Packages: flint.toml next to your program, then import by name
-#   [dependencies]
-#   calc = "https://github.com/you/flint-calc"
-# import "calc"   (auto-fetches on first build; flint.lock pins revisions)
-# flintc --offline ...             # never touch the network
+## Packages
+
+A package is a `flint.toml` next to the directory you build. There are no
+subcommands: dependency fetch is a build step, and `--offline` is a flag.
+
+```toml
+# flint.toml
+[dependencies]
+calc = "https://github.com/you/flint-calc"
+```
+
+```flint
+import "calc"
+```
+
+```bash
+./flintc main.fl                 # first build fetches "calc" into ~/.cache/flint_pkgs
+./flintc --offline main.fl       # cache only; fail if the package is missing
+```
+
+`flint.lock` pins the resolved revisions. The registry gate is
+`tests/test_registry.sh`.
 
 ## Machine learning
 
@@ -426,8 +478,25 @@ bash agent-bench/check.sh ./flintc    # 5 tasks; add solution.fl per task first
                                       # (checker SKIPs tasks without one)
 ```
 
-There is no `flintc api` command and no `llms.txt`; the builtin
-reference today is `docs/errors.md` (116 codes) plus the tutorial.
+## Diagnostics
+
+There is no `flintc api` command and no `llms.txt`. The diagnostic catalogs
+are the reference for what the compiler will reject:
+
+- [`docs/errors-cpp.md`](docs/errors-cpp.md) — the C++ `flintc` you run:
+  **137 fixed-pattern diagnostics over 145 stable codes**. Eight codes
+  (E0137–E0144) build their message at runtime and appear as
+  `<variable message>` in the code table. Four codes retired by Phase 2 / 2D
+  (E0041–E0044) are not reused.
+- [`docs/errors.md`](docs/errors.md) — the self-hosted emitter:
+  **149 codes**.
+- [`docs/error-codes.csv`](docs/error-codes.csv) and
+  [`docs/error-codes-pipeline.csv`](docs/error-codes-pipeline.csv) — the
+  machine-readable code → message tables.
+
+`tests/test_errors_cpp.sh`, `tests/test_errors.sh`, and
+`tests/test_diagnostic_codes.sh` keep the catalogs and the code tables in
+sync. The tutorial is the language tour; it is not a diagnostics reference.
 
 ## Concurrency
 
@@ -460,9 +529,11 @@ channels for handoff.
 
 ## Standard library
 
-18 runtime modules, ~12,900 lines of C, all reachable from Flint as `flint_*`
-builtins. Verified by `bash tests/test_ai.sh ./flintc` (17/17) and the
-`stdlib` gate in `tests/v1_gate_check.sh`.
+18 `flint_*` runtime modules plus the core runtime (`runtime.c`) and the
+Python bridge (`pyruntime.c`), 12,454 lines of C in total (`wc -l
+runtime/*.c`, 2026-10-25), all reachable from Flint as `flint_*` builtins
+(except the Python bridge). Verified by `bash tests/test_ai.sh ./flintc`
+(17/17) and the `stdlib` gate in `tests/v1_gate_check.sh`.
 
 ### Maths and statistics — `flint_math.c`
 
@@ -560,41 +631,48 @@ rather than silently mis-parsed.
 > Keys written after a `[[table]]` header belong to that table until the next
 > header. That is TOML's rule, and it surprises people.
 
-## Libraries and WASM (not available)
+## Cross-target output (emit-only)
 
-There is no `--emit-header` (C cannot currently consume Flint
-prototypes) and no `--target` (no cross-compilation, no WASM output —
-the default target is always the host triple). These are tracked future
-work, not current features.
+`--target <triple>` exists and writes `.ll` text or `.o` for that triple.
+A real WASM object was verified on 2026-10-25:
+
+```bash
+./flintc --target x86_64-pc-linux-gnu examples/hello.fl -o hello.x86.ll
+./flintc --target wasm32-unknown-wasi examples/hello.fl -o hello.wasm.o
+file hello.wasm.o     # WebAssembly (wasm) binary version 0x1 (MVP module)
+```
+
+What does **not** exist: cross-target linking or execution (asking for an
+executable target fails in the host linker), a WASI sysroot/runner on the
+device, and `--emit-header` (a C compiler cannot consume Flint prototypes
+today). `--target` without `-o` refuses. These are tracked future work
+([`docs/tiers.md`](docs/tiers.md)), not current features.
 
 ## Benchmarks
 
-Run the full benchmark suite (19 `.fl` files: 6 shootout workloads with
-C/C++/Python mirrors + 13 `test_*` if/call micro-probes):
+The suite has two harnesses: `tools/bench_compare.sh` for runtime against
+C, C++, Rust, and Python, and `tools/bench_tooling.sh` for binary size,
+cold build time, and startup. The directory holds 6 shootout programs,
+`matmul.fl` (tensor/BLAS path), and 13 `test_*` if/call micro-probes —
+20 `.fl` files total.
+
 ```bash
-for f in benchmarks/*.fl; do echo "=== $f ===" && timeout 60 ./flintc "$f" 2>&1 | head -5; done
+bash tools/bench_compare.sh sum_array primes pi strrev
+bash tools/bench_tooling.sh
+./flintc benchmarks/matmul.fl -o matmul && ./matmul
 ```
 
-Historical snapshots below are labeled with their session — numbers move
-with device thermal state (today: little cores at 691 MHz, big at
+The device, the exact commands, and the "what is not measured" caveats are
+in [`benchmarks/README.md`](benchmarks/README.md). The harness builds Flint
+AOT; the large table below is a **2026-09-12 JIT snapshot**, so its numbers
+differ slightly from a fresh harness run.
+
+Historical snapshots are labeled with their session — numbers move with
+device thermal state (in that session: little cores at 691 MHz, big at
 2.2 GHz; `pi` reproduced exactly, `sum_array` did not — see note).
 
-Measured 2026-09-06, Termux AArch64, JIT default (in-program timers,
-`clang -O2` for the C column):
-
-| Benchmark | Flint | C (AArch64) | Ratio |
-|-----------|-------|-------------|-------|
-| sum_array (10M) | ~17 ms (~15 ms `--unsafe`) | ~8 ms | ~2.1× |
-| primes (10M) | ~459 ms | ~202 ms | ~2.3× |
-| fib(45) | ~11.7 s | ~8.6 s | ~1.4× |
-| pi (100M iters) | ~714 ms | ~718 ms | ~1.0× |
-
-Binary size: hello world AOT is ~141 KB (~111 KB stripped) as produced
-by the documented `./flintc examples/hello.fl -o hello` command
-(measured 2026-09-24). Smaller binaries are tracked work, not current.
-
-Measured 2026-09-12, Termux AArch64, same session (steady-state runs;
-in-program timers for runtime, wall clock for compile):
+Measured 2026-09-12, Termux AArch64, JIT (in-program timers; `clang -O2`
+for the C/C++ columns):
 
 ### Runtime — large workloads (Flint JIT vs C/C++ `-O2` vs Python)
 
@@ -603,7 +681,7 @@ in-program timers for runtime, wall clock for compile):
 | sum_array 10M | 19.3 ms | 16.4 ms | 9.2 ms | 9.8 ms | 175.7 ms |
 | pi 100M iters | 777.5 ms | n/m | 782.8 ms | 778.8 ms | >60 s (timeout) |
 | primes 10M | 542.9 ms | 481.4 ms | 199.1 ms | 203.9 ms | 2,092 ms |
-| fib(45) | 12,735 ms | 8,483 ms (beats C ~9%) | 9,328 ms | 9,333 ms | skipped (est. 10+ min) |
+| fib(45) | 12,735 ms | 8,483 ms (single run; not a stable speedup) | 9,328 ms | 9,333 ms | skipped (est. 10+ min) |
 | strrev (100K builder) | ~1.0 ms | ~0.95 ms | 5.5 ms | 32.0 ms | 444.9 ms |
 | matmul 500² (10 iters, AOT) | 42.6 ms | n/m | 428.4 ms (naive) | n/m | 42.7 ms (numpy 2.4.4) |
 
@@ -626,23 +704,63 @@ re-verified today at ~5.5 ms. Spot-checks today: `pi` reproduced
 and AOT agree with each other — scheduler/thermal variance, under
 investigation, not presented as a new number).
 
-### Compile speed — large files (wall clock; `.ll` output unless noted)
+### Binary size (current)
+
+Measured 2026-10-25 with the documented command
+(`./flintc examples/hello.fl -o hello`):
+
+| Artifact | Size |
+|---|---|
+| raw executable | **8,048 B** |
+| `strip`ed | **4,160 B** |
+| `.text` | 320 B |
+| `.bss` reserved | 24 B |
+| dynamic dependencies | `libc.so` only |
+
+The 141 KB / 111 KB figure from 2026-09-24 predates the
+`-Wl,--gc-sections` link fix (`STATE.md` §6.1). It is history, not the
+current size; `tools/bench_tooling.sh` reproduces the current number by
+compiling the same program with a unique comment (the cache is keyed by
+source content, so a fresh path alone is not enough).
+
+### Compile speed — large files (measured 2026-10-25; wall clock)
+
+Input sizes are today's tree. The `flintc` rows are **cache-miss builds**:
+each run compiles a same-directory copy whose bytes differ (a unique
+comment), so the content-addressed cache cannot serve a previous artifact;
+median of three runs on an idle device. The `clang` rows are single runs on
+the same device (an earlier, hotter run measured 103,939 ms for `-O2` and
+43,935 ms for `-O0` — thermal spread, not a code change). `flintc` rows
+write `.ll` (text), `clang -c` rows write an object; the caveat below the
+table matters.
 
 | Compiler | Input (size) | Time | Throughput |
 |----------|--------------|------|------------|
-| `clang++ -O2 -c` | `src/main.cpp` (495 KB, 10,542 lines) | ~74,400 ms | 6.5 KB/s, 142 lines/s |
-| `clang++ -O0 -emit-llvm` | `src/main.cpp` | ~35,400 ms | ~14 KB/s |
-| `clang -O2 -c` | `runtime/runtime.c` (44 KB) | ~1,162 ms | 38 KB/s |
-| `flintc` default | `stage2/parser.fl` (112 KB, 3,845 lines) | ~909 ms | 123 KB/s, 4,230 lines/s |
-| `flintc --fast` (Slipstream) | `stage2/parser.fl` | ~200 ms | 560 KB/s, 19,225 lines/s |
-| `flintc` default | `stage1/lexer.fl` (48 KB) | ~277 ms | 174 KB/s |
-| `flintc --fast` | `stage1/lexer.fl` | ~123 ms | 394 KB/s |
+| `clang++ -O2 -c` | `src/main.cpp` (787,276 B, 16,225 lines) | 79,700 ms | 9.6 KB/s, 204 lines/s |
+| `clang++ -O0 -emit-llvm` | `src/main.cpp` (same) | 32,373 ms | 23.7 KB/s, 501 lines/s |
+| `clang -O2 -c` | `runtime/runtime.c` (48,525 B, 1,454 lines) | 1,447 ms | 32.7 KB/s, 1,005 lines/s |
+| `flintc` default | `stage2/parser.fl` (135,513 B, 4,379 lines) | 896 ms | 147.7 KB/s, 4,887 lines/s |
+| `flintc` default | `stage1/lexer.fl` (71,594 B, 904 lines) | 328 ms | 213.2 KB/s, 2,756 lines/s |
 
-Same-size comparison: `--fast` 123 ms vs C 1,162 ms (~9.5x).
-O0-to-O0 (no optimization either side): Flint still leads ~38x wall
-(921 ms vs 35,400 ms) — the remainder is LLVM header parsing and C++
-language complexity, not optimization passes. `main.cpp` emits 16.3 MB
-of IR (33x expansion) vs Flint's 628 KB from 112 KB (5.6x).
+A **cache hit** (identical source bytes) skips lex/parse/codegen and is not
+a compile, so it is not a row here; `--print-size` prints nothing on a hit.
+The first compile in a fresh session can be several times slower — 3,201 ms
+for `parser.fl` and 861 ms for `lexer.fl` were observed on the same tree
+before the device settled — because of CPU ramp and cold page cache, not
+module caching.
+
+`flintc` emits 687 KB of textual IR from the 136 KB parser (5.1×), and
+144 KB from the 72 KB lexer (2.0×). `clang++ -O0 -emit-llvm` writes 4.77 MB
+of bitcode from 787 KB (6.1×) — a different format and a different
+language, so the expansion ratios are not a head-to-head result.
+
+The one same-session cross-language fact is wall time: Flint compiles its
+own 136 KB parser in 896 ms, while `clang++ -O0` needs 32,373 ms for the
+787 KB C++ compiler. That is **not** a controlled comparison (the inputs,
+the languages, and the header load differ); it is the reason the bootstrap
+is practical on a phone, not a claim that Flint is 36× faster than C++.
+The `--fast` tier is currently a no-op, so no `--fast` row is listed as a
+current measurement; the historical numbers are below.
 
 Caveats: different input languages (headers are C++'s real cost);
 `.ll` output stops before backend/link while `-c` emits full objects;
@@ -665,14 +783,14 @@ less-optimized code: `parser.fl` IR was 828 KB vs 628 KB default
 ## Testing
 
 What exists and how to run it (file lists and line counts verified
-2026-09-24 with `wc -l`):
+2026-10-25 with `wc -l` and `tools/docs_check.sh`):
 
 | Suite | Files | Lines | Run |
 |-------|-------|-------|-----|
 | `tests/` smoke tests | 5 `.fl` (`t_hello` 8, `t_arith` 26, `t_flow` 48, `t_funcs` 15, `t_types` 23) | 120 | `bash tests/run.sh ./flintc` |
-| `tests/` runners | `run.sh` 109, `run_tutorial.sh` 18, `test_registry.sh` 43 | 170 | `bash tests/test_registry.sh` |
-| diagnostic catalogs | `docs/errors-cpp.md` (141 C++ compiler diagnostics) + `docs/errors.md` (self-host emitter) | — | `bash tests/test_errors_cpp.sh` · `bash tests/test_errors.sh` |
-| `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | loop above |
+| `tests/` runners | `run.sh` 116, `run_tutorial.sh` 18, `test_registry.sh` 43 | 177 | `bash tests/test_registry.sh` |
+| diagnostic catalogs | `docs/errors-cpp.md` (137 fixed-pattern diagnostics over 145 codes) + `docs/errors.md` (149 emitter codes) | — | `bash tests/test_errors_cpp.sh` · `bash tests/test_errors.sh` |
+| `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | `bash tools/bench_compare.sh` |
 | `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) + 2 Rust oracle mirrors | 386 | `clang -O2` / `g++` / `python3` / `rustc` |
 | `runtime/rust/` stdlib modules | `no_std` Rust: CSV parser, SHA-256/HMAC/AES-256-CTR/GCM (RustCrypto), SQLite wrapper over libsqlite3 | — | `bash tests/test_rust_stdlib.sh ./flintc` |
 | HTTPS | `flint_http_get`/`post` over the platform libcurl; verification always on, bodies capped at 8 MiB | — | `bash tests/test_https.sh ./flintc` |

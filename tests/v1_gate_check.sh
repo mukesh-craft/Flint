@@ -2,7 +2,8 @@
 # v1 release gate: runs the complete battery, fails on any red gate.
 # Usage: bash tests/v1_gate_check.sh [path/to/flintc] [--full]
 # Default runs fast gates; --full adds the slow corpus gates
-# (parse-gate 83, fixpoint 83, lexdiff 82, stage3-ladder 21, tutorial).
+# (parse-gate, fixpoint, lexdiff, stage3-ladder, tutorial, sanitizers,
+# opt-identity, type-check, type-audit).
 set -u
 FLINTC="${1:-./flintc}"
 FULL=0
@@ -28,6 +29,8 @@ else
 fi
 gate fmt bash tests/test_fmt.sh "$FLINTC"
 gate errors bash tests/test_errors.sh
+gate explicit-targs bash tests/test_explicit_targs.sh "$FLINTC"
+gate closure-escape bash tests/test_closure_escape.sh "$FLINTC"
 gate aegis bash tests/test_aegis.sh "$FLINTC"
 gate stdlib bash tests/test_ai.sh "$FLINTC"
 # The documentation and diagnostic-catalogue gates are fast and need no
@@ -36,9 +39,9 @@ gate docs bash tests/test_docs.sh
 gate errors-cpp bash tests/test_errors_cpp.sh
 gate diagnostic-codes bash tests/test_diagnostic_codes.sh "$FLINTC"
 if [ "$FULL" = 1 ]; then
-  gate parse-gate-83 bash tests/test_parse_gate.sh "$FLINTC"
-  gate fixpoint-83 bash tests/test_fixpoint.sh "$FLINTC"
-  gate lexdiff-82 bash tests/test_lexdiff.sh "$FLINTC"
+  gate parse-gate bash tests/test_parse_gate.sh "$FLINTC"
+  gate fixpoint bash tests/test_fixpoint.sh "$FLINTC"
+  gate lexdiff bash tests/test_lexdiff.sh "$FLINTC"
   gate stage3-ladder bash tests/test_emit_stage3.sh "$FLINTC"
   gate tutorial bash tests/run_tutorial.sh "$FLINTC"
   gate sanitizers bash tests/test_sanitizers.sh "$FLINTC"

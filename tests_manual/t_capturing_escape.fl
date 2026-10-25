@@ -1,17 +1,17 @@
-# A closure that CAPTURES cannot cross a return boundary.
+# Phase 2 / 2D: a capturing closure may cross a RETURN boundary.
 #
-# The other half of the Phase 2 / 2D rule: a capture-less closure's box is
-# a module-level constant (so it may escape), but a closure that captures
-# a local keeps its box in the frame that is going away -- returning it
-# would hand out a pointer to dead storage.
+# The env box is promoted to the heap at the escape site (ScopedEscape for a
+# literal, promoteLambdaBox for a binding). Captures were snapshotted BY
+# VALUE, so copying the box preserves the closure exactly.
 #
-# This program must be REJECTED.
+# Before 2D this was rejected ("cannot return a lambda"): the box lived in
+# the returning frame and would have dangled.
 
-fn make() -> fn(i64) -> i64 {
-    k = 5
+fn make(k: i64) -> fn(i64) -> i64 {
     return |x: i64| x + k
 }
 
 fn main() {
-    print(1)
+    f = make(35)
+    print(f(7))
 }

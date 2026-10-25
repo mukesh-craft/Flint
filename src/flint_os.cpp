@@ -63,7 +63,11 @@ int spawn(const std::vector<std::string>& args) {
     si.cb = sizeof(si);
     ZeroMemory(&pi, sizeof(pi));
     // Console handles are shared by default: child stdio flows through.
-    if (!CreateProcessA(nullptr, &cmd[0], nullptr, nullptr, FALSE, 0,
+    // `cmd` is never empty here (appendQuoted quotes an empty argument), but
+    // checking keeps the CreateProcessA contract explicit: it takes a mutable
+    // NUL-terminated buffer, never a possibly-null pointer.
+    if (cmd.empty()) return -1;
+    if (!CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0,
                         nullptr, nullptr, &si, &pi))
         return -1;
     WaitForSingleObject(pi.hProcess, INFINITE);
@@ -99,7 +103,8 @@ int spawnCapture(const std::vector<std::string>& args, std::string& out) {
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     si.dwFlags |= STARTF_USESTDHANDLES;
     ZeroMemory(&pi, sizeof(pi));
-    BOOL ok = CreateProcessA(nullptr, &cmd[0], nullptr, nullptr, TRUE, 0,
+    if (cmd.empty()) { CloseHandle(rd); CloseHandle(wr); return -1; }
+    BOOL ok = CreateProcessA(nullptr, cmd.data(), nullptr, nullptr, TRUE, 0,
                              nullptr, nullptr, &si, &pi);
     CloseHandle(wr);
     int ret = -1;

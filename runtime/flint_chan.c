@@ -17,7 +17,10 @@
 #include <pthread.h>
 #include "flint_aegis.h"
 
-extern void flint_panic(const char* msg);
+// noreturn must be visible here too: without it the compiler (and static
+// analyzers) assume control continues after a panic, which turns every
+// "free-then-panic" cleanup path into a phantom double free.
+extern void flint_panic(const char* msg) __attribute__((cold, noreturn));
 extern void flint_set_err(int64_t err);
 
 typedef struct {

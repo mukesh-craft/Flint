@@ -11,10 +11,14 @@ fn main() {
     print(flint_vec_get(sliced, 1))
     print(flint_vec_get(sliced, 2))
 
-    // For x in collection
-    print("--- for-in loop ---")
-    for v in sliced {
-        print(v)
+    // For-in over a Vec is not implemented yet (E0079); iterate by index.
+    // A slice returns a runtime FlintVec*, so the length/get calls below are
+    // the supported access path.
+    print("--- indexed loop over the slice ---")
+    mut i: i64 = 0
+    while i < flint_vec_len(sliced) {
+        print(flint_vec_get(sliced, i))
+        i = i + 1
     }
 
     // For x in range still works

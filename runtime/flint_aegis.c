@@ -20,7 +20,10 @@
 #include <pthread.h>
 #include <stdlib.h>
 
-extern void flint_panic(const char* msg);
+// noreturn must be visible here too: without it the compiler (and static
+// analyzers) assume control continues after a panic, which turns every
+// "free-then-panic" cleanup path into a phantom double free.
+extern void flint_panic(const char* msg) __attribute__((cold, noreturn));
 extern void flint_set_err(int64_t err);
 
 #define AEGIS_MAX_BYTES   ((int64_t)1 << 30)  // 1 GiB per allocation

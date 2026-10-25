@@ -1,0 +1,15 @@
+# Phase 2 / 2D: return through a second binding.
+#
+# `cb` and the returned value name ONE env box. promoteLambdaBox() walks every
+# open scope and updates all symbols that point at the old box, so the caller
+# cannot receive the stack copy while another alias still names it.
+
+fn make(k: i64) -> fn(i64) -> i64 {
+    cb = |x: i64| x + k
+    return cb
+}
+
+fn main() {
+    f = make(35)
+    print(f(7))
+}

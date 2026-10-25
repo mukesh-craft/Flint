@@ -831,7 +831,9 @@ char* flint_sb_build(FlintStrBuilder* sb) {
     if (!sb) return strdup("");
     char* r = (char*)malloc((size_t)sb->len + 1);
     if (!r) return NULL;
-    memcpy(r, sb->data, (size_t)sb->len);
+    // sb->data is NULL for an empty builder; memcpy with a NULL source is
+    // undefined even when the length is zero.
+    if (sb->len) memcpy(r, sb->data, (size_t)sb->len);
     r[sb->len] = '\0';
     return r;
 }
