@@ -39,6 +39,22 @@ The harness **does not** time JIT execution. The README's large runtime table
 is a 2026-09-12 JIT snapshot; an AOT run through the harness will differ
 slightly. Both use the same in-program timer.
 
+## Same representation: the `primes` i64 control
+
+The headline `primes` row is not like-for-like: Flint's only array element
+type is i64 (80 MB sieve), while the C/C++/Rust mirrors use 1-byte
+elements (10 MB). `tools/bench_primes_i64.sh` builds i64 mirrors for all
+four and runs them in one session, alternating:
+
+```bash
+bash tools/bench_primes_i64.sh 3
+```
+
+Medians on 2026-10-26: Flint **422.5 ms**, C **399.3 ms**, C++ **396.6 ms**,
+Rust **408.5 ms** — Flint is within 7%. The 1-byte C sieve is **183.0 ms**,
+so the remaining gap is the missing byte-array type, not check
+elimination. The control sources live in `benchmarks/controls/`.
+
 `benchmarks/matmul.fl` is separate because it exercises the tensor/BLAS path:
 
 ```bash

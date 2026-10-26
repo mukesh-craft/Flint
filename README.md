@@ -786,6 +786,15 @@ emitted, and a checked reduction cannot be reassociated/vectorized. The
 safety model is unchanged; `tests/test_vectorize.sh` pins the vectorizer
 metadata, the retained check, and the exact sum.
 
+Note (2026-10-26): the `primes` row compares different element sizes.
+Flint's only array is `[i64]`, so its sieve is 80 MB; the C/C++/Rust
+mirrors use 1-byte elements (10 MB). Same-session AOT control
+(`tools/bench_primes_i64.sh`, three rounds, medians): Flint **422.5 ms**
+vs C i64 **399.3 ms**, C++ i64 **396.6 ms**, Rust i64 **408.5 ms** —
+within 7%. The 1-byte C sieve is **183.0 ms**, so the headline gap is the
+missing byte-array type (roadmap §5.2/M7), not the compiler. The control
+sources are in `benchmarks/controls/`.
+
 Note (2026-10-10): the `matmul` row is new — same-session, AOT Flint
 (OpenBLAS) vs naive C vs numpy 2.4.4 (`benchmarks/matmul_np.py`;
 `benchmarks/matmul.py` stays pure-Python and takes ~60 s at 500²).

@@ -5916,3 +5916,36 @@ the fixed point **byte-identical** under `-O2`.
 
 The next IR-quality gap is the pipeline's array length fact and
 literal-index BCE, not the optimizer level.
+
+### The primes "gap" was 8 bytes per element
+
+The headline `primes 10M` row compared Flint's `[i64]` sieve (80 MB) with
+the C/C++/Rust 1-byte mirrors (10 MB) and read as a 2.4–3.3× compiler
+gap. It is not. Same-representation control, same session, medians of
+three alternating runs (`tools/bench_primes_i64.sh`):
+
+| implementation | sieve element | median |
+|---|---|---|
+| Flint | i64 | 422.5 ms |
+| C | i64 | 399.3 ms |
+| C++ | i64 | 396.6 ms |
+| Rust | i64 | 408.5 ms |
+| C | char | 183.0 ms |
+
+Flint is within 7% of C/C++/Rust when the element size matches. The
+remaining factor is the missing byte-array type: the same algorithm with
+1-byte elements is 2.3× faster in C. That is a language/representation
+feature (roadmap §5.2/M7), not check elimination or codegen.
+
+The control lives in `benchmarks/controls/primes_i64.{c,cpp,rs}` and
+`tools/bench_primes_i64.sh`; the README and benchmarks README carry the
+dated note. This is the third measurement in the P1 work that corrected
+the *question* rather than the compiler (after the fib check and the
+missing TargetMachine).
+
+Also recorded: with the pipeline's consumers at `-O2`, its literal-array
+IR (`for_array`) has 0 surviving bounds and overflow checks, while the
+C++ post-O2 IR keeps 2. So the planned pipeline length fact/literal BCE
+is redundant for the subset the pipeline can compile; the runtime-array
+case is blocked on the pipeline's missing array builtins. Do not add the
+fact without a surviving check to remove.
