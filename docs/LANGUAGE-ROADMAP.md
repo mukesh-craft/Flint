@@ -566,6 +566,13 @@ recursive workload. See `STATE.md` §4.3/§6.2.
 - The "unexplained 1.6×" is now explained: it is **the cost of defined
   overflow semantics plus the loss of auto-vectorization**, not a codegen
   defect [M].
+- **Correction (2026-10-26): "the loss of auto-vectorization" was half a
+  bug.** The middle end built `PassBuilder` with no `TargetMachine`, so TTI
+  reported no vector registers and the loop vectorizer declined every
+  loop; `opt -O2` on the same module vectorized it. With a TM,
+  `--unsafe sum_array` is at C parity (7.49–7.88 ms vs 7.60–7.91 ms). The
+  *safe* reduction still pays for its check, which is the real semantic
+  cost. See `STATE.md` §4.3/§6.2.
 - The highest-value optimizations are therefore **semantics-preserving
   analyses that let LLVM do what C's UB lets it do**:
   1. *range analysis* to remove the overflow check where the compiler can

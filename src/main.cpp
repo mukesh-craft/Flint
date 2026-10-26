@@ -768,7 +768,24 @@ static bool emitModuleOutput(llvm::Module* mod, const std::string& outputPath,
 // Run LLVM optimization passes on the module (new PM).
 static void runLLVMOptimizations(llvm::Module* mod, llvm::OptimizationLevel level) {
     using namespace llvm;
-    PassBuilder PB;
+    // The middle-end pipeline needs a TargetMachine for every target-dependent
+    // decision: TargetTransformInfo supplies the vector-register width and the
+    // cost model to the loop vectorizer and the unroller. A PassBuilder built
+    // with no TM reports "no vector registers" and silently declines every
+    // loop -- the same module vectorizes under `opt -O2`, which always has a
+    // TM. This was the real reason `--unsafe` loops (no checks at all) still
+    // stayed scalar and 12 % behind C.
+    initTargets();
+    std::unique_ptr<TargetMachine> tm;
+    Triple triple = mod->getTargetTriple();
+    if (!triple.str().empty()) {
+        std::string error;
+        if (auto* target = TargetRegistry::lookupTarget(triple, error)) {
+            tm.reset(target->createTargetMachine(triple.str(), "generic", "", {},
+                Reloc::PIC_, std::nullopt));
+        }
+    }
+    PassBuilder PB(tm.get());
     LoopAnalysisManager LAM;
     FunctionAnalysisManager FAM;
     CGSCCAnalysisManager CGAM;

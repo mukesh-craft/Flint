@@ -5834,3 +5834,48 @@ bail cases. The gate also disassembles `fib` and asserts no panic branch.
   dynamic and increasing roots keep their checks.
 - `.o`/`.ll` after an executable build keep `sadd.with.overflow` (cache
   isolation verified); `--check-bce fib` reports 3/1/3.
+
+### The middle end had no TargetMachine (the "Flint cannot vectorize" bug)
+
+The `fib` work left one number unexplained: `--unsafe sum_array` was still
+10.1 ms against C's 8.8–9.6 ms, even with every check gone. The IR showed
+no vector operations at all. `opt -O2` on the *same* module vectorized it,
+which pointed at the pipeline, not the language.
+
+`runLLVMOptimizations` built `PassBuilder PB;` with no `TargetMachine`.
+`TargetTransformInfo` therefore reported no vector registers, and the loop
+vectorizer declined every loop in every build — safe and unsafe. The fix
+passes a TM for the module's triple (the module already carries the triple,
+and the object emitter already creates the same TM). The verification was
+a 60-line standalone program that runs the same pipeline with and without
+a TM: 27 vector lines vs 0 on the same input.
+
+Measured, same session, `sum_array` 10M, four alternating runs:
+
+| | before | after | C |
+|---|---|---|---|
+| `--unsafe` | 10.1 ms | **7.49–7.88 ms** | 7.60–7.91 ms |
+| default | 12.3 ms | 11.0–11.1 ms | 7.60–7.91 ms |
+
+So `--unsafe` is at C parity. The default still pays for the accumulator's
+overflow check: a checked reduction cannot be reassociated, so the
+vectorizer leaves it scalar. That is a semantic trade-off, not a missing
+pass. `fib(45)` is unchanged (8.59–8.81 s in this session; the C mirror's
+later runs throttled to 13.9 s, so only the first pair is comparable).
+
+A sound fix for the checked reduction was prototyped: a fused
+`sum` + `max(|x|)` pass, then `maxAbs <= INT64_MAX / n` (the triangle
+inequality proves every prefix fits). Clang vectorizes it and it runs at
+10.7 ms — only ~3 % over the current safe loop (11.0 ms), still 1.4× C,
+because the max/abs work eats the vectorization gain. A wrapping operator
+(`+%`) is the explicit alternative. Both are recorded in `STATE.md` §4.3
+as the decision, not silently "fixed".
+
+Cost: the stage3 emitter `.o` compile went from ~3.0–3.5 s to ~3.9–4.3 s.
+That is the price of actually running the vectorizer and the target cost
+model; it is recorded rather than hidden.
+
+`tests/test_vectorize.sh` is the gate (3 checks): the check-free loop
+carries `llvm.loop.isvectorized`, the default build still carries
+`sadd.with.overflow`, and the unsafe sum is exact. The fast battery is
+23/23 with it; the full battery is run separately.
