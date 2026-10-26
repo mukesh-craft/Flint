@@ -99,6 +99,21 @@ the module's triple fixed it; `--unsafe sum_array 10M` went from 10.1 ms to
 reduction cannot be vectorized. The compile-time cost on the stage3 emitter
 is ~0.5–0.8 s. `tests/test_vectorize.sh` pins both directions.
 
+## The pipeline's consumers now use `-O2`
+
+The C++ compiler optimizes in-process; the self-hosted pipeline writes
+text IR, and its consumers used to compile that IR at `-O0` — including
+`driver/flintc.fl`, so pipeline-built programs shipped unoptimized. On
+2026-10-26 the differential gate, the self-host bootstrap, the stage3
+ladder and the driver switched to `clang -O2`. Same self IR, measured
+three runs each: the pipeline-compiled emitter goes from 0.452 s to
+0.191 s on the merged 331-form input, matching the C++-compiled emitter
+(0.193 s), and both emit byte-identical IR. A pipeline-built
+5M-iteration loop goes from 0.096–0.127 s to 0.059–0.068 s. The gates
+stay green (differential 14/14, ladder 21/21, driver 6/6, fixed point
+byte-identical); the differential's wall time rises from 30 s to 42 s
+because it now optimizes 28 binaries.
+
 ## Tooling: binary size, build time, cold start
 
 ```bash

@@ -377,7 +377,11 @@ fn main() -> i64 {
     if flint_exists(dv_join(frt, "flint_aegis.c")) == 1 {
         aegis = " " + dv_shell_quote(dv_join(frt, "flint_aegis.c"))
     }
-    cmdl = "clang " + dv_shell_quote(outll) + " " + dv_shell_quote(rt) + aegis + " -lm -o " + dv_shell_quote(out)
+    # The C++ compiler runs LLVM O2 in-process before its object emitter, so a
+    # plain `clang` here (O0) would make every pipeline-built program slower
+    # than the same program built by flintc. Give the pipeline's IR and the
+    # runtime the same optimizer level.
+    cmdl = "clang -O2 " + dv_shell_quote(outll) + " " + dv_shell_quote(rt) + aegis + " -lm -o " + dv_shell_quote(out)
     dv_run(cmdl, "clang")
     if norun == 1 {
         print(out)
