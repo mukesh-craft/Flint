@@ -33,7 +33,7 @@ bash build.sh
 New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 (`bash tests/run_tutorial.sh ./flintc` checks your answers — 8/8 green).
 
-## Status (2026-10-25, verified on Termux AArch64)
+## Status (2026-10-26, verified on Termux AArch64)
 
 - **Working end to end** — compile, JIT, LLVM IR, interface files,
   content-addressed cache, generics (monomorphization), traits, closures,
@@ -63,13 +63,21 @@ New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
   resolved trait impls). `--no-type-check` is the differential oracle. The
   remaining Phase 2 items (typed HIR, full regions, capability types) are in
   [`STATE.md`](STATE.md) §4.2.
+- **Bounded line input** — `flint_input`, `flint_input_i64` and
+  `flint_input_f64` consume exactly one line, cap it at 1 MiB, drain any
+  excess, strip CRLF, and report EOF / too-long / invalid / out-of-range /
+  embedded-NUL through `flint_input_status()` instead of guessing. Gate:
+  `tests/test_input.sh` (8/8). See **Reading input** below.
 - **Honest gaps** — escaped closure boxes are allocated with `flint_malloc`
   and are **not freed** (there is no closure destructor yet); `[T]`
   containers (M7) are deferred by decision; `--target` emits cross-target
   `.ll`/`.o` but cannot link or run a cross-target executable; Windows and
-  macOS are not executed from this device; and the self-host pipeline's
-  function table holds one entry per method name (two trait impls of the
-  same name cannot coexist there).
+  macOS are not executed from this device; and the self-host pipeline is
+  complete for the bootstrap, **not feature parity** with the authoritative
+  C++ compiler: the function table holds one entry per method name (two
+  trait impls of the same name cannot coexist), lambda-as-a-value parsing is
+  partial, enum equality is absent, and a named function cannot yet be used
+  as a value. The full table is [`COMPATIBILITY.md`](COMPATIBILITY.md) D5.
 
 ## Project provenance and AI assistance
 
@@ -106,8 +114,14 @@ is not reproducible, please open an issue with the file and the claim.
 - **Compiled to native code** via LLVM IR — JIT run, AOT binary, or `.ll`
   text; default target is the host (Termux: `aarch64-unknown-linux-android24`)
 - **Immutable by default** — variables are immutable unless declared with `mut`
-- **Memory safe** — ownership + borrow checker, generational Aegis leases,
-  no null keyword, bounds traps, overflow panics (all loud, never silent)
+- **Memory safety mechanisms** — ownership + borrow checker, generational
+  Aegis leases, no null keyword, bounds traps, overflow panics (all loud,
+  never silent). These checks cover the safe-code model the compiler
+  implements; this is not a proof that every path is memory-safe. Escaped
+  closure environments are not freed yet, Aegis leases do not establish
+  static data-race freedom, full region inference and capability types are
+  future work, and C FFI plus `--unsafe` sit outside the checked model. See
+  **Honest gaps** below and [`docs/DESIGN-PHILOSOPHY.md`](docs/DESIGN-PHILOSOPHY.md).
 - **Small binaries** — hello-world AOT is **8,048 B raw / 4,160 B
   stripped** (re-measured 2026-10-25; `strip` from the Termux toolchain).
   `libc` only; the link fix that removed 743,520 B is `STATE.md` §6.1.
@@ -412,6 +426,68 @@ This compiles (all verified present after a clean build):
 clang output.ll runtime.o -o hello
 ./hello
 ```
+
+## Reading input
+
+`flint_input` is the language's line-input primitive — the `input()`/`scanf`
+slot, but bounded and explicit about failure:
+
+```flint
+fn main() -> i64 {
+    name = flint_input("Name: ")
+    if flint_input_status() != 0 {
+        print("could not read a line")
+        return 1
+    }
+    print("hello {name}")
+    flint_str_free(name)
+
+    n = flint_input_i64("How many: ")
+    if flint_input_status() != 0 {
+        print("that was not a whole number")
+        return 2
+    }
+    print(n * 2)
+
+    x = flint_input_f64("Scale: ")
+    if flint_input_status() != 0 {
+        print("that was not a number")
+        return 3
+    }
+    flint_println_f64(x)
+    0
+}
+```
+
+Verified transcript (`printf 'Alice\n21\n0.5\n' | ./readme_input`):
+
+```
+Name: hello Alice
+How many: 42
+Scale: 0.5
+```
+
+The contract:
+
+| call | result |
+|---|---|
+| `flint_input(prompt)` | one line as a heap `str`; the caller owns it (`flint_str_free`) |
+| `flint_input_i64(prompt)` | whole line parsed as `i64`; `0` on any error |
+| `flint_input_f64(prompt)` | whole line parsed as `f64`; `0.0` on any error |
+| `flint_input_status()` | status of the most recent input call |
+
+Status codes: `0` ok · `1` EOF before any byte · `2` line longer than 1 MiB
+(the first 1 MiB is returned, the rest is drained) · `3` read error · `4` out
+of memory · `5` not a number / trailing junk · `6` number out of range ·
+`7` embedded NUL bytes were skipped (Flint strings are NUL-terminated).
+
+Safety properties, all covered by `tests/test_input.sh`: one call consumes
+exactly one line (a short buffer cannot desynchronise the next call); the
+buffer is capped at 1 MiB and grown only up to the cap; an over-long line is
+drained rather than left in the stream; CRLF is stripped; EOF is a status,
+not a silent empty string; numeric helpers require the whole line to parse, so
+`"12abc"` is an error rather than `12`; and a failed numeric parse never
+returns a partial value.
 
 ## Tooling (verified flags only)
 

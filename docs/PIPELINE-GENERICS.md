@@ -50,8 +50,10 @@ single-entry-table consequence is stated in §4.
 The C++ compiler handles all of these, and the pipeline now does too. The
 differential gate compares them on a generic program, a trait program, and
 an explicit-instantiation program (`tests/test_differential.sh`, 14/14,
-0 known divergences). The remaining gaps are representational, not missing
-syntax — they are listed at the end of §4 and in `COMPATIBILITY.md` D5.
+0 known divergences). The remaining gaps are representational (bool
+mangling, the one-entry method table, the one-file query) plus two features
+the pipeline has not ported yet (enum equality and named function values);
+they are listed at the end of §4 and in `COMPATIBILITY.md` D5.
 
 ## 2. The S-expression contract
 

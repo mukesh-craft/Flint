@@ -184,7 +184,7 @@ Priority = engineering value (risk removed × users unblocked) ÷ cost.
 | 3 | **No typed IR of Flint's own** | High: blocks range/alias/escape proofs, blocks check elimination, blocks real diagnostics | Codegen emits LLVM IR directly; no HIR/MIR | High | **P0** | The precondition for items 5, 6, 7 and 11 |
 | 4 | **Integer-loop gap (1.35–2.25×)** | High | Safety checks in loops + no range analysis + `{ptr,i64}` arrays | Medium | **P1** | Within 1.2× of C for safe code |
 | 5 | **No static concurrency safety** | High: the language cannot claim race-freedom | No capability system; `parallel for` removed | High | **P1** | `Send`/`Sync`-like capabilities; safe parallel loops |
-| 6 | **Closures cannot escape** | Medium-high: blocks callbacks, decorators, async | Env box is frame-bound by construction | Medium | **P1** | Escaping closures with escape analysis + heap promotion |
+| 6 | **Closures cannot escape** — **resolved in 2D.2** (heap promotion at the escape site; freeing an escaped box is still open) | Medium-high: blocks callbacks, decorators, async | Env box is frame-bound by construction | Medium | **P1** | Escaping closures with escape analysis + heap promotion |
 | 7 | **No package ecosystem** | High long-term: growth, contributors, credibility | Nothing exists | Medium | **P1** | Registry, resolver, lockfile, signing |
 | 8 | **Type-system gaps** | Medium | Deliberate v1 scoping | Medium-high each | **P2** | async/await, associated types, `dyn` escape hatch, operator overloading |
 | 9 | **LSP is a separate implementation** | Medium: diagnostics drift from the compiler | The server cannot reuse the C++ semantics | High | **P2** | A compiler-backed LSP with identical diagnostics |
@@ -874,7 +874,9 @@ structs, monomorphized generics).
 
 Whatever is added must land in **both** frontends, or the self-host pipeline
 must be declared a bootstrap-only artifact (§26). Traits, generics and
-`::<` already exist only in the C++ frontend [M: `COMPATIBILITY.md` D5] —
+`::<` existed only in the C++ frontend when this was written; 2E.2–2E.6
+closed the syntax gap, and what remains is representational (bool mangling,
+a single-entry method table, a one-file query) [M: `COMPATIBILITY.md` D5] —
 that is the precedent to break, not to extend.
 
 ---
@@ -1025,15 +1027,15 @@ usable throughout (§27).
 
 ### 14.1 What exists today [M]
 
-- 21 test suites, all green at HEAD: smoke (48), lexdiff (131), parse_gate
-  (132), fixpoint (132), errors (128/128), errors-cpp (135/135),
-  differential (11/11), generics (7), no-hang (88), AI (26), rust-stdlib
-  (20), rust-ffi (8), rust-oracle (2), https, python, lsp, fmt,
-  opt-identity, cache, fuzz-corpus, aegis, driver, tutorial, registry.
+- 42 standalone test scripts plus the smoke suite, all green at HEAD. The
+  authoritative per-gate counts live in `STATE.md` §2.2; this section keeps
+  only the shape of the suite (smoke, lexdiff, parse-gate, fixpoint,
+  differential, signatures, explicit-targs, closure-escape, errors,
+  errors-cpp, diagnostic-codes, docs, and the language/runtime suites).
 - A **differential gate**: the C++ compiler vs the self-hosted Flint
-  pipeline on 11 fixtures, failing on any unlisted divergence [M].
+  pipeline on 14 fixtures, failing on any unlisted divergence [M].
 - A **fixed-point gate**: the self-hosted pipeline re-compiles itself
-  byte-identically over 132 cases [M].
+  byte-identically over 149 cases [M].
 - A **no-hang gate**: every corpus program must terminate [M: 88 cases].
 - An **errors catalog** with a two-way sync gate [M].
 
@@ -1043,12 +1045,12 @@ This is a stronger-than-average foundation for a 0.x language.
 
 | gap | why it matters |
 |---|---|
-| **No miscompilation oracle beyond the differential gate's 11 fixtures** | the differential gate compares two implementations of *Flint*, not against a reference semantics; a shared misreading passes both |
-| **No fuzzing of the compiler** | `fuzz/` has a generator but is not wired into any CI runner [M] |
+| **No miscompilation oracle beyond the differential gate's 14 fixtures** | the differential gate compares two implementations of *Flint*, not against a reference semantics; a shared misreading passes both |
+| **Fuzzing is nightly, not per-PR** | `fuzz/run.sh` (differential grammar fuzzing) runs 100 seeds in the nightly job, so a PR can merge before it runs [M: `.github/workflows/flint.yml`] |
 | **No property-based testing** | e.g. "the optimizer preserves program semantics" is unasserted |
 | **No IR-level tests** | optimizer bugs are only visible end-to-end |
-| **No binary-size regression gate** | a 743 KB hello-world shipped for a long time; nothing would have caught it [M] |
-| **No performance regression gate** | the vectorization gap (§4.4) could have grown unnoticed [M] |
+| **No *enforced* binary-size regression gate** | `tools/bench_gate.sh` checks size with a 5 % threshold, but CI runs it advisory; a 743 KB hello-world shipped for a long time before it existed [M] |
+| **No *enforced* performance regression gate** | `tools/bench_gate.sh` checks runtime with a 3 % threshold, but CI runs it advisory until a per-runner baseline is committed [M] |
 | **No ABI tests** | the interface format (`.flint.bc`) has no versioned compatibility test |
 
 ### 14.3 The validation strategy to build [D]
@@ -1069,7 +1071,7 @@ traits, each optimizer pass, the linker decisions). Each pass gets a
 - *No UB*: run the whole corpus under ASan/UBSan (a sanitizers gate exists
   [M: `tests/test_sanitizers.sh`]).
 
-**Layer 3 — differential**: extend the existing gate from 11 fixtures to
+**Layer 3 — differential**: extend the existing gate from 14 fixtures to
 the whole corpus, and *both* directions (C++ vs pipeline, O0 vs O2, safe
 vs unsafe).
 
@@ -1381,9 +1383,9 @@ proofs made, safety diagnostics emitted.
 | size / build / startup harness | **exists** (new: `tools/bench_tooling.sh`) |
 | in-compiler check counter | **exists** (`--check-bce`) |
 | per-commit history (dashboard over time) | **missing** |
-| CI integration of the benchmarks | **missing** |
+| CI integration of the benchmarks | **advisory** — the workflow runs `tools/bench_gate.sh`, but a delta does not fail the build |
 | size attribution per commit | **missing** (the data is in the link step, §6.7) |
-| regression gate (fail the build on a delta) | **missing** |
+| regression gate (fail the build on a delta) | **exists** (`tools/bench_gate.sh`, runtime +3 % / binary +5 % / compile +10 %), **not enforced on CI** until a per-runner baseline is committed |
 
 ### 21.3 The gate format [D]
 
@@ -1670,7 +1672,7 @@ improving at every step.
 | **Memory safety** | 78 | [M] compile-time use-after-free, bounds/overflow/div-zero checks, leases + runtime backstop, deterministic free, 145-code diagnostic catalog | no full NLL regions; an escaped closure box is never freed; FFI contracts unchecked | P1 |
 | **Concurrency safety** | 42 | [M] threads + channels exist; no static race freedom; `parallel for` removed | no capability model | P1 |
 | **Type system** | 55 | [M] inference, generics (monomorphization), traits (M3), lambdas/closures (M4), enums, structs, maps, explicit type args (M2b) | no async, no associated types, no `dyn`, no operator overloading, no nullable types | P2 |
-| **Compiler maturity** | 70 | [M] 27-gate battery, differential + fixed point + no-hang gates, self-hosting ladder, 145-code catalog | two frontends that can drift (D5); the link regression shipped for months | P0 (D5) |
+| **Compiler maturity** | 70 | [M] 28-gate battery, differential + fixed point + no-hang gates, self-hosting ladder, 145-code catalog | two frontends that can drift (D5); the link regression shipped for months | P0 (D5) |
 | **LSP/tooling** | 42 | [M] separate Rust LSP (5/5 tests), formatter, token dump, agent benchmark, agent-bench tasks | no compiler-backed semantics, no rename/refactor, no incremental analysis | P2 |
 | **Ecosystem** | 12 | [M] zero third-party packages; strong stdlib; binary registry exists | no package manager, registry, resolver, lockfile, signing, audit | P1 |
 | **Developer experience** | 66 | [M] one binary for compile/JIT/IR/interface/test; 8-lesson tutorial; one-error-per-input contract; agent-friendly contracts | young tooling, no package story, `flt_` naming inconsistencies, limited docs | P2 |
@@ -1702,9 +1704,9 @@ phase-exit criteria are below.
 |---|---|---|---|
 | **2A** | a real type checker + facts in types | the checker rejects provable type errors with structured diagnostics, never rejects what the compiler accepts (differential over the corpus), `--type-audit` shows 0 contract violations and 0 drift, and the resolved trait / instantiated type arguments are inspectable | **landed**: checker phase (`E0290`–`E0294`), 181/181 differential, 0 drift / 0 contract violations, call facts inspectable |
 | **2B** | checks become IR-level data | bounds/overflow are IR operations with a safety policy, not inline code | landed |
-| **2C** | analyses | loop-range facts (landed) and escape analysis (open) | partial |
-| **2D** | regions | capturing closures escape safely (NLL-style regions) | partial |
-| **2E** | the pipeline consumes the same semantics | the pipeline compiles generics, traits and `::<`; D5 closed | generics + traits + the C++ query mode (`--emit-signatures`) landed; `::<` open |
+| **2C** | analyses | loop-range facts (landed) and escape analysis (landed as 2D.2) | landed |
+| **2D** | regions | capturing closures escape safely (NLL-style regions) | landed for escaping closures; full NLL region inference open |
+| **2E** | the pipeline consumes the same semantics | the pipeline compiles generics, traits and `::<`; D5 closed | landed through 2E.6; enum equality and named function values are still absent (`COMPATIBILITY.md` D5), so D5 is not closed |
 
 **Phase exit criteria:** the pipeline compiles a program using traits,
 generics and `::<`; D5 is closed; the LSP can query the compiler for types.

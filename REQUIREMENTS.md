@@ -1,6 +1,6 @@
 # Flint Compiler — Requirements & Setup
 
-## Platform Support (v0.17: any device)
+## Platform Support (v0.22.0: any device)
 
 | Tier | Platform | Status |
 |------|----------|--------|
@@ -15,11 +15,21 @@ Windows notes: link programs with `-lws2_32 -lpthread` (added automatically by
 `flintc` for Windows targets); `flint_regex_*` return err-flagged stubs
 (no POSIX engine); MSVC needs the remaining thread shim (PORT notes in code).
 
-**Cross-compilation is not implemented.** There is no `--target` flag, so the
-previously documented `./flintc --target <triple> program.fl -o program.o` does
-not work. `flintc` targets the host triple only, which is why the table above
-records a Windows build as reached by cross-linking from ARM with an external
-toolchain rather than by a compiler flag. See README.md "Not implemented".
+**Cross-target output is emit-only.** `--target <triple>` works for producing
+target-specific LLVM IR (`.ll`) or an object file (`.o`):
+
+```bash
+./flintc examples/hello.fl --target x86_64-pc-linux-gnu -o hello.ll
+./flintc examples/hello.fl --target x86_64-pc-linux-gnu -o hello.o
+```
+
+What is **not** implemented is linking and running a complete cross-target
+executable through the Flint toolchain: `-o <name>` still links for the host,
+and JIT mode (`--run`) is host-only (the ORC JIT is built for the native
+machine, so the combination is refused loudly). The Windows row in the table
+above is reached by cross-linking an emitted object with an external
+toolchain, not by `flintc` producing a runnable `.exe` itself. See README.md
+"Cross-target output (emit-only)" and "Honest gaps".
 
 ## Requirements
 
@@ -88,7 +98,7 @@ Expected output:
 ## Build Details
 
 The build compiles:
-1. `src/main.cpp` → `flintc` (the compiler, ~575 KB)
+1. `src/main.cpp` → `flintc` (the compiler, ~1.2 MB on Termux AArch64)
 2. `runtime/runtime.c` → `runtime.o`
 3. Optional: `pyruntime.c` → `pyruntime.o` (if Python headers available)
 4. Optional: `ffi_helper.c` → `ffi_helper.o`
@@ -145,7 +155,7 @@ python3 flint-doc source.fl --output docs.md   # extract docs to file
 
 ```
 flint/
-├── src/main.cpp          # Main compiler (C++/LLVM, ~7600 lines)
+├── src/main.cpp          # Main compiler (C++/LLVM, ~16.2K lines)
 ├── runtime/
 │   ├── runtime.c         # C runtime library
 │   ├── pyruntime.c       # Python C-API wrapper
@@ -173,4 +183,4 @@ flint/
 2. **`true`/`false` literals exist:** they evaluate to `1`/`0` (verified: `print(true)` → `1`). Older docs saying otherwise are stale.
 3. **strrev at n=100K: fixed 2026-09-13 (R5).** Rebuilt on the linear `flint_sb_*` builder; now passes with correct checksum (5044012, verified 2026-09-24).
 4. **LLVM ISEL edge cases:** Mixed i64/f64 arithmetic is mostly fixed but may still crash in rare unsupported cases on AArch64.
-5. **Self-hosting: done.** Lexer/parser/emitter are Flint programs (`stage1-3/*.fl`); bootstrap A/B/C + stable promotion green, V1 gate 17/17 (2026-09-24).
+5. **Self-hosting: done.** Lexer/parser/emitter are Flint programs (`stage1-3/*.fl`); bootstrap A/B/C + stable promotion green. The v1 battery is **28/28** (`bash tests/v1_gate_check.sh ./flintc --full`, measured 2026-10-26), and the self-host pipeline's fixed point is byte-identical. This is pipeline completeness, not full feature parity with the C++ compiler — see `COMPATIBILITY.md` D5 for the remaining constructs (partial lambda parsing, enum equality, named function values).
