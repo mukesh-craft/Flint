@@ -47,6 +47,25 @@ clang -O2 benchmarks/matmul.c -o matmul_c && ./matmul_c
 python3 benchmarks/matmul_np.py
 ```
 
+## Iterative fib comparison
+
+The original `fib.*` mirrors are naive recursive `fib(45)`. The Python
+recursive version is too slow for a useful comparison, so `fib_iter.*`
+implements the same **iterative** algorithm in Flint, C, C++, Rust and
+Python and is benchmarked as its own workload:
+
+```bash
+bash tools/bench_compare.sh fib_iter
+```
+
+Each program times one `fib_iter(45)` call and prints the result
+(`1134903170`) plus `time: <ns> ns`. The harness prints sub-millisecond
+results in `us`; a single call is 0.6–0.9 us in the compiled languages and
+roughly 15–18 us in Python here. These are single-run microbenchmarks at the
+timer's resolution, so treat small differences as noise; the Python gap is
+large enough to be stable. The recursive `fib.*` files stay in place and are
+still the workload used by the historical README table.
+
 ## Tooling: binary size, build time, cold start
 
 ```bash
