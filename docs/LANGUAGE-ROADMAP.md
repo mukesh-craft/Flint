@@ -553,6 +553,14 @@ So the measured decomposition of the 1.89× on `sum_array` is: checks ~13 %
 rest. It also explains why `fib(45)` — call-bound and not vectorizable in
 either language — is only 1.35× behind.
 
+**Correction (2026-10-26):** the `fib(45)` row was not call-bound in Flint.
+The overflow check on `fib(n-1) + fib(n-2)` blocked LLVM's
+accumulator-recursion transform, so the function stayed a tree of calls;
+not emitting that provably-safe check took `fib(45)` to **8.60–9.17 s**,
+level with C's 8.54–8.76 s in the same session. The 1.35× was a
+check-induced loss of an optimization, not the irreducible cost of a
+recursive workload. See `STATE.md` §4.3/§6.2.
+
 ### 4.5 What this changes in the plan
 
 - The "unexplained 1.6×" is now explained: it is **the cost of defined

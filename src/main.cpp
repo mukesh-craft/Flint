@@ -1090,7 +1090,8 @@ static std::string cacheSalt(llvm::CodeGenOptLevel ol, bool releaseMode,
                              const std::string& backend, const char* argv0,
                              bool loopOpt = false,
                              const std::string& targetTriple = "",
-                             bool debugInfo = false) {
+                             bool debugInfo = false,
+                             bool rangeFacts = false) {
     struct stat st;
     uint64_t mt = 0;
     if (argv0 && stat(argv0, &st) == 0) mt = (uint64_t)st.st_mtime;
@@ -1118,7 +1119,8 @@ static std::string cacheSalt(llvm::CodeGenOptLevel ol, bool releaseMode,
          + "-rt" + std::to_string(rt)
          + (loopOpt ? "-loopopt" : "")
          + (targetTriple.empty() ? "" : "-tgt" + targetTriple)
-         + (debugInfo ? "-dbg" : "");
+         + (debugInfo ? "-dbg" : "")
+         + (rangeFacts ? "-rangefacts" : "-checked");
 }
 
 // B1: cold panic/bounds helpers for generated IR. flint_panic never returns
@@ -2780,6 +2782,557 @@ struct ProgramAST {
     std::vector<std::string> imports;
     std::vector<std::unique_ptr<VarDeclAST>> globals;
     std::vector<std::unique_ptr<ExprAST>> topStmts;
+};
+
+// ============================================================================
+// BOUNDED RANGE FACTS (Phase 3 / P1)
+// ============================================================================
+//
+// `rangeFacts[expr] = [lo,hi]` means every dynamic evaluation of `expr` in
+// the whole program yields an i64 in [lo,hi]. Codegen uses that fact to
+// replace a checked add/sub/mul with a plain one. That is not a micro
+// optimisation: the checked intrinsic puts a branch in the recursive
+// function, and LLVM's accumulator-recursion transform refuses to turn
+// `fib(n-1) + fib(n-2)` into a loop while that branch is there. Removing a
+// PROVABLY SAFE check restores the transform and the C-level runtime.
+//
+// The analysis is deliberately small and closed-world:
+//   * only a non-generic function with one i64 parameter and i64 return;
+//   * every call site must be a direct call whose argument is a constant,
+//     or a self-call `n - c` / `n + (-c)` with c > 0;
+//   * the function is evaluated for every constant root, memoized by
+//     argument, so `fib(45)` costs 46 evaluations, not 2^45;
+//   * an unknown value, loop, alias, or call to another function makes the
+//     affected result TOP (no fact), never an assumption.
+//
+// The caller only enables the facts for whole-program executables. An
+// object/IR artifact could be called with an argument outside the analyzed
+// set, so those modes keep every check.
+struct IntRangeFact {
+    int64_t lo;
+    int64_t hi;
+};
+
+class BoundedRangeAnalysis {
+public:
+    BoundedRangeAnalysis(ProgramAST& program,
+                         std::unordered_map<const ExprAST*, IntRangeFact>& out)
+        : prog(program), out(out) {}
+
+    void run() {
+        indexProgram();
+        for (auto& up : prog.functions) {
+            FunctionAST* f = up.get();
+            if (!eligible(f)) continue;
+            analyze(f);
+        }
+    }
+
+private:
+    struct AV {
+        enum Kind { Top, Int, Bool } kind = Top;
+        int64_t lo = 0, hi = 0;
+        bool b = false;
+        static AV top() { return AV(); }
+        static AV integer(int64_t v) { AV a; a.kind = Int; a.lo = a.hi = v; return a; }
+        static AV interval(int64_t l, int64_t h) { AV a; a.kind = Int; a.lo = l; a.hi = h; return a; }
+        static AV boolean(bool v) { AV a; a.kind = Bool; a.b = v; return a; }
+    };
+    using Env = std::unordered_map<std::string, AV>;
+
+    // A compile-time budget: a recursive function with a huge constant root
+    // must fail closed instead of hanging the compiler.
+    static constexpr long kMaxSteps = 2000000;
+    static constexpr int kMaxDepth = 4000;
+
+    ProgramAST& prog;
+    std::unordered_map<const ExprAST*, IntRangeFact>& out;
+
+    FunctionAST* fn = nullptr;
+    std::string param;
+    std::unordered_map<int64_t, AV> memo;
+    std::unordered_map<const ExprAST*, IntRangeFact> local;
+    std::unordered_set<const ExprAST*> tainted;
+    bool failed = false;
+    bool returned = false;
+    AV returnVal;
+    long steps = 0;
+    int depth = 0;
+
+    static bool eligible(FunctionAST* f) {
+        if (!f || f->isDeclaration || !f->body) return false;
+        if (!f->typeParams.empty()) return false;
+        if (f->name == "main") return false;
+        if (f->params.size() != 1) return false;
+        if (f->params[0].second.kind != TypeKind::I64) return false;
+        if (f->returnType.kind != TypeKind::I64) return false;
+        return true;
+    }
+
+    void analyze(FunctionAST* f) {
+        fn = f;
+        param = f->params[0].first;
+        memo.clear();
+        local.clear();
+        tainted.clear();
+        failed = false;
+        returned = false;
+        returnVal = AV::top();
+        steps = 0;
+        depth = 0;
+
+        std::vector<int64_t> roots;
+        if (!collectRoots(f, roots)) return;
+        if (roots.empty()) return;
+
+        for (int64_t root : roots) {
+            returned = false;
+            (void)evalFunction(root);
+            if (failed) return;
+        }
+        if (failed) return;
+
+        // A node that produced TOP on any evaluation has no usable fact.
+        for (auto* e : tainted) local.erase(e);
+        for (auto& kv : local) out[kv.first] = kv.second;
+    }
+
+    struct CallSite {
+        CallExprAST* call;
+        FunctionAST* owner;  // nullptr: top level or a default argument
+    };
+
+    // One pass over the program builds the call-site index. Walking the
+    // whole program once per candidate function cost ~0.65 s on the stage3
+    // emitter (a ~20% compile-time regression on an executable build); this
+    // is O(program) once.
+    std::unordered_map<std::string, std::vector<CallSite>> callsByName;
+    std::unordered_set<std::string> valueUses;
+    std::unordered_set<std::string> dispatchedNames;
+    bool hasNameDispatch = false;
+
+    void indexProgram() {
+        std::function<void(ExprAST*, FunctionAST*)> walk =
+            [&](ExprAST* e, FunctionAST* owner) {
+            if (!e) return;
+            switch (e->kind) {
+                case NodeKind::Variable: {
+                    valueUses.insert(static_cast<VariableExprAST*>(e)->name);
+                    return;
+                }
+                case NodeKind::Call: {
+                    auto* c = static_cast<CallExprAST*>(e);
+                    // A name-based dispatcher can call any function with an
+                    // argument we cannot see. `flint_thread_spawn("f", n)` is
+                    // the one in this runtime; a string literal naming a
+                    // function is refused generically too.
+                    if (c->callee == "flint_thread_spawn" ||
+                        c->callee == "py_eval" || c->callee == "flint_py_eval" ||
+                        c->callee == "flint_py_exec") {
+                        hasNameDispatch = true;
+                    }
+                    for (auto& a : c->args) {
+                        if (a && a->kind == NodeKind::String)
+                            dispatchedNames.insert(
+                                static_cast<StringExprAST*>(a.get())->value);
+                    }
+                    callsByName[c->callee].push_back(CallSite{c, owner});
+                    for (auto& a : c->args) walk(a.get(), owner);
+                    return;
+                }
+                case NodeKind::Binary: {
+                    auto* b = static_cast<BinaryExprAST*>(e);
+                    walk(b->lhs.get(), owner); walk(b->rhs.get(), owner);
+                    return;
+                }
+                case NodeKind::Compare: {
+                    auto* c = static_cast<CompareExprAST*>(e);
+                    walk(c->lhs.get(), owner); walk(c->rhs.get(), owner);
+                    return;
+                }
+                case NodeKind::Assign: {
+                    walk(static_cast<AssignExprAST*>(e)->rhs.get(), owner);
+                    return;
+                }
+                case NodeKind::VarDecl: {
+                    walk(static_cast<VarDeclAST*>(e)->init.get(), owner);
+                    return;
+                }
+                case NodeKind::Return: {
+                    walk(static_cast<ReturnStmtAST*>(e)->value.get(), owner);
+                    return;
+                }
+                case NodeKind::If: {
+                    auto* i = static_cast<IfStmtAST*>(e);
+                    walk(i->condition.get(), owner);
+                    walk(i->thenBlock.get(), owner);
+                    walk(i->elseBlock.get(), owner);
+                    return;
+                }
+                case NodeKind::While: {
+                    auto* w = static_cast<WhileStmtAST*>(e);
+                    walk(w->condition.get(), owner); walk(w->body.get(), owner);
+                    return;
+                }
+                case NodeKind::Block: {
+                    auto* b = static_cast<BlockStmtAST*>(e);
+                    for (auto& s : b->stmts) walk(s.get(), owner);
+                    return;
+                }
+                case NodeKind::Ref: {
+                    walk(static_cast<RefExprAST*>(e)->target.get(), owner);
+                    return;
+                }
+                case NodeKind::Deref: {
+                    walk(static_cast<DerefExprAST*>(e)->target.get(), owner);
+                    return;
+                }
+                case NodeKind::Index: {
+                    auto* i = static_cast<IndexExprAST*>(e);
+                    walk(i->base.get(), owner); walk(i->index.get(), owner);
+                    return;
+                }
+                case NodeKind::Slice: {
+                    auto* s = static_cast<SliceExprAST*>(e);
+                    walk(s->arr.get(), owner); walk(s->start.get(), owner); walk(s->end.get(), owner);
+                    return;
+                }
+                case NodeKind::StructLiteral: {
+                    auto* s = static_cast<StructLiteralAST*>(e);
+                    for (auto& fld : s->fields) walk(fld.second.get(), owner);
+                    return;
+                }
+                case NodeKind::EnumConstruct: {
+                    auto* en = static_cast<EnumConstructAST*>(e);
+                    for (auto& a : en->args) walk(a.get(), owner);
+                    return;
+                }
+                case NodeKind::Match: {
+                    auto* m = static_cast<MatchExprAST*>(e);
+                    walk(m->scrutinee.get(), owner);
+                    for (auto& arm : m->arms) walk(arm.body.get(), owner);
+                    return;
+                }
+                case NodeKind::FieldAccess: {
+                    walk(static_cast<FieldAccessAST*>(e)->base.get(), owner);
+                    return;
+                }
+                case NodeKind::Lambda: {
+                    walk(static_cast<LambdaExprAST*>(e)->body.get(), owner);
+                    return;
+                }
+                case NodeKind::Cast: {
+                    walk(static_cast<CastExprAST*>(e)->expr.get(), owner);
+                    return;
+                }
+                case NodeKind::Unwrap: {
+                    walk(static_cast<UnwrapExprAST*>(e)->inner.get(), owner);
+                    return;
+                }
+                case NodeKind::Array: {
+                    auto* a = static_cast<ArrayExprAST*>(e);
+                    for (auto& el : a->elements) walk(el.get(), owner);
+                    return;
+                }
+                case NodeKind::Destructure: {
+                    walk(static_cast<DestructureAST*>(e)->init.get(), owner);
+                    return;
+                }
+                case NodeKind::MapLiteral: {
+                    auto* m = static_cast<MapLiteralAST*>(e);
+                    for (auto& v : m->values) walk(v.get(), owner);
+                    return;
+                }
+                default:
+                    return;
+            }
+        };
+        for (auto& up : prog.functions) {
+            FunctionAST* g = up.get();
+            if (!g || g->isDeclaration) continue;
+            // A default argument is evaluated at the CALL site, not in the
+            // callee's frame, so treat it like top-level code: a call to f
+            // there must have a constant argument (owner == nullptr).
+            for (auto& d : g->defaults) walk(d.get(), nullptr);
+            if (!g->body) continue;
+            walk(g->body.get(), g);
+        }
+        for (auto& s : prog.topStmts) walk(s.get(), nullptr);
+        for (auto& g : prog.globals) walk(g->init.get(), nullptr);
+    }
+
+    // Validate every use of `f`:
+    //   * outside f: only direct calls with a constant argument (roots);
+    //   * inside f: constants or `param - positive-constant` self-calls;
+    //   * any use of the function as a VALUE rejects the analysis.
+    bool collectRoots(FunctionAST* f, std::vector<int64_t>& roots) {
+        if (valueUses.count(f->name)) return false;
+        if (hasNameDispatch || dispatchedNames.count(f->name)) return false;
+        auto it = callsByName.find(f->name);
+        if (it == callsByName.end()) return true;   // no calls: no roots
+        for (auto& site : it->second) {
+            CallExprAST* c = site.call;
+            if (c->args.size() != 1) return false;
+            ExprAST* arg = c->args[0].get();
+            int64_t cv = 0;
+            if (site.owner == f) {
+                if (!constArg(arg, cv) && !isDecreasingArg(arg)) return false;
+            } else {
+                if (!constArg(arg, cv)) return false;
+                roots.push_back(cv);
+            }
+        }
+        return true;
+    }
+
+    static bool constArg(ExprAST* e, int64_t& out) {
+        if (!e) return false;
+        if (e->kind == NodeKind::Number) {
+            auto* n = static_cast<NumberExprAST*>(e);
+            if (!n->isInt) return false;
+            out = n->intValue;
+            return true;
+        }
+        if (e->kind == NodeKind::Binary) {
+            auto* b = static_cast<BinaryExprAST*>(e);
+            if (b->op != '+' && b->op != '-' && b->op != '*') return false;
+            int64_t l = 0, r = 0;
+            if (!constArg(b->lhs.get(), l) || !constArg(b->rhs.get(), r)) return false;
+            __int128 v = 0;
+            if (b->op == '+') v = (__int128)l + r;
+            else if (b->op == '-') v = (__int128)l - r;
+            else v = (__int128)l * r;
+            if (v < INT64_MIN || v > INT64_MAX) return false;
+            out = (int64_t)v;
+            return true;
+        }
+        return false;
+    }
+
+    bool isDecreasingArg(ExprAST* e) const {
+        if (!e || e->kind != NodeKind::Binary) return false;
+        auto* b = static_cast<BinaryExprAST*>(e);
+        if (!b->lhs || b->lhs->kind != NodeKind::Variable) return false;
+        if (static_cast<VariableExprAST*>(b->lhs.get())->name != param) return false;
+        int64_t c = 0;
+        if (!constArg(b->rhs.get(), c)) return false;
+        if (b->op == '-') return c > 0;
+        if (b->op == '+') return c < 0;
+        return false;
+    }
+
+    AV evalFunction(int64_t k) {
+        auto it = memo.find(k);
+        if (it != memo.end()) return it->second;
+        if (failed) return AV::top();
+        if (depth >= kMaxDepth || steps >= kMaxSteps) { failed = true; return AV::top(); }
+        depth++;
+        Env env;
+        env[param] = AV::integer(k);
+        // `returned`/`returnVal` describe the function whose body is being
+        // evaluated. A self-call runs ANOTHER body, and an explicit `return`
+        // there must not truncate the caller: `x = f(n-1); x + 1` was
+        // treated as if the caller had returned, memoizing the callee's
+        // value as the caller's and feeding a wrong fact to the caller's
+        // caller. Save and restore the caller's state.
+        bool savedReturned = returned;
+        AV savedReturnVal = returnVal;
+        returned = false;
+        returnVal = AV::top();
+        AV v = evalExpr(fn->body.get(), env);
+        returned = savedReturned;
+        returnVal = savedReturnVal;
+        depth--;
+        if (failed) return AV::top();
+        memo[k] = v;
+        return v;
+    }
+
+    static AV boolToInt(const AV& v) {
+        if (v.kind != AV::Bool) return v;
+        return AV::integer(v.b ? 1 : 0);
+    }
+
+    AV evalExpr(ExprAST* e, Env& env) {
+        if (!e || failed) return AV::top();
+        if (++steps > kMaxSteps) { failed = true; return AV::top(); }
+        AV v = evalExprInner(e, env);
+        if (v.kind == AV::Int) {
+            auto it = local.find(e);
+            if (it == local.end()) {
+                local[e] = IntRangeFact{v.lo, v.hi};
+            } else {
+                if (v.lo < it->second.lo) it->second.lo = v.lo;
+                if (v.hi > it->second.hi) it->second.hi = v.hi;
+            }
+        } else if (v.kind == AV::Top) {
+            tainted.insert(e);
+        }
+        return v;
+    }
+
+    AV evalExprInner(ExprAST* e, Env& env) {
+        switch (e->kind) {
+            case NodeKind::Number: {
+                auto* n = static_cast<NumberExprAST*>(e);
+                if (!n->isInt) return AV::top();
+                return AV::integer(n->intValue);
+            }
+            case NodeKind::Variable: {
+                auto* v = static_cast<VariableExprAST*>(e);
+                auto it = env.find(v->name);
+                if (it == env.end()) return AV::top();
+                return it->second;
+            }
+            case NodeKind::Binary: {
+                auto* b = static_cast<BinaryExprAST*>(e);
+                AV l = boolToInt(evalExpr(b->lhs.get(), env));
+                AV r = boolToInt(evalExpr(b->rhs.get(), env));
+                if (l.kind != AV::Int || r.kind != AV::Int) return AV::top();
+                if (b->op == '+' || b->op == '-' || b->op == '*') {
+                    __int128 lo = 0, hi = 0;
+                    if (b->op == '+') {
+                        lo = (__int128)l.lo + r.lo;
+                        hi = (__int128)l.hi + r.hi;
+                    } else if (b->op == '-') {
+                        lo = (__int128)l.lo - r.hi;
+                        hi = (__int128)l.hi - r.lo;
+                    } else {
+                        __int128 p1 = (__int128)l.lo * r.lo;
+                        __int128 p2 = (__int128)l.lo * r.hi;
+                        __int128 p3 = (__int128)l.hi * r.lo;
+                        __int128 p4 = (__int128)l.hi * r.hi;
+                        __int128 mn1 = p1 < p2 ? p1 : p2;
+                        __int128 mn2 = p3 < p4 ? p3 : p4;
+                        __int128 mx1 = p1 > p2 ? p1 : p2;
+                        __int128 mx2 = p3 > p4 ? p3 : p4;
+                        lo = mn1 < mn2 ? mn1 : mn2;
+                        hi = mx1 > mx2 ? mx1 : mx2;
+                    }
+                    if (lo < INT64_MIN || hi > INT64_MAX) return AV::top();
+                    return AV::interval((int64_t)lo, (int64_t)hi);
+                }
+                if (b->op == '/' || b->op == '%') {
+                    if (l.lo == l.hi && r.lo == r.hi && r.lo != 0) {
+                        if (l.lo == INT64_MIN && r.lo == -1) return AV::top();
+                        int64_t v = (b->op == '/') ? l.lo / r.lo : l.lo % r.lo;
+                        return AV::integer(v);
+                    }
+                }
+                return AV::top();
+            }
+            case NodeKind::Compare: {
+                auto* c = static_cast<CompareExprAST*>(e);
+                AV l = boolToInt(evalExpr(c->lhs.get(), env));
+                AV r = boolToInt(evalExpr(c->rhs.get(), env));
+                if (l.kind != AV::Int || r.kind != AV::Int) return AV::top();
+                bool t = false, f = false;
+                if (c->op == "<") { t = l.hi < r.lo; f = l.lo >= r.hi; }
+                else if (c->op == "<=") { t = l.hi <= r.lo; f = l.lo > r.hi; }
+                else if (c->op == ">") { t = l.lo > r.hi; f = l.hi <= r.lo; }
+                else if (c->op == ">=") { t = l.lo >= r.hi; f = l.hi < r.lo; }
+                else if (c->op == "==") {
+                    t = (l.lo == l.hi && r.lo == r.hi && l.lo == r.lo);
+                    f = (l.hi < r.lo || r.hi < l.lo);
+                } else if (c->op == "!=") {
+                    t = (l.hi < r.lo || r.hi < l.lo);
+                    f = (l.lo == l.hi && r.lo == r.hi && l.lo == r.lo);
+                } else {
+                    return AV::top();
+                }
+                if (t) return AV::boolean(true);
+                if (f) return AV::boolean(false);
+                return AV::top();
+            }
+            case NodeKind::Call: {
+                auto* c = static_cast<CallExprAST*>(e);
+                if (c->callee != fn->name || c->args.size() != 1) {
+                    failed = true;
+                    return AV::top();
+                }
+                AV a = evalExpr(c->args[0].get(), env);
+                if (a.kind != AV::Int || a.lo != a.hi) {
+                    failed = true;
+                    return AV::top();
+                }
+                return evalFunction(a.lo);
+            }
+            case NodeKind::Assign: {
+                auto* a = static_cast<AssignExprAST*>(e);
+                // Assigning a name that is not a local (the parameter or a
+                // VarDecl in scope) writes a global. Globals are not modeled
+                // and a self-call could mutate one behind our back, so this
+                // function gets no facts.
+                if (env.find(a->varName) == env.end()) {
+                    failed = true;
+                    return AV::top();
+                }
+                AV v = evalExpr(a->rhs.get(), env);
+                env[a->varName] = v;
+                return v;
+            }
+            case NodeKind::VarDecl: {
+                auto* d = static_cast<VarDeclAST*>(e);
+                AV v = d->init ? evalExpr(d->init.get(), env) : AV::top();
+                env[d->varName] = v;
+                return v;
+            }
+            case NodeKind::Return: {
+                auto* r = static_cast<ReturnStmtAST*>(e);
+                AV v = r->value ? evalExpr(r->value.get(), env) : AV::top();
+                returned = true;
+                returnVal = v;
+                return v;
+            }
+            case NodeKind::If: {
+                auto* i = static_cast<IfStmtAST*>(e);
+                AV c = evalExpr(i->condition.get(), env);
+                if (c.kind != AV::Bool) { failed = true; return AV::top(); }
+                if (c.b) return evalExpr(i->thenBlock.get(), env);
+                if (i->elseBlock) return evalExpr(i->elseBlock.get(), env);
+                return AV::top();
+            }
+            case NodeKind::Block:
+                return evalBlock(static_cast<BlockStmtAST*>(e), env);
+            case NodeKind::While:
+            case NodeKind::Break:
+            case NodeKind::Continue:
+            case NodeKind::PyBlock:
+            case NodeKind::Match:
+            case NodeKind::Destructure:
+                failed = true;
+                return AV::top();
+            case NodeKind::String:
+            case NodeKind::Tensor:
+                // Leaves: no subexpressions and no side effects. (A tensor
+                // literal holds doubles, not AST nodes.)
+                return AV::top();
+            default:
+                // An expression the evaluator does not model. It may contain
+                // a call that mutates a local through `&x`, or an assignment
+                // in a map value, so skipping it could leave the env stale.
+                // Fail closed instead of returning TOP: the function then
+                // gets no facts at all.
+                failed = true;
+                return AV::top();
+        }
+    }
+
+    // The environment is passed by REFERENCE: a branch that the analysis
+    // proved taken may assign to a local, and the statements after the
+    // branch must see that assignment. Copying the env here was a real
+    // soundness bug -- `mut x = 0; if n > 0 { x = MAX }; x + n` was
+    // "proved" [1,1] and the check was removed, so the sum wrapped instead
+    // of trapping. Only the taken branch is ever evaluated, so mutating the
+    // caller's env is exactly right.
+    AV evalBlock(BlockStmtAST* b, Env& env) {
+        AV last = AV::top();
+        for (auto& s : b->stmts) {
+            last = evalExpr(s.get(), env);
+            if (returned || failed) break;
+        }
+        return returned ? returnVal : last;
+    }
 };
 
 // ============================================================================
@@ -6182,6 +6735,10 @@ public:
         long divZeroInserted = 0;
     };
     SafetyPolicy safety;
+    // Phase 3 / P1: bounded-range facts (filled before body emission by
+    // BoundedRangeAnalysis). A fact proves an i64 result fits, so the
+    // checked intrinsic is not needed for that expression.
+    std::unordered_map<const ExprAST*, IntRangeFact> rangeFacts;
     bool loopOpt = false;   // C1 --loop-opt: loop-friendly check attrs (off by default)
     std::unordered_map<std::string, Type> typeSubstMap;
     std::unordered_map<std::string, llvm::Function*> genericCache;
@@ -8188,6 +8745,23 @@ public:
                         };
                         if (isTimeExpr(b->lhs.get()) && isTimeExpr(b->rhs.get()))
                             return builder->CreateSub(l, r, "sub_notime");
+                    }
+                    // Phase 3 / P1: a bounded-range fact says every dynamic
+                    // evaluation of this expression yields an i64 that fits.
+                    // The mathematical result is that value, so the
+                    // operation cannot overflow and the trap is dead.
+                    // Operands are known i64 here: the f64 and mixed paths
+                    // returned above.
+                    if (l->getType()->isIntegerTy(64) && r->getType()->isIntegerTy(64)) {
+                        auto it = rangeFacts.find(b);
+                        if (it != rangeFacts.end() &&
+                            it->second.lo >= INT64_MIN && it->second.hi <= INT64_MAX) {
+                            switch (b->op) {
+                                case '+': return builder->CreateAdd(l, r, "add");
+                                case '-': return builder->CreateSub(l, r, "sub");
+                                default:  return builder->CreateMul(l, r, "mul");
+                            }
+                        }
                     }
                     llvm::Intrinsic::ID iid;
                     safety.overflowInserted++;
@@ -15565,6 +16139,18 @@ int main(int argc, char* argv[]) {
 
     bool emitLl = outputPath.size() >= 3 && outputPath.substr(outputPath.size() - 3) == ".ll";
     bool emitObj = outputPath.size() >= 2 && outputPath.substr(outputPath.size() - 2) == ".o";
+    // Phase 3 / P1: bounded range facts are only sound for a whole-program
+    // output. An object/IR artifact can be linked and called with an argument
+    // outside the analyzed call sites, and an interface/link build can add
+    // such a caller. Emit-only and interface/link builds therefore stay on
+    // the fully checked path.
+    //
+    // This bit is part of the module-cache key: the cache stores an
+    // OPTIMIZED module, so an executable's fact-elided module must never
+    // satisfy a later .o/.ll request (or vice versa).
+    bool closedWorldForRanges =
+        !checkBce && !emitLl && !emitObj && useInterfaces.empty() &&
+        linkFlags.empty() && targetTripleSpec.empty();
 
     // Phase 1: Read, lex, and parse declarations for the main file
     PROFILE_BEGIN("file_io");
@@ -15609,7 +16195,8 @@ int main(int argc, char* argv[]) {
     }
     PROFILE_END(); // iface_hash
     uint64_t sourceHash =
-        fnv1a(cacheSalt(optLevel, releaseMode, backend, argv[0], loopOpt, targetTripleSpec, debugFlag) +
+        fnv1a(cacheSalt(optLevel, releaseMode, backend, argv[0], loopOpt, targetTripleSpec, debugFlag,
+                        closedWorldForRanges) +
               std::string(1, '\0') + (gTypeCheck ? "type-check=1" : "type-check=0") +
               std::string(1, '\0') + sourceRef.str() +
               std::string(1, '\0') + ifaceFp + std::string(1, '\0') + linkFp);
@@ -16027,6 +16614,15 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // Phase 3 / P1: bounded range facts (closedWorldForRanges is computed
+    // before the cache key and is part of it).
+    if (closedWorldForRanges) {
+        PROFILE_BEGIN("range_facts");
+        BoundedRangeAnalysis rangeAnalysis(*combined, codegen.rangeFacts);
+        rangeAnalysis.run();
+        PROFILE_END();
+    }
+
     // Emit function bodies and output
     if (!codegen.emitFunctionBodies(*combined)) {
         PROFILE_END(); PROFILE_END(); PROFILE_REPORT();
@@ -16119,6 +16715,21 @@ int main(int argc, char* argv[]) {
                   << codegen.safety.boundsInserted
                   << ", overflow " << codegen.safety.overflowInserted
                   << ", div-zero " << codegen.safety.divZeroInserted << "\n";
+        // Phase 3 / P1: --check-bce is a diagnostic, so it keeps the
+        // checked path (the facts are disabled above). Report what the
+        // closed-world analysis WOULD prove, as a portable signal that the
+        // analysis ran and how much it can remove.
+        std::unordered_map<const ExprAST*, IntRangeFact> diagnosticFacts;
+        BoundedRangeAnalysis diagnosticAnalysis(*combined, diagnosticFacts);
+        diagnosticAnalysis.run();
+        long wouldElide = 0;
+        for (auto& kv : diagnosticFacts) {
+            if (!kv.first || kv.first->kind != NodeKind::Binary) continue;
+            auto* b = static_cast<const BinaryExprAST*>(kv.first);
+            if (b->op == '+' || b->op == '-' || b->op == '*') wouldElide++;
+        }
+        std::cout << "bce: bounded-range facts prove " << wouldElide
+                  << " arithmetic overflow checks safe\n";
     }
 
     // --test mode: compile & run all test_ functions via JIT, report results
