@@ -46,8 +46,8 @@ next action is. It is the first thing to read and the first thing to update.
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; **Phase 3 / P1 performance is the active work** (§4.3) |
 | last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical) |
-| in flight | **P1 performance**: the safe `sum_array` is 1.42× C (its accumulator check still blocks vectorization); `--unsafe` is at C parity. The pipeline's length fact/literal BCE are open (§4.3) |
-| next action | **Implement the pipeline's length fact + literal-index BCE** (the remaining IR-quality gap). The safe-reduction path is settled against the max-abs guard (10.7 ms vs 11.0 ms safe: not worth its complexity); a wrapping operator remains the explicit future option. Phase 2's remaining gaps (typed HIR §4.2, NLL §4.4, capability types §4.5) come after |
+| in flight | **P1 performance**: the safe `sum_array` is 1.42× C (its accumulator check still blocks vectorization); `--unsafe` is at C parity; `fib` is at parity; `primes` at the same i64 representation is within 7% of C/C++/Rust. The pipeline `-O2` consumers are done; its length fact is measured redundant for the supported subset (§4.3) |
+| next action | **Choose the next safe-performance feature**: a scoped byte-buffer type/API (the primes control measures ~2.3× on sieve-like code) before full M7 generics, or the wrapping-operator opt-in (1.45× on reductions, opt-in only). The default safety model is unchanged either way. Phase 2's remaining gaps (typed HIR §4.2, NLL §4.4, capability types §4.5) come after |
 | build | `bash build.sh` — ~3 min warm on this device (measured 2026-10-25); 12–15 min is the worst case under load. Poll at 60–120 s, never with a long sleep |
 | gates | `bash tests/v1_gate_check.sh ./flintc --full` — 32 gates (23 fast + 9 slow), ~30–35 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
@@ -429,11 +429,19 @@ compile time: the stage3 emitter `.o` went from ~3.0–3.5 s to ~3.9–4.3 s.
    10.7 ms vs 11.0 ms safe and 7.6 ms C — only ~3 %, because the guard's
    own max/abs work eats the vectorization gain. A wrapping operator is
    the explicit alternative; the guard is not worth its complexity.
-2. The pipeline's length fact + literal-index BCE. Its `-O2` consumers are
-   done (§4.7.1): the self-hosted emitter is 2.37× faster and matches the
-   C++-compiled emitter, and the fixed point is byte-identical.
-3. Re-measure: the target is "safe within 1.2× of `--unsafe`" and "integer
-   loops within 1.3× of C".
+2. The pipeline's length fact + literal-index BCE are **not** worth
+   implementing yet. With the consumers at `-O2` (§4.7.1), the pipeline's
+   literal-array IR (`for_array`) already has 0 surviving bounds and
+   overflow checks, while the C++ post-O2 IR keeps 2. The runtime-array
+   case is blocked on the pipeline's missing `flint_array_alloc/get/set`
+   builtins. Measure a surviving check before adding the fact.
+3. Re-measured (2026-10-26): `fib` is at C parity, `--unsafe sum_array` is
+   at C parity, and `primes` at the same i64 representation is within 7%
+   of C/C++/Rust. The only unmet target is the **safe checked reduction**
+   (1.42× C); every sound guard measured costs about as much as the check.
+   A wrapping operator is the explicit opt-in; the default stays checked.
+   The byte-array type is the measured safe-performance gap on sieve-like
+   code (~2.3×), not a check-elimination problem.
 
 **Verify**: `./flintc --check-bce benchmarks/fib.fl` prints
 `3 checks emitted, 1 survive O2 (2 elided)` and
@@ -815,6 +823,15 @@ same session). The default build still has the accumulator check, so it
 stays at 11.0–11.1 ms — the check, not a missing vectorizer, is the
 remaining cost. This is the second time the measurement caught a
 tooling assumption instead of a language trade-off.
+
+**Follow-up 3 (2026-10-26): the `primes` gap was an element-size gap.**
+The headline row compared Flint's `[i64]` sieve (80 MB) with C/C++/Rust
+1-byte sieves (10 MB). Same-representation control, same session, medians
+of three alternating runs: Flint **422.5 ms** vs C **399.3**, C++
+**396.6**, Rust **408.5** — within 7%. The 1-byte C sieve is **183.0 ms**.
+So the remaining `primes` gap is the missing byte-array type (roadmap
+§5.2/M7), worth ~2.3× on this workload, not a codegen or check-elimination
+defect. `tools/bench_primes_i64.sh` reproduces the control.
 
 ### 6.3 Where the remaining size lives (for §4.1's `--print-size`)
 
