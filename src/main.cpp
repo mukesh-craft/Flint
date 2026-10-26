@@ -15841,8 +15841,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "       flintc --release <input.fl> [args...]\n";
         std::cerr << "       flintc --backend <llvm|qbe> <input.fl> <output> [--link ...]\n";
         std::cerr << "\n";
-        std::cerr << "Default mode (no -o): compile & run via ORC JIT in-memory\n";
-        std::cerr << "Use -o <file> to emit a binary/object/LLVM file instead\n";
+        std::cerr << "Default: flintc <input.fl> compiles and runs in one step (ORC JIT, no artifact)\n";
+        std::cerr << "Use -o <file> to build a binary/object/LLVM file instead (never runs it)\n";
         return 1;
     }
 
@@ -15855,7 +15855,12 @@ int main(int argc, char* argv[]) {
     bool versionFlag = false;
     bool emitInterfaceMode = false;
     bool emitSignaturesMode = false;
-    bool runMode = true; // ORC JIT is the default
+    // The one-command contract: a bare `flintc main.fl` compiles and runs.
+    // `-o`/positional output requests an artifact instead and NEVER runs it;
+    // `--test` is its own runner. The flags are resolved after the parse so
+    // `-o` wins regardless of where it appears on the command line.
+    bool runMode = true; // resolved after argv parsing
+    bool outputRequested = false;
     std::vector<std::string> useInterfaces;
     int parallelThreads = 1;
     // Default to -O2 for production speed (balanced compile time vs runtime perf).
@@ -15933,7 +15938,7 @@ int main(int argc, char* argv[]) {
             libPaths.push_back(argv[++i]);
         } else if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = argv[++i];
-            runMode = false;
+            outputRequested = true; // artifact only; resolved after the loop
         } else if (arg == "--link" && i + 1 < argc) {
             linkFlags = argv[++i];
         } else if (arg == "--target" && i + 1 < argc) {
@@ -15980,7 +15985,6 @@ int main(int argc, char* argv[]) {
             // (testModeFlag also bypasses the cache-hit shortcuts below:
             // a cached binary would skip the tests silently.)
             testModeFlag = true;
-            runMode = false;
         } else if (arg == "--type-audit") {
             gTypeAudit = true;
         } else if (arg == "--no-type-check") {
@@ -16027,9 +16031,14 @@ int main(int argc, char* argv[]) {
             inputPath = arg;
         } else if (outputPath.empty() && arg[0] != '-') {
             outputPath = arg;
-            runMode = false; // positional output path implies file mode
+            outputRequested = true; // positional output path implies file mode
         }
     }
+
+    // Resolve the mode once, after every flag is known. This makes the
+    // contract order-independent: `-o` is an emit request and always wins
+    // over `--run`, and `--test` always selects the test runner.
+    runMode = runMode && !outputRequested && !testModeFlag;
 
     if (versionFlag) {
         std::cout << "flintc " << kFlintVersion << "\n";
@@ -16043,11 +16052,18 @@ int main(int argc, char* argv[]) {
             << "  flintc --emit-interface <input.fl> <out.flint.bc>\n"
             << "  flintc --emit-signatures <input.fl> <out.sig>\n"
             << "  flintc --use-interface <in.flint.bc> <input.fl> <out> [--link flags]\n\n"
-            << "Default mode (no -o) compiles and runs in-memory via the ORC JIT.\n"
-            << "With -o, the output extension picks the form: .ll = LLVM IR text,\n"
-            << ".o = object file, any other name = linked executable.\n\n"
+            << "A bare `flintc main.fl` compiles and runs in one step via the ORC\n"
+            << "JIT, with no artifact on disk. With -o, the output extension picks\n"
+            << "the form: .ll = LLVM IR text, .o = object file, any other name =\n"
+            << "linked executable. -o always builds without running, even when\n"
+            << "--run also appears.\n\n"
+            << "EXAMPLES\n"
+            << "  flintc hello.fl              compile + run; print the program's output\n"
+            << "  flintc hello.fl -o hello     build ./hello; do NOT run it\n"
+            << "  ./hello                      run the built executable\n"
+            << "  flintc hello.fl -- a b       compile + run with program arguments\n\n"
             << "OUTPUT\n"
-            << "  -o, --output <path>      Emit instead of JIT-running\n"
+            << "  -o, --output <path>      Build an artifact instead of running (never runs)\n"
             << "  --link <flags>           Extra linker flags (with -o)\n"
             << "  --emit-interface         Emit a .flint.bc program interface\n"
             << "  --emit-signatures        Write resolved fn signatures (query mode)\n"
@@ -16074,7 +16090,7 @@ int main(int argc, char* argv[]) {
             << "  --print-size-json=PATH   Write the same attribution as JSON to PATH\n"
             << "  --test                   Run test_ functions after JIT compile\n"
             << "  --dump-tokens <path>     Write the stable token dump and exit\n"
-            << "  --run                    Explicit JIT run (the default)\n"
+            << "  --run                    Explicit compile+run (the default; -o wins)\n"
             << "  --offline                Registry: cache only, fail if missing\n"
             << "  --fast                   Compat no-op (kept for flag stability)\n"
             << "  -h, --help               This text\n"
@@ -16083,7 +16099,7 @@ int main(int argc, char* argv[]) {
     }
     if (inputPath.empty()) {
         std::cerr << "usage: flintc [options] <input.fl> [-o <output>]\n";
-        std::cerr << "Default mode: compile & run via ORC JIT (no output file)\n";
+        std::cerr << "Default: compile and run in one step (ORC JIT, no output file)\n";
         return 1;
     }
 

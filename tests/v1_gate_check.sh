@@ -16,6 +16,7 @@ gate() { # $1=name $2...=command...
 }
 gate parse-golden bash tests/test_parse.sh "$FLINTC"
 gate emit-gate bash tests/test_emit.sh "$FLINTC"
+gate cli-run bash tests/test_cli_run.sh "$FLINTC"
 gate smoke bash tests/run.sh "$FLINTC"
 gate merge bash tests/test_merge.sh "$FLINTC"
 gate registry bash tests/test_registry.sh "$FLINTC"
