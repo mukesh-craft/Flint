@@ -867,7 +867,8 @@ What exists and how to run it (file lists and line counts verified
 | `tests/` runners | `run.sh` 116, `run_tutorial.sh` 18, `test_registry.sh` 43 | 177 | `bash tests/test_registry.sh` |
 | diagnostic catalogs | `docs/errors-cpp.md` (137 fixed-pattern diagnostics over 145 codes) + `docs/errors.md` (149 emitter codes) | — | `bash tests/test_errors_cpp.sh` · `bash tests/test_errors.sh` |
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | `bash tools/bench_compare.sh` |
-| `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) + 2 Rust oracle mirrors | 390 | `clang -O2` / `g++` / `python3` / `rustc` |
+| `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) + 2 Rust oracle mirrors + the iterative `fib_iter` set | 461 | `clang -O2` / `g++` / `python3` / `rustc` |
+| `benchmarks/` iterative fib | `fib_iter` in Flint/C/C++/Rust/Python, same iterative algorithm | 122 | `bash tools/bench_compare.sh fib_iter` |
 | `runtime/rust/` stdlib modules | `no_std` Rust: CSV parser, SHA-256/HMAC/AES-256-CTR/GCM (RustCrypto), SQLite wrapper over libsqlite3 | — | `bash tests/test_rust_stdlib.sh ./flintc` |
 | HTTPS | `flint_http_get`/`post` over the platform libcurl; verification always on, bodies capped at 8 MiB | — | `bash tests/test_https.sh ./flintc` |
 | `tests/rust/` FFI + oracle | 4 Rust sources, 2 Flint FFI programs; both ABI directions + 2 result oracles | — | `bash tests/test_rust_ffi.sh ./flintc` · `bash tests/test_rust_oracle.sh ./flintc` |

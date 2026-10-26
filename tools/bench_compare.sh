@@ -20,8 +20,9 @@ if [ ${#WORKLOADS[@]} -eq 0 ]; then
     WORKLOADS=(sum_array primes fib pi)
 fi
 
-# ns -> ms with one decimal
-ms() { awk -v n="$1" 'BEGIN{printf "%.1f", n/1000000}'; }
+# ns -> a readable unit: ms for >= 1 ms, us below. A 500 ns call must not
+# print as "0.0ms" just because the large workloads use milliseconds.
+fmt() { awk -v n="$1" 'BEGIN{ if (n < 1000000) printf "%.1fus", n/1000; else printf "%.1fms", n/1000000 }'; }
 
 run_flint() { # $1=workload
     local w="$1"
@@ -65,11 +66,11 @@ for w in "${WORKLOADS[@]}"; do
     f=$(run_flint "$w"); c=$(run_c "$w"); cpp=$(run_cpp "$w")
     r=$(run_rust "$w"); p=$(run_python "$w")
     printf "%-12s %12s %12s %12s %12s %12s\n" "$w" \
-        "$([ "$f" = n/a ] && echo n/a || ms "$f")ms" \
-        "$([ "$c" = n/a ] && echo n/a || ms "$c")ms" \
-        "$([ "$cpp" = n/a ] && echo n/a || ms "$cpp")ms" \
-        "$([ "$r" = n/a ] && echo n/a || ms "$r")ms" \
-        "$([ "$p" = n/a ] && echo n/a || ms "$p")ms"
+        "$([ "$f" = n/a ] && echo n/a || fmt "$f")" \
+        "$([ "$c" = n/a ] && echo n/a || fmt "$c")" \
+        "$([ "$cpp" = n/a ] && echo n/a || fmt "$cpp")" \
+        "$([ "$r" = n/a ] && echo n/a || fmt "$r")" \
+        "$([ "$p" = n/a ] && echo n/a || fmt "$p")"
 done
 echo
 echo "raw ns: $T"
