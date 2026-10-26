@@ -45,11 +45,11 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; **Phase 3 / P1 performance is the active work** (§4.3) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical); **the one-command CLI contract** (bare `flintc f.fl` compiles+runs; `-o` builds only and wins in either flag order; `tests/test_cli_run.sh` 24/24, 33 gates) |
 | in flight | **P1 performance**: the safe `sum_array` is 1.42× C (its accumulator check still blocks vectorization); `--unsafe` is at C parity; `fib` is at parity; `primes` at the same i64 representation is within 7% of C/C++/Rust. The pipeline `-O2` consumers are done; its length fact is measured redundant for the supported subset (§4.3) |
 | next action | **Choose the next safe-performance feature**: a scoped byte-buffer type/API (the primes control measures ~2.3× on sieve-like code) before full M7 generics, or the wrapping-operator opt-in (1.45× on reductions, opt-in only). The default safety model is unchanged either way. Phase 2's remaining gaps (typed HIR §4.2, NLL §4.4, capability types §4.5) come after |
 | build | `bash build.sh` — ~3 min warm on this device (measured 2026-10-25); 12–15 min is the worst case under load. Poll at 60–120 s, never with a long sleep |
-| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 32 gates (23 fast + 9 slow), ~30–35 min; run it detached and poll |
+| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 33 gates (24 fast + 9 slow), ~30–35 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
 | do not | hand-write a vectorizer (the roadmap rejects it); use `llvm.assume` for range facts instead |
 
@@ -71,9 +71,9 @@ Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
 controls and the per-workload method); this file does not repeat it.
 Reproduce with §2.3.
 
-**The v1 battery is green: 32 gates** (measured 2026-10-26; per-gate counts
+**The v1 battery is green: 33 gates** (measured 2026-10-26; per-gate counts
 in §2.2), and the standalone gates are green with it. The whole battery runs
-as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 32/32). The
+as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 33/33). The
 checker's differential is 181/181 over every `.fl` in the tree, the type
 audit reports **0 contract violations and 0 drift**, the two frontends are
 compared by the differential gate (14/14), the query-mode gate is 14/14,
@@ -137,12 +137,13 @@ with `bash tests/test_selfhost.sh A`; `test_explicit_targs.sh` fails rather
 than skipping when they are absent, and the corpus gates use them when
 `SELF_DIR` points at that directory.
 
-**The v1 battery (2026-10-26, 32 gates, all green):**
-`bash tests/v1_gate_check.sh ./flintc --full` → **32 passed, 0 failed**.
+**The v1 battery (2026-10-26, 33 gates, all green):**
+`bash tests/v1_gate_check.sh ./flintc --full` → **33 passed, 0 failed**.
 Every gate prints its own count; the counts re-measured at the 2D/2E landing:
 
-| gate | measured 2026-10-25 |
+| gate | measured |
 |---|---|
+| cli-run (new 2026-10-26) | 24/24 — bare compile+run, `-o` build-only, flag order, args, stdin, exit codes, `.ll`/`.o` emit |
 | type-check (in `--full`) | 181/181 — 12 fixtures + one differential pair per `.fl` in the whole tree |
 | type-audit (widened, in `--full`) | 156 checks passed, 16 skipped (deliberate error demos), 0 failed, 82 call facts |
 | parse-gate | 149/149 |
@@ -700,6 +701,45 @@ per-file query), not missing syntax.
 | **QBE backend** | needs an external `qbe` binary (not installed); LLVM is the default and tested |
 | **WASM** | objects are valid; there is no WASI runtime here to execute them |
 | **Nightly fuzzing** | the corpus and generator exist and replay in CI; there is no always-on runner here |
+
+### 4.11 P1 — CLI ergonomics: one command compiles and runs (2026-10-26)
+
+**Request**: a bare `flintc main.fl` must compile and run, so a user
+writes one command and sees the program's output; `-o app` must still
+build an artifact without running it; every existing JIT/AOT/IR/object/
+`--run`/`--test` mode keeps working.
+
+**State**: the C++ CLI already defaulted to ORC JIT (`runMode = true`), so
+the observable behavior existed — but it was not stated as a contract and
+had an order bug: `flintc main.fl -o app --run` ran in memory and never
+wrote `app`. The mode is now resolved once, after argv parsing: `-o` and a
+positional output always select emit-only, `--test` selects the test
+runner, and a bare invocation (or `--run`) selects compile+run. `--help`,
+the no-arg usage, and README's Running section state the contract and show
+the three commands.
+
+**Why JIT, not a temporary executable**: it is the fastest cold path and
+writes no artifact. Same-session medians, 5 alternating runs, AOT module
+cache cleared for every build (`bash tools/bench_cli_run.sh ./flintc`):
+
+| workload | `flintc f.fl` (new) | `flintc f.fl -o app && app` (old) | old/new |
+|---|---|---|---|
+| hello | **207 ms** | 502 ms | 2.43× |
+| 200M loop | **909 ms** | 1195 ms | 1.31× |
+
+A warm AOT rebuild (module-cache hit) is 127–165 ms vs JIT 100–167 ms for
+hello, so making the default pay the link cost would be a regression, not
+an optimization. The JIT path is a full compile (front end + LLVM O2) and
+then execution; it is not an interpreter.
+
+**Gate**: `tests/test_cli_run.sh` — 24 checks: bare run and no artifact,
+`-o` does not run, the built binary runs, `--run`, `-o` wins in both flag
+orders, program args after `--`, stdin, compile-failure exit + no
+artifact, runtime exit-code propagation, and `.ll`/`.o` emit-only. It is
+in the fast battery, which is now 33 gates.
+
+**Verify**: `bash tests/test_cli_run.sh ./flintc` → 24/24;
+`bash tools/bench_cli_run.sh ./flintc`.
 
 ---
 

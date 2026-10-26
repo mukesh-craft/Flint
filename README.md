@@ -22,13 +22,18 @@ pkg update && pkg install clang llvm python make bash
 cd ~/Flint
 bash build.sh
 
-# Run a Flint program (JIT mode — one command)
+# Compile and run in one command (ORC JIT; no artifact on disk)
 ./flintc examples/hello.fl
 
-# Compile to standalone executable
+# Build a standalone executable (does NOT run it)
 ./flintc examples/hello.fl -o hello
 ./hello
 ```
+
+A bare `flintc file.fl` is the one-command path: it compiles the current
+source and runs it, so the program's output appears immediately. `-o` is
+the explicit artifact path and always builds without running — even if
+`--run` also appears on the command line.
 
 New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 (`bash tests/run_tutorial.sh ./flintc` checks your answers — 8/8 green).
@@ -407,17 +412,25 @@ This compiles (all verified present after a clean build):
 
 ## Running
 
-### JIT mode (fastest iteration)
+### One command: compile + run (JIT, fastest iteration)
 ```bash
 ./flintc examples/hello.fl           # compiles + runs via ORC JIT
 ./flintc examples/comprehensive.fl   # full example
+./flintc main.fl -- arg1 arg2        # forward program arguments
 ```
 
-### AOT to executable
+The bare form always compiles the current source and then runs it in
+memory; it never reuses a stale executable. `-o` is the only switch that
+turns the run off.
+
+### AOT to executable (build only)
 ```bash
 ./flintc examples/hello.fl -o hello
 ./hello
 ```
+`-o` produces the artifact and does not execute it. The extension selects
+the form: `.ll` = LLVM IR text, `.o` = object file, anything else = linked
+executable.
 (Note: `-o` output may need `chmod +x` on some systems before running.)
 
 ### AOT to LLVM IR
