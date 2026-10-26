@@ -87,6 +87,18 @@ analyzed program:
 overflow traps (constant, dynamic, branch-assigned, and map-literal call
 sites), and the emit-mode retention.
 
+## The middle-end TargetMachine and the vectorizer
+
+The same session found a second, larger gap. `runLLVMOptimizations` built
+`PassBuilder` with no `TargetMachine`, so `TargetTransformInfo` reported no
+vector registers and LLVM's loop vectorizer declined every loop in every
+build. `opt -O2` on the identical module vectorized it. Passing a TM for
+the module's triple fixed it; `--unsafe sum_array 10M` went from 10.1 ms to
+7.49–7.88 ms against `clang -O2` 7.60–7.91 ms. The default build stays at
+11.0–11.1 ms because its accumulator check is still emitted and a checked
+reduction cannot be vectorized. The compile-time cost on the stage3 emitter
+is ~0.5–0.8 s. `tests/test_vectorize.sh` pins both directions.
+
 ## Tooling: binary size, build time, cold start
 
 ```bash

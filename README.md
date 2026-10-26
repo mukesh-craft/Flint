@@ -775,6 +775,17 @@ only whole-program executables get the facts; `.ll`, `.o`, interface,
 `--link`, `--target`, and `--check-bce` keep every check.
 `./flintc --check-bce benchmarks/fib.fl` prints the three fact counts.
 
+Note (2026-10-26): the `sum_array` row is also history. The middle-end
+pipeline built its `PassBuilder` without a `TargetMachine`, so
+`TargetTransformInfo` reported no vector registers and the loop vectorizer
+declined **every** loop; `opt -O2` on the same module vectorized it. With a
+TM for the module's triple, `--unsafe sum_array 10M` runs at
+**7.49–7.88 ms** vs `clang -O2` **7.60–7.91 ms** (C parity, same session).
+The default build is **11.0–11.1 ms**: its accumulator check is still
+emitted, and a checked reduction cannot be reassociated/vectorized. The
+safety model is unchanged; `tests/test_vectorize.sh` pins the vectorizer
+metadata, the retained check, and the exact sum.
+
 Note (2026-10-10): the `matmul` row is new — same-session, AOT Flint
 (OpenBLAS) vs naive C vs numpy 2.4.4 (`benchmarks/matmul_np.py`;
 `benchmarks/matmul.py` stays pure-Python and takes ~60 s at 500²).
