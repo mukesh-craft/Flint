@@ -66,6 +66,27 @@ timer's resolution, so treat small differences as noise; the Python gap is
 large enough to be stable. The recursive `fib.*` files stay in place and are
 still the workload used by the historical README table.
 
+## Bounded-range facts and the recursive fib
+
+The recursive `fib.*` mirrors are the workload that exposed a check-induced
+optimization loss. LLVM's accumulator-recursion transform turns
+`fib(n-1) + fib(n-2)` into a loop, but only when the addition has no
+overflow branch. The closed-world bounded-range analysis proves the sum
+fits for an executable built from the whole program, so the branch is not
+emitted and the transform fires; `fib(45)` runs at C speed (see the
+top-level README note). The proof is disabled for `.ll`, `.o`, interface,
+`--link`, and `--target` builds, which can be called from outside the
+analyzed program:
+
+```bash
+./flintc --check-bce benchmarks/fib.fl   # 3 emitted, 1 survives O2
+./flintc benchmarks/fib.fl -o fib.ll     # checked IR
+```
+
+`tests/test_range_facts.sh` is the gate: it checks the elision, the
+overflow traps (constant, dynamic, branch-assigned, and map-literal call
+sites), and the emit-mode retention.
+
 ## Tooling: binary size, build time, cold start
 
 ```bash

@@ -5762,3 +5762,75 @@ Two items are blocked on the maintainer, not on engineering:
 - The C++ generic-print bug above is an open compiler defect; it is not
   part of the pipeline's D5 gap and was deliberately not papered over.
 
+
+## 2026-10-26 — bounded range facts: `fib` at C speed, and two soundness bugs
+
+### The gap was a branch, not an instruction
+
+The user's measurement was `fib(45)` at 11.6–12.6 s against C/C++/Rust at
+8.1–8.7 s. `--unsafe` ran at 8.58–8.61 s, so the checks were the whole gap.
+The IR showed something sharper than "one extra instruction": LLVM already
+removes the `n-1`/`n-2` checks, but the `sadd.with.overflow` on
+`fib(n-1) + fib(n-2)` survived, and its branch is what stops LLVM's
+accumulator-recursion transform. The function stayed a tree of calls.
+Patching that one check to a plain `add` in the IR restored the loop and
+8.59 s; a C mirror with the same `__builtin_add_overflow` shape stayed
+tree-shaped. So a *provably safe* check can cost far more than its own
+instructions by blocking a transform.
+
+### The analysis
+
+`BoundedRangeAnalysis` (`src/main.cpp`) evaluates the whole-program call
+graph of eligible functions — one i64 parameter, i64 return, non-generic —
+at every constant call root, memoized by argument. A `[lo,hi]` fact proves
+an add/sub/mul fits, so codegen emits the plain operation. It is
+deliberately closed-world and fails closed:
+
+- loops, match/destructure, unknown value nodes, and unmodeled containers
+  abort the function's analysis;
+- a global store, a non-self call, a function value, or a name-based
+  dispatcher (`flint_thread_spawn`, `py_eval*`, a string literal naming the
+  function) rejects it;
+- self-calls must be `param - positive-constant`; other functions' calls
+  must have constant arguments;
+- facts are enabled only for whole-program executables. `.ll`, `.o`,
+  interface, `--link`, `--target`, and `--check-bce` keep every check, and
+  the mode is part of the module-cache key so an optimized executable
+  module cannot satisfy an emit-only request.
+
+`--check-bce` now prints a third line, `bce: bounded-range facts prove N
+arithmetic overflow checks safe`, from a facts-disabled diagnostic pass.
+
+### Two real soundness bugs, found by probing
+
+1. **Environment copied at a block boundary.** `evalBlock` took `Env` by
+   value, so `mut x = 0; if n > 0 { x = MAX }; x + n` was "proved" [1,1]
+   and the check was removed; the executable wrapped to INT64_MIN instead
+   of trapping. Fixed by taking `Env&` (only the proven-taken branch is
+   ever evaluated, so mutating the caller's env is correct).
+2. **`returned`/`returnVal` leaked across self-calls.** An explicit
+   `return` in the callee truncated the caller's evaluation, memoized the
+   callee's value as the caller's, and fed a wrong fact upward. Fixed by
+   saving and restoring both around `evalFunction`.
+3. **Root collection missed map literals and default arguments.** A call
+   hidden in `map {...}` was not a root, so a narrow fact from another call
+   could elide the check on the overflowing call. Fixed by indexing every
+   call site once, including map values and defaults; the index replaced a
+   per-candidate full-program walk that cost ~0.65 s on the stage3 emitter.
+
+All three are pinned by `tests/test_range_facts.sh` (19 checks): elision,
+constant/dynamic/branch/map overflow traps, emit-mode retention, and the
+bail cases. The gate also disassembles `fib` and asserts no panic branch.
+
+### Verification
+
+- Fast battery **22/22** (~2m24s) with `bounds-safety`, `unsafe-flag`, and
+  `range-facts` added to the default set; full battery run separately.
+- `fib(45)`, same session, three alternating runs: Flint 8.60/9.17/8.76 s
+  vs `clang -O2` 8.54/8.76/8.55 s. Thermal drift moves absolute times; the
+  ratio is the signal. Pre-change default was 11.6–12.6 s.
+- Safety probes: `inc(INT64_MAX)` and a recursive overflow panic with
+  `PANIC: integer overflow` (rc 134); `inc(42)` = 43; `sum_to(100)` = 5050;
+  dynamic and increasing roots keep their checks.
+- `.o`/`.ll` after an executable build keep `sadd.with.overflow` (cache
+  isolation verified); `--check-bce fib` reports 3/1/3.

@@ -764,6 +764,17 @@ for the C/C++ columns):
 `--unsafe` skips overflow + bounds checks: faster, but drops the safety
 that justifies Flint vs C. Failures and skips reported as-is, not hidden.
 
+Note (2026-10-26): the `fib(45)` default cell is history. A closed-world
+bounded-range analysis (`STATE.md` §4.3) proves the
+`fib(n-1) + fib(n-2)` overflow check safe and stops emitting it; that
+check's branch was blocking LLVM's accumulator-recursion transform, not
+just costing an instruction. Same-session AOT, three alternating runs:
+Flint **8.60–9.17 s** vs `clang -O2` **8.54–8.76 s** (within a few percent;
+the earlier-session default was 11.6–12.6 s). The safety model is unchanged:
+only whole-program executables get the facts; `.ll`, `.o`, interface,
+`--link`, `--target`, and `--check-bce` keep every check.
+`./flintc --check-bce benchmarks/fib.fl` prints the three fact counts.
+
 Note (2026-10-10): the `matmul` row is new — same-session, AOT Flint
 (OpenBLAS) vs naive C vs numpy 2.4.4 (`benchmarks/matmul_np.py`;
 `benchmarks/matmul.py` stays pure-Python and takes ~60 s at 500²).

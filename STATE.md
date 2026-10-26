@@ -44,12 +44,12 @@ next action is. It is the first thing to read and the first thing to update.
 
 | field | value |
 |---|---|
-| current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; the remaining Phase 2 work is typed HIR, full NLL regions, and capability types |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8) |
-| in flight | (none — the tree is green; the input API and the documentation authenticity pass are recorded in `memory.md`) |
-| next action | **Phase 2's remaining gaps**, in this order: typed HIR (§4.2), full NLL region inference (§4.4), capability types (§4.5). Then close D5's remaining surface (`STATE.md` §4.9.1) |
+| current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; **Phase 3 / P1 performance is the active work** (§4.3) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed) |
+| in flight | **P1 performance**: `sum_array` is 1.44× C (target 1.3×); the pipeline's `-O2` gates and its length fact/literal BCE are open (§4.3) |
+| next action | **Finish P1** in this order: extend the range facts to loop accumulators (the remaining `sum_array` gap), then the pipeline `-O2` gates, then re-measure the safe/`--unsafe` ratio. Phase 2's remaining gaps (typed HIR §4.2, NLL §4.4, capability types §4.5) come after |
 | build | `bash build.sh` — ~3 min warm on this device (measured 2026-10-25); 12–15 min is the worst case under load. Poll at 60–120 s, never with a long sleep |
-| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 28 gates (19 fast + 9 slow), ~25–30 min; run it detached and poll |
+| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 31 gates (22 fast + 9 slow), ~28–33 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
 | do not | hand-write a vectorizer (the roadmap rejects it); use `llvm.assume` for range facts instead |
 
@@ -71,14 +71,16 @@ Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
 controls and the per-workload method); this file does not repeat it.
 Reproduce with §2.3.
 
-**The v1 battery is green: 28 gates** (measured 2026-10-26; per-gate counts
+**The v1 battery is green: 31 gates** (measured 2026-10-26; per-gate counts
 in §2.2), and the standalone gates are green with it. The whole battery runs
-as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 28/28). The
+as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 31/31). The
 checker's differential is 181/181 over every `.fl` in the tree, the type
 audit reports **0 contract violations and 0 drift**, the two frontends are
 compared by the differential gate (14/14), the query-mode gate is 14/14,
 the explicit-type-argument gate is 6/6, the closure-escape gate is 7/7, the
-input gate is 8/8, and the bootstrap's fixed point is byte-identical.
+input gate is 8/8, the bounds-safety gate is 5/5, the unsafe-flag gate is
+6/6, the range-facts gate is 19/19, and the bootstrap's fixed point is
+byte-identical.
 
 ---
 
@@ -135,8 +137,8 @@ with `bash tests/test_selfhost.sh A`; `test_explicit_targs.sh` fails rather
 than skipping when they are absent, and the corpus gates use them when
 `SELF_DIR` points at that directory.
 
-**The v1 battery (2026-10-26, 28 gates, all green):**
-`bash tests/v1_gate_check.sh ./flintc --full` → **28 passed, 0 failed**.
+**The v1 battery (2026-10-26, 31 gates, all green):**
+`bash tests/v1_gate_check.sh ./flintc --full` → **31 passed, 0 failed**.
 Every gate prints its own count; the counts re-measured at the 2D/2E landing:
 
 | gate | measured 2026-10-25 |
@@ -149,6 +151,9 @@ Every gate prints its own count; the counts re-measured at the 2D/2E landing:
 | signatures | 14/14 — query-file content + determinism, the untyped fix, the no-file control, a partial overlay, a differential pair, E0284–E0289 |
 | explicit-targs (new) | 6/6 — the fixture, the mangled names, E0295–E0298 |
 | closure-escape (new) | 7/7 — five escape shapes, heap on escape, no heap when local |
+| bounds-safety (gated 2026-10-26) | 5/5 — literal OOB traps, unsafe build stamped, policy/IR counts agree |
+| unsafe-flag (gated 2026-10-26) | 6/6 — stamp, warning, fewer checks, ownership still enforced |
+| range-facts (new 2026-10-26) | 19/19 — elision, overflow traps, branch/return/map bail cases, emit-mode retention |
 | input (new) | 8/8 — values, CRLF, EOF, invalid/overflowing numbers, 1 MiB cap + drain, embedded NUL |
 | driver | 7/7 |
 | errors | 149/149 |
@@ -382,17 +387,38 @@ regions (2D.3), capability types (4.5), and the pipeline's shared semantics
 iteration that LLVM cannot remove, and their presence also blocks
 auto-vectorization (§6.1).
 
-**Do**:
-1. *Same-value bounds* (the "reslicing" technique): when a loop's bound and
-   an access's length are the same SSA value, LLVM folds the check away.
-   This is the cheapest fix and needs no new IR.
-2. *Range analysis* on HIR to remove overflow checks where provable, and
-   bounds checks where the length is known.
+**Done — bounded range facts (2026-10-26)**: `BoundedRangeAnalysis` in
+`src/main.cpp` evaluates the whole-program call graph of eligible functions
+(one i64 parameter, i64 return, non-generic) at every constant call root,
+memoized by argument. A `[lo,hi]` fact proves an `add`/`sub`/`mul` cannot
+overflow, so codegen emits the plain operation and LLVM's own transforms
+apply. The analysis is deliberately closed-world: it refuses loops, unknown
+values, global stores, non-self calls, function values, and name-based
+dispatch, and it runs only for whole-program executables — `.ll`, `.o`,
+interface, `--link`, `--target`, and `--check-bce` keep every check. The
+mode is part of the module-cache key, so an optimized executable module
+cannot satisfy an emit-only request.
+
+**Measured**: default `fib(45)` **11.6–12.6 s → 8.60–9.17 s**, against
+`clang -O2` **8.54–8.76 s** in the same session (three alternating runs).
+The check on the sum was not just an instruction: its branch blocked LLVM's
+accumulator-recursion transform (§6.2). `tests/test_range_facts.sh`
+(19 checks) pins the elision, the traps, the emit-mode retention, and every
+bail case.
+
+**Remaining**:
+1. `sum_array` is still 1.44× C. Its bounds checks are gone (2A.1), but the
+   accumulator's overflow checks still block reassociation/vectorization.
+   The 2C loop-range fact is the input; connect it to the same
+   plain-operation emission the bounded-range facts now use.
+2. The pipeline's `-O2` gates and its length fact/literal BCE.
 3. Re-measure: the target is "safe within 1.2× of `--unsafe`" and "integer
    loops within 1.3× of C".
 
-**Verify**: `./flintc --check-bce benchmarks/sum_array.fl` prints "6 checks
-emitted, 3 survive O2 (3 elided)" today; the target is fewer survivors.
+**Verify**: `./flintc --check-bce benchmarks/fib.fl` prints
+`3 checks emitted, 1 survive O2 (2 elided)` and
+`bounded-range facts prove 3 arithmetic overflow checks safe`; the linked
+`fib` has no `flint_panic` branch.
 
 **Do NOT** build a vectorizer: LLVM's own vectorizer will do the work once
 the checks are gone (§6.1). If SIMD is wanted in the stdlib, follow Go
@@ -739,6 +765,16 @@ alternative and deserves consideration.
 ("inline the array accessors" — the IR shows the fast path is already
 inlined). It is struck through in the roadmap with the measurement that
 caught it.
+
+**Follow-up (2026-10-26): the recursive `fib` gap was the same lesson with
+a twist.** LLVM already removes the two `n-1`/`n-2` checks, but the check
+on `fib(n-1) + fib(n-2)` survived, and its branch is what stopped LLVM's
+accumulator-recursion transform: the function stayed a tree of calls.
+Patching that one check to a plain `add` in the IR restored the loop and
+took `fib(45)` from ~11.6 s to ~8.6 s, matching C. A provably-safe check can
+therefore cost far more than its own instructions. `BoundedRangeAnalysis`
+(§4.3) proves the sum fits for a closed-world executable, so the check is
+not emitted; every artifact that can be called from outside keeps it.
 
 ### 6.3 Where the remaining size lives (for §4.1's `--print-size`)
 
