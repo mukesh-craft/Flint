@@ -6295,6 +6295,13 @@ public:
         add("flint_stdin", i8PtrTy, {}, false);
         add("flint_stdout", i8PtrTy, {}, false);
         add("flint_stderr", i8PtrTy, {}, false);
+        // Secure line input (runtime/runtime.c). flint_input returns a heap
+        // string owned by the caller; status is 0/1/2/3/4/5/6/7 as documented
+        // in README "Reading input". Numeric helpers parse the whole line.
+        add("flint_input", i8PtrTy, {i8PtrTy}, false);
+        add("flint_input_status", i64Ty, {}, false);
+        add("flint_input_i64", i64Ty, {i8PtrTy}, false);
+        add("flint_input_f64", llvm::Type::getDoubleTy(*ctx), {i8PtrTy}, false);
         add("flint_print", voidTy, {i8PtrTy}, false);
         add("flint_println", voidTy, {i8PtrTy}, false);
         add("flint_malloc", i8PtrTy, {i64Ty}, false);

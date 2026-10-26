@@ -31,6 +31,7 @@ gate fmt bash tests/test_fmt.sh "$FLINTC"
 gate errors bash tests/test_errors.sh
 gate explicit-targs bash tests/test_explicit_targs.sh "$FLINTC"
 gate closure-escape bash tests/test_closure_escape.sh "$FLINTC"
+gate input bash tests/test_input.sh "$FLINTC"
 gate aegis bash tests/test_aegis.sh "$FLINTC"
 gate stdlib bash tests/test_ai.sh "$FLINTC"
 # The documentation and diagnostic-catalogue gates are fast and need no

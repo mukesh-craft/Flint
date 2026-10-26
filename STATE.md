@@ -45,11 +45,11 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; the remaining Phase 2 work is typed HIR, full NLL regions, and capability types |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14) |
-| in flight | (none — the tree is green; the documentation authenticity pass is recorded in `memory.md`) |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8) |
+| in flight | (none — the tree is green; the input API and the documentation authenticity pass are recorded in `memory.md`) |
 | next action | **Phase 2's remaining gaps**, in this order: typed HIR (§4.2), full NLL region inference (§4.4), capability types (§4.5). Then close D5's remaining surface (`STATE.md` §4.9.1) |
-| build | `bash build.sh` — ~12–15 min on this device; poll at 60–120 s, never with a long sleep |
-| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 27 gates, ~25–30 min; run it detached and poll |
+| build | `bash build.sh` — ~3 min warm on this device (measured 2026-10-25); 12–15 min is the worst case under load. Poll at 60–120 s, never with a long sleep |
+| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 28 gates (19 fast + 9 slow), ~25–30 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
 | do not | hand-write a vectorizer (the roadmap rejects it); use `llvm.assume` for range facts instead |
 
@@ -71,14 +71,14 @@ Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
 controls and the per-workload method); this file does not repeat it.
 Reproduce with §2.3.
 
-**The v1 battery is green: 27 gates** (measured 2026-10-25; per-gate counts
+**The v1 battery is green: 28 gates** (measured 2026-10-26; per-gate counts
 in §2.2), and the standalone gates are green with it. The whole battery runs
-as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 27/27). The
+as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 28/28). The
 checker's differential is 181/181 over every `.fl` in the tree, the type
 audit reports **0 contract violations and 0 drift**, the two frontends are
 compared by the differential gate (14/14), the query-mode gate is 14/14,
-the explicit-type-argument gate is 6/6, the closure-escape gate is 7/7, and
-the bootstrap's fixed point is byte-identical.
+the explicit-type-argument gate is 6/6, the closure-escape gate is 7/7, the
+input gate is 8/8, and the bootstrap's fixed point is byte-identical.
 
 ---
 
@@ -92,7 +92,7 @@ cd /data/data/com.termux/files/home/Flint
 # fast syntax check (~3-8 min; the full compile is the slow part)
 timeout 500 clang++ -std=c++17 -fsyntax-only -I$(llvm-config --includedir) src/main.cpp
 
-# full build (12-15 min) — ALWAYS detached: a tool timeout kills the
+# full build (~3 min warm; 12-15 min under load) — ALWAYS detached: a tool timeout kills the
 # process group and orphans the compile (it has happened)
 (setsid nohup bash build.sh > build.log 2>&1 < /dev/null &)
 # poll:  grep -c "error:" build.log
@@ -111,12 +111,13 @@ bash tests/run.sh                  # smoke (60)
 bash tests/test_lexdiff.sh         # token contract
 bash tests/test_parse_gate.sh      # 149/149 — parser contract
 bash tests/test_fixpoint.sh        # 149/149 — self-host byte-identical
-bash tests/test_errors.sh          # 145/145 — stage3 emitter catalog
+bash tests/test_errors.sh          # 149/149 — stage3 emitter catalog
 bash tests/test_errors_cpp.sh      # 137/137 — C++ fixed-pattern catalog
 bash tests/test_differential.sh    # 14/14  — C++ vs self-host pipeline
 bash tests/test_signatures.sh      # 14/14  — query mode + pipeline overlay
 bash tests/test_explicit_targs.sh  # 6/6    — pipeline `::<T>` (2E)
 bash tests/test_closure_escape.sh  # 7/7    — escaping closures (2D)
+bash tests/test_input.sh           # 8/8    — bounded line input (flint_input)
 bash tests/test_type_check.sh      # 181/181 — checker + differential (whole tree)
 bash tests/test_type_audit.sh      # 156 checks, 16 skipped, 0 drift, 82 facts
 bash tests/test_generics.sh        # 7
@@ -134,8 +135,8 @@ with `bash tests/test_selfhost.sh A`; `test_explicit_targs.sh` fails rather
 than skipping when they are absent, and the corpus gates use them when
 `SELF_DIR` points at that directory.
 
-**The v1 battery (2026-10-25, 27 gates, all green):**
-`bash tests/v1_gate_check.sh ./flintc --full` → **27 passed, 0 failed**.
+**The v1 battery (2026-10-26, 28 gates, all green):**
+`bash tests/v1_gate_check.sh ./flintc --full` → **28 passed, 0 failed**.
 Every gate prints its own count; the counts re-measured at the 2D/2E landing:
 
 | gate | measured 2026-10-25 |
@@ -148,11 +149,12 @@ Every gate prints its own count; the counts re-measured at the 2D/2E landing:
 | signatures | 14/14 — query-file content + determinism, the untyped fix, the no-file control, a partial overlay, a differential pair, E0284–E0289 |
 | explicit-targs (new) | 6/6 — the fixture, the mangled names, E0295–E0298 |
 | closure-escape (new) | 7/7 — five escape shapes, heap on escape, no heap when local |
+| input (new) | 8/8 — values, CRLF, EOF, invalid/overflowing numbers, 1 MiB cap + drain, embedded NUL |
 | driver | 7/7 |
-| errors | 145/145 |
+| errors | 149/149 |
 | errors-cpp | 137/137 fixed patterns / 145 codes |
 | diagnostic-codes | 16/16 |
-| docs | 64 links, 16 documents, 0 duplicate paragraphs |
+| docs | 64 links, 17 indexed documents (16 live), 0 duplicate paragraphs |
 
 The gates this work did not touch (smoke, generics, no-hang, the
 Rust/AI/LSP suites, …) keep the counts they print; the pass/fail line is the
@@ -526,25 +528,24 @@ compares *program output*, not IR, so the comparison stays valid.
 **B. The LSP surface — a thin line scanner with one compiler-backed
 feature.**
 
-- `lsp/` is 1,961 lines of Rust (5 files). Its **only** use of the
-  compiler is `Command::new(flintc).arg(&path)` with **no flags**
-  (`lsp/src/diagnostics.rs:142`) → that is the compiler's **run mode**,
-  so **the editor executes the user's program on every debounced
-  keystroke** (300 ms, `lsp/src/main.rs:30`). Everything else —
-  completion, hover, definition, references, documentSymbol — is a Rust
-  line scanner over the buffer (`lsp/src/analyzer.rs:229-282`).
+- `lsp/` is 2,006 lines of Rust (5 files). Diagnostics now ask the
+  compiler for `--error-format json` (`lsp/src/diagnostics.rs`), so the
+  editor gets the compiler's real code, message, `help` and primary span;
+  it no longer runs the user's program. Completion, hover, definition,
+  references and documentSymbol are still a Rust line scanner over the
+  buffer (`lsp/src/analyzer.rs`).
 - It never uses the self-hosted pipeline, and it does not link the
   compiler as a library.
-- The concrete gaps: `::<T>` is unknown; `trait` is not even a keyword
-  (so it is not completable, and a trait contributes no symbol to the
-  outline); generics are cosmetic (the name scan stops at `<`); fn
-  values, enum variants and struct fields are not modelled; nine
-  compiler-magic builtins are missing from completion — **`print`
-  itself is not completable** (the generator only scrapes `add("…")`,
-  and `print`/`len`/`range`/`py_eval`/`fa_*` are special-cased by name);
-  codegen diagnostics lose their `L:C` and land on line 0; **an import
-  that cannot be resolved produces no diagnostic at all** (a false
-  all-clear).
+- **Fixed since the review**: the JSON path carries `L:C` (the old text
+  path lost it), and an unresolved import now produces `E9001` instead of
+  a false all-clear (the diagnostic has no span, so it lands at 1:1).
+- **Still open**: `::<T>` is unknown; `trait` is not in the scanner's
+  keyword table (so it is not completable, and a trait contributes no
+  symbol to the outline); generics are cosmetic (the name scan stops at
+  `<`); fn values, enum variants and struct fields are not modelled;
+  compiler-magic builtins are missing from completion — **`print`, `len`,
+  `range` and `py_eval` are not completable** (the generator only scrapes
+  `add("…")`, and these are special-cased by name).
 - The drift gates are green (the 30 lexer keywords and the 586 builtins
   match the compiler exactly) — so the LSP is in sync with the compiler
   *as far as it models the language*, and blind exactly where the
@@ -585,9 +586,9 @@ two competing systems (§8.3).
 
 ### 4.9 P2 — Close D5: the self-host feature gap
 
-**What**: the self-host pipeline (stage2/stage3) still lacks explicit
-`::<T>` calls, enum equality, and named function values, while the C++
-compiler has all three. Generics, traits, and the C++ compiler's resolved
+**What**: the self-host pipeline (stage2/stage3) still lacks enum
+equality and named function values, while the C++ compiler has both.
+Generics, traits, explicit `::<T>` and the C++ compiler's resolved
 signatures are now shared (2E.2-2E.6). The differential gate is green
 (14/14) but it only covers the programs both frontends can compile.
 
@@ -1020,9 +1021,9 @@ region work, not to a feature list ✓.
 
 | path | what lives there |
 |---|---|
-| `src/main.cpp` | the whole compiler (~13K lines). Key sites: `spawnLinker` (~293, the link line — §6.1), `emitCompareValues` / `createCallChecked` / `emitPrintCall` / `emitArray*Core` (the shared cores, P0-NEW-1), `emitEnumEqual` (P0-NEW-2), `inferGenericArgType` (M2c, strict), `namedFnThunk` / `namedFnValue` (named-fn-as-value), `llvmType` (array case = `{ptr,i64}`), `Type::fn_` |
-| `tests/run.sh` | the smoke suite + `check_fail` cases (48 checks) |
-| `tests/test_*.sh` | the 21 gates (§2.2) |
+| `src/main.cpp` | the whole compiler (~16K lines). Key sites: `spawnLinker` (~293, the link line — §6.1), `emitCompareValues` / `createCallChecked` / `emitPrintCall` / `emitArray*Core` (the shared cores, P0-NEW-1), `emitEnumEqual` (P0-NEW-2), `inferGenericArgType` (M2c, strict), `namedFnThunk` / `namedFnValue` (named-fn-as-value), `llvmType` (array case = `{ptr,i64}`), `Type::fn_` |
+| `tests/run.sh` | the smoke suite + `check_fail` cases (60 checks) |
+| `tests/test_*.sh` | the standalone gates; the v1 battery is 28 (§2.2) |
 | `tests_manual/` | fixtures for **new syntax** (not globbed by the self-host parse gates): `t_explicit_targs*.fl`, `t_named_fn_*.fl`, `t_generic_no_infer.fl`, and the M4 lambda fixtures |
 | `benchmarks/` | the workloads and their C/C++/Rust/Python mirrors |
 | `tools/bench_compare.sh`, `tools/bench_tooling.sh` | the harnesses (§2.3) |
@@ -1038,11 +1039,11 @@ region work, not to a feature list ✓.
 ## 8. Traps (device and process)
 
 1. **Stale `flintc`** — editing the source does not change the binary. A
-   full build takes 12–15 min; a "failing" test may be testing yesterday's
+   full build takes ~3 min warm (12–15 min under load); a "failing" test may be testing yesterday's
    compiler. Always check `ls -la flintc` against your edit time.
 2. **A tool timeout kills the process group** — never run a >8 min command
    in the foreground. Detach and poll.
-3. **The build can be OOM-killed silently** (3.6 GB RAM, a 13K-line
+3. **The build can be OOM-killed silently** (3.6 GB RAM, a 16K-line
    LLVM-heavy C++ file is hungry). If the log stops at
    "Building Flint compiler" with no error, re-run it.
 4. **`/tmp` is not writable** — use
@@ -1121,12 +1122,12 @@ the C++ compiler's *structure*:
 | the Diagnostic structure (span, code, level, labels, help, notes) | **done** — one structure, two renderings ✓ |
 | the rendered window (rustc's shape: the header, the `-->`, the gutter, the source line, the `^^^`/`---` underlines) | **done** ✓ |
 | the JSON stream (`--error-format json`, one object per line) | **done** ✓ — rustc's `--error-format json` shape ✓ |
-| the stable codes | **done** — 149 for the C++ compiler (144 + the checker's `E0290`–`E0294`), 139 for the emitter, in ONE space (no two diagnostics in the project share a code) ✓ |
+| the stable codes | **done** — 145 for the C++ compiler, 149 for the emitter, in ONE space (no two diagnostics in the project share a code) ✓ |
 | the code tables | **done** — `docs/error-codes.csv`, `docs/error-codes-pipeline.csv` ✓ |
 | the gate | **done** — `tests/test_diagnostic_codes.sh` (16 checks ✓) ✓ |
 | the suggestions (Levenshtein) | **done** — "there is a name with a similar spelling: `counter`" ✓ (rustc's wording: a statement, not a question ✓) |
 | the LSP reads the JSON | **done** — and it never fakes an all-clear ✓ |
-| the error poisoning | **not done** — the parser reports the FIRST error and stops ✓; the codegen's cascade is not suppressed ✓ |
+| the error poisoning | **done for the catalogued shapes** — the parser stops at the first error and the codegen side stops after its first error (`tests/test_one_error.sh`, 5/5, also run by CI); broader semantic-error suppression is not claimed ✓ |
 | the pipeline's SPANS | **not done** — the parser could have one ✓ (it knows the token's position) but the emitter cannot: the S-expression carries no positions ✓. Putting them in is a format change (both frontends, the goldens, the ladder) ✓ — the next step ✓ |
 | the `help:` with a suggested FIX (a span + a replacement) | **not done** — the help line suggests a NAME ✓, not a patch ✓ |
 

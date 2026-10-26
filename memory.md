@@ -5437,8 +5437,10 @@ The audit found contradictions, not just stale dates:
 - A number repeated in prose and in a table will drift; generate one from the
   other (`tools/docs_check.sh`) or delete one.
 - A cache can hide a measurement: `--print-size` prints nothing on a cache
-  hit. Use a fresh output path. The old 141 KB number survived partly
-  because the benchmark section was never re-run after the link fix.
+  hit, and the cache is keyed by source *content*, so a fresh output path or
+  an identical copy still hits. Change the source bytes (a unique comment per
+  run) to force a miss. The old 141 KB number survived partly because the
+  benchmark section was never re-run after the link fix.
 - "Count" is ambiguous. Fixed patterns, stable codes, and emitter messages
   are three different numbers; a catalog must say which one it lists.
 - A design note and a status document look alike after a few weeks. The
@@ -5544,3 +5546,219 @@ bootstrap. A gate that uses `parse.0` (explicit-targs, fmt) fails with
 not a bug. The compiler build itself was about **3 minutes** on 2026-10-25
 (06:34:08 → ~06:37 UTC, warm module cache); the earlier 12–15 minute figure
 was measured under load and is the worst case, not the norm.
+
+## 2026-10-26 — secure line input, the CQMA false-clean fixes, and the honest-docs pass
+
+This session had three jobs: finish the phase-by-phase audit of what the plan
+still has not delivered, add the language's missing line-input primitive, and
+fix the external review of `~/tools/cqma-rs` without letting any of its
+"could not finish" paths look like "found nothing". The audit result is the
+report that follows this entry; the code and the measurements are below.
+
+### Secure line input (`flint_input*`)
+
+The gap was the one every systems language has to fill: `scanf("%s")` cannot
+be bounded and leaves the rest of the line in the stream, `fgets` silently
+splits a long line into two reads, and neither says whether EOF happened or
+whether the number parsed. The new API is deliberately small:
+
+| call | result |
+|---|---|
+| `flint_input(prompt)` | one line as a heap `str`; caller frees with `flint_str_free` |
+| `flint_input_i64(prompt)` | whole line as `i64`; `0` on any error |
+| `flint_input_f64(prompt)` | whole line as `f64`; `0.0` on any error |
+| `flint_input_status()` | status of the most recent input call |
+
+Status codes: `0` ok, `1` EOF before any byte, `2` line longer than 1 MiB
+(first 1 MiB returned, rest drained), `3` read error, `4` OOM, `5` not a
+number / trailing junk, `6` out of range (`ERANGE`), `7` embedded NUL bytes
+were skipped (Flint strings are NUL-terminated). The buffer grows
+exponentially only up to the cap; every call consumes exactly one line, so a
+short buffer cannot desynchronise the next call. CRLF and a lone trailing CR
+are stripped. The numeric helpers require the *whole* line to parse: `"12abc"`
+is status 5, not `12`. A failed parse never returns a partial value.
+
+Implementation: `runtime/runtime.c` lines ~322–449, registered in
+`src/main.cpp` at ~6298–6304 next to `flint_stderr`. `tests/test_input.sh`
+is the gate (8/8: values, CRLF, EOF, invalid/overflowing numbers, the 1 MiB
+cap plus drain, embedded NUL). An ASan+UBSan harness in
+`~/.flint-tmp/input-asan/` ran normal, invalid, 1.1 MB, NUL, and CRLF inputs
+with no sanitizer report; the long-line case observed status 2 and a returned
+length of exactly 1,048,576, and the NUL case observed status 7. The README
+now has a **Reading input** section with the verified transcript
+(`Alice`/`21`/`0.5` → `hello Alice`, `42`, `0.5`; invalid i64 exits 2) and
+the contract table.
+
+Design choice worth recording: `flint_input` is total — on EOF/OOM it returns
+an empty string (or NULL only when even that allocation fails) and reports the
+reason through the status, so a caller that ignores the status can still
+print and free the result. The status is the source of truth; the return value
+is never a partial line.
+
+### The README claims, checked
+
+The syntax-section program compiles and runs (`rc=0`). Bare `len()` works for
+an array, a str and a map (`3`, `5`, `1`). All 23 explicit `flint_*` names in
+the README are registered in the compiler. So the two claims that prompted
+this pass — "we do not have a native `len()`" and "the README lists functions
+that do not exist" — are false as stated; the README was right.
+
+The verification did find one real C++ bug: a generic call's result assigned
+to an untyped binding is mis-typed. Repro:
+
+```flint
+fn idc<T>(x: T) -> T { return x }
+fn main() -> i64 {
+    print(idc("s"))     # s
+    b = idc("s")
+    print(b)            # 423738332544 (a pointer decimal), not s
+    0
+}
+```
+
+`print(idc("s"))` prints the string; `b = idc("s"); print(b)` prints the
+pointer as an integer. `memory.md` already recorded this as an older C++
+defect (the pipeline fixture deliberately does not print the result). It is
+**not fixed**; it is listed in the audit report as an open compiler bug.
+
+### The documentation-authenticity pass
+
+`REQUIREMENTS.md` still said v0.17, "Cross-compilation is not implemented.
+There is no `--target` flag", and "~7600 lines". All three were false:
+`--target` exists and is **emit-only** (it produces a target-specific `.ll`
+or `.o`; linking/running a cross-target executable and JIT are host-only and
+refused loudly), `src/main.cpp` is ~16.2K lines, and the compiler is ~1.2 MB
+on this device. The document now says v0.22.0 and links the self-host
+limitation to `COMPATIBILITY.md` D5.
+
+The README's memory-safety bullet now says "Memory safety mechanisms" and
+lists the limits instead of claiming a blanket guarantee: an escaped closure
+box is allocated with `flint_malloc` and never freed (no destructor yet),
+Aegis is a runtime backstop not a static race-freedom proof, regions and
+capabilities are future work, and FFI/`--unsafe` are outside the model. The
+**Honest gaps** bullet names the full self-host pipeline gap (one method name
+per table, partial lambda-as-value, absent enum equality, absent named
+function values) and links D5. The status date is now 2026-10-26.
+
+The gate count moved from 27 to **28** (19 fast + 9 slow) when the input gate
+was added. That number now has one home (`STATE.md` §2.2) and is repeated in
+`REQUIREMENTS.md` and the roadmap only as a pointer to that table.
+
+### CQMA: the external review's false-clean findings
+
+`~/tools/cqma-rs` is a separate Rust analyzer, not part of Flint. The review
+found that it could print a clean verdict when it had not actually finished
+checking. The fixes, in the order the review listed them:
+
+- **False clean / coverage.** Every stage now carries `files_total`,
+  `files_failed`, `truncated` and `coverage_note`. A failed file, a skipped
+  input (`--max-files`/`--exclude`), a stage that did not run, truncated
+  output, an unavailable Clang analyzer, a valgrind log without a summary,
+  a leak tracker that wrote no report, and a valgrind summary whose detail
+  was not parsed all become entries in `coverage_gaps`; `complete` is
+  `gaps.is_empty()`.
+- **Exit status.** `0` only when every requested stage completed and no
+  finding was reported; `1` when completed with findings; `2` for a
+  configuration/toolchain error; `3` when analysis is incomplete. An
+  incomplete run has `score: null`, `grade: INCOMPLETE`, and exits `3` even
+  if it also found real defects.
+- **Clang analyzer selection.** `--analyze` is Clang's driver flag; GCC's
+  `-fanalyzer` is a different engine. If `--cc`/`--cxx` is not Clang, cqma
+  looks for `clang`/`clang++`; if neither exists the stage is `unavailable`
+  and the run is incomplete. It never passes `--analyze` to GCC and calls
+  the failure clean.
+- **Leak dedup.** The key includes the allocation site and the symbolized
+  stack, not just the byte count, so two equal-sized leaks at different
+  sites stay separate; LSan's `SUMMARY` total is not double-counted when
+  per-leak findings exist.
+- **Scoring.** Operational warnings (timeouts, failed commands, truncated
+  pipes, unparsed valgrind summaries) are marked `"operational": true`,
+  stay visible, and are excluded from the defect score. A complete run with
+  zero confirmed findings is `100/CLEAN`; any confirmed finding caps the
+  score at `99`, so a large tree cannot round a real warning up to a perfect
+  score. Runtime defects keep their hard ceilings (1–2 → 69, 3+ → 49).
+- **Output cap.** Child output is retained up to 8 MiB per stream, but the
+  pipe is drained after the cap so a chatty compiler cannot deadlock; the
+  stage is marked truncated and the run incomplete.
+
+Verification: `cargo test` **10/10** (all-disabled, skipped files, failed
+stage, a coverage note with no stage note, operational warnings do not lower
+the score, incomplete has no score, a confirmed warning cannot score 100,
+same-size leaks at different sites, dedupe stack, pipe cap).
+`~/tools/cqma-tests/test_regressions.sh` **12/12**: all-disabled, max-files,
+failed analyzer, valgrind timeout, valid valgrind, and a valgrind summary
+that says `ERROR SUMMARY: 2` while the detail is unparsed (the new case;
+before the fix it exited 1 with score 100).
+
+A subtle bug found while adding that last regression: the coverage-note
+dedup condition used `coverage_note.contains(&stage.note)`, and every string
+contains `""`, so a stage with an empty note silently lost its coverage gap.
+The condition now treats an empty note as "no duplicate" and a unit test
+pins it. Lesson: **a dedup predicate must never treat the empty string as a
+match**; that is exactly how a coverage gap disappears.
+
+### CQMA on the real tree
+
+Full run (`cqma ~/Flint --cppcheck-level normal`): 42 files, 30,847 lines,
+**1,502 findings (1,501 confirmed)**, `complete=false`, `score=null`,
+`grade=INCOMPLETE`, exit 3. The gaps are real: `src/main.cpp` exceeded the
+300 s analyzer timeout (1 of 42 files) and the runtime stage refused a
+multi-translation-unit project without `--binary`/`--build-cmd`. Breakdown:
+compiler 293, cppcheck 1,180 (1,002 style / 144 warning / 27 info / 7
+performance), clang analyzer 29 (28 findings + 1 timeout). There is **no
+confirmed `error`-severity finding**.
+
+Targeted analyzer on `src/main.cpp` (`--no-compile --no-cppcheck
+--no-runtime --timeout-analyzer 900`): complete, **2 confirmed warnings**,
+score **99/A** (it was 100/A before the cap), exit 1. The two findings are
+`src/main.cpp:1339` `unix.Malloc` "Potential memory leak" in
+`ArenaAllocator` (the destructor frees every block; likely a false positive)
+and `src/main.cpp:8391` `cplusplus.NewDeleteLeaks` "Potential leak of memory
+pointed to by 'box'" (the box is an LLVM `GlobalVariable` owned by the
+module; a false positive). Artifacts: `~/Flint/.audit/cqma-fixed.*` and
+`~/Flint/.audit/cqma-main-analyzer.*`.
+
+### The battery, and the TMPDIR trap
+
+The fast battery initially failed four gates (`differential`, `signatures`,
+`driver`, `explicit-targs`) with "MISSING self binaries". The cause was not
+a compiler regression: the self-host binaries live in
+`$TMPDIR/slipstream/self`, and `$TMPDIR` had been cleaned. `bash
+tests/test_selfhost.sh A` rebuilt `lex.0`/`parse.0`/`emit.0` and printed
+`Phase A OK`; the fast battery then passed 19/19 and the full battery
+**28/28, RC=0** (2026-10-26). Counts: parse/fixpoint 149/149, type-check
+181/181, type-audit 156 checks / 16 skipped / 0 failed / 82 facts,
+differential 14/14, explicit-targs 6/6, closure-escape 7/7, input 8/8,
+errors 149/149, errors-cpp 137/137, diagnostic-codes 16/16, docs 66 links /
+17 indexed / 16 live, LSP 31/31 protocol + 5/5 model (590 builtins, 30
+keywords).
+
+**Lesson:** a gate whose inputs live under `$TMPDIR` is not reproducible
+after a cleanup; the "MISSING self binaries" message is the diagnostic, not
+a compiler bug. Rebuild Phase A before believing a red differential gate.
+
+### What this session did NOT close
+
+The phase-by-phase list is in the report delivered with this session; the
+short version is: typed HIR, full NLL regions, an escaped-closure
+destructor, per-thread arenas, capability types, range analysis/BCE beyond
+the length and loop-range facts, `T?`, associated types/`dyn`/operator
+overloading/const generics/async, the compiler-backed LSP and
+rename/incremental analysis, the package manager/registry/lockfile/signing,
+`@domain`, the Phase 0 dashboard/history and extra workloads, M7 `[T]`,
+B8 type-level generic enums, diagnostic patches (`help:` names a fix but
+does not emit one), pipeline spans, per-file incremental invalidation,
+native `.c` import, a freestanding build, `unsafe {}` source blocks, the
+C-subset transpiler, FFI contract checking, and the pipeline's `-O2` gates
+plus its length fact/literal BCE.
+
+Two items are blocked on the maintainer, not on engineering:
+
+- `tools/docs_check.sh` reports four failures because `benchmarks/fib.fl`
+  was deleted (and `benchmarks/fib.py` rewritten) in the working tree. The
+  README Testing table still counts the old workload set. `tests/test_docs.sh`
+  is green; the numbers should be reconciled only after the maintainer
+  decides whether `fib.fl` is gone for good.
+- The C++ generic-print bug above is an open compiler defect; it is not
+  part of the pipeline's D5 gap and was deliberately not papered over.
+

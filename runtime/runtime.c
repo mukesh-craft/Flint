@@ -319,6 +319,131 @@ void* flint_stdin(void) { return stdin; }
 void* flint_stdout(void) { return stdout; }
 void* flint_stderr(void) { return stderr; }
 
+// ---- Secure line input (flint_input_*) ---------------------------------
+//
+// A small, bounded replacement for scanf("%s")/fgets: it always consumes one
+// whole line, never over-reads, never allocates without a cap, and reports
+// what happened through flint_input_status() instead of guessing.
+//
+// Status codes (reset by every flint_input* call):
+//   0  ok
+//   1  end of input (EOF before any byte)
+//   2  line too long: kept the first FLINT_INPUT_MAX bytes, drained the rest
+//   3  read error (ferror)
+//   4  out of memory
+//   5  not a number (or trailing junk)
+//   6  number out of range (ERANGE)
+//   7  embedded NUL byte(s) were skipped (Flint strings are NUL-terminated)
+#define FLINT_INPUT_MAX (1024 * 1024)
+static int64_t g_flint_input_status = 0;
+
+int64_t flint_input_status(void) { return g_flint_input_status; }
+
+// Read exactly one line from stdin into a heap string. The returned buffer is
+// always NUL-terminated when non-NULL; the caller owns it (flint_str_free).
+static char* flint_input_read_line(int64_t* status) {
+    size_t cap = 256, len = 0;
+    char* out = (char*)malloc(cap);
+    if (!out) { *status = 4; return NULL; }
+    int too_long = 0, bad_nul = 0, read_error = 0, saw_any = 0;
+
+    for (;;) {
+        int c = fgetc(stdin);
+        if (c == EOF) {
+            if (ferror(stdin)) read_error = 1;
+            break;
+        }
+        saw_any = 1;
+        if (c == '\n') break;
+        if (c == '\0') { bad_nul = 1; continue; }
+        if (too_long) continue;              // drain the rest of the line
+        if (len >= FLINT_INPUT_MAX) { too_long = 1; continue; }
+        if (len + 1 >= cap) {
+            size_t ncap = cap * 2;
+            if (ncap > (size_t)FLINT_INPUT_MAX + 1) ncap = (size_t)FLINT_INPUT_MAX + 1;
+            if (ncap <= cap) { too_long = 1; continue; }
+            char* grown = (char*)realloc(out, ncap);
+            if (!grown) { free(out); *status = 4; return NULL; }
+            out = grown;
+            cap = ncap;
+        }
+        out[len++] = (char)c;
+    }
+
+    // CRLF input (Windows pipes, telnet) reads as "...\r"; a lone trailing CR
+    // is stripped too, because that is what every line-input API means.
+    if (len > 0 && out[len - 1] == '\r') len--;
+    out[len] = '\0';
+
+    if (read_error) *status = 3;
+    else if (too_long) *status = 2;
+    else if (bad_nul) *status = 7;
+    else if (!saw_any) *status = 1;
+    else *status = 0;
+    return out;
+}
+
+char* flint_input(const char* prompt) {
+    if (prompt) {
+        fputs(prompt, stdout);
+        fflush(stdout);
+    }
+    int64_t st = 0;
+    char* line = flint_input_read_line(&st);
+    g_flint_input_status = st;
+    if (!line) {
+        // Keep the return type total: callers that ignore the status can
+        // still print/free the result instead of dereferencing NULL.
+        char* empty = (char*)malloc(1);
+        if (empty) empty[0] = '\0';
+        else g_flint_input_status = 4;
+        return empty;
+    }
+    return line;
+}
+
+static int flint_input_ws(int c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+}
+
+int64_t flint_input_i64(const char* prompt) {
+    char* line = flint_input(prompt);
+    if (!line) return 0;
+    if (g_flint_input_status != 0) { free(line); return 0; }
+
+    char* p = line;
+    while (flint_input_ws((unsigned char)*p)) p++;
+    errno = 0;
+    char* end = NULL;
+    long long value = strtoll(p, &end, 10);
+    while (end && flint_input_ws((unsigned char)*end)) end++;
+    if (end == p || !end || *end != '\0') g_flint_input_status = 5;
+    else if (errno == ERANGE) g_flint_input_status = 6;
+    free(line);
+    if (g_flint_input_status != 0) return 0;
+    return (int64_t)value;
+}
+
+double flint_input_f64(const char* prompt) {
+    char* line = flint_input(prompt);
+    if (!line) return 0.0;
+    if (g_flint_input_status != 0) { free(line); return 0.0; }
+
+    char* p = line;
+    while (flint_input_ws((unsigned char)*p)) p++;
+    errno = 0;
+    char* end = NULL;
+    double value = strtod(p, &end);
+    while (end && flint_input_ws((unsigned char)*end)) end++;
+    if (end == p || !end || *end != '\0') g_flint_input_status = 5;
+    else if (errno == ERANGE) g_flint_input_status = 6;
+    else if (!isfinite(value)) g_flint_input_status = 5;
+    free(line);
+    if (g_flint_input_status != 0) return 0.0;
+    return value;
+}
+
+
 // Safe print using write() with file descriptors (avoids FILE* pointer issues)
 void flint_print(const char* s) {
     if (!s) return;
