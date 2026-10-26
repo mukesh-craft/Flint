@@ -5879,3 +5879,40 @@ model; it is recorded rather than hidden.
 carries `llvm.loop.isvectorized`, the default build still carries
 `sadd.with.overflow`, and the unsafe sum is exact. The fast battery is
 23/23 with it; the full battery is run separately.
+
+### The pipeline's consumers were compiling at -O0
+
+The surface review (§4.7.1) found that the C++ compiler runs LLVM O2
+in-process, while the self-hosted pipeline writes text IR and every
+consumer compiled it with plain `clang` — **-O0**. The self-hosted
+`driver/flintc.fl` did the same, so a program built by the pipeline was
+unoptimized even though the same IR optimizes better than the C++ post-O2
+IR (50,944 B vs 62,432 B linked).
+
+Fixed 2026-10-26: `tests/test_differential.sh`, `tests/test_selfhost.sh`,
+`tests/test_emit_stage3.sh` and `driver/flintc.fl` now pass `-O2`. The
+differential compiles both sides at `-O2` (the C++ side's IR is already
+post-O2, so the comparison is now symmetric at the machine-code level).
+
+Measured, same session, on the self IR (`emit_self.ll`):
+
+| emitter build | time on the merged 331-form sexp |
+|---|---|
+| pipeline IR, `clang` (-O0) | 0.452 / 0.454 / 0.450 s |
+| pipeline IR, `clang -O2` | 0.191 / 0.190 / 0.191 s |
+| C++-compiled `emit.0` | 0.193 / 0.193 / 0.195 s |
+
+So the pipeline-compiled emitter is **2.37× faster** and matches the
+C++-compiled one. The two emitters produce **byte-identical IR**, and the
+binary shrinks 280,192 → 252,632 B. A pipeline-built 5M-iteration loop
+goes from 0.096–0.127 s to 0.059–0.068 s (~1.7×) with the same output;
+its binary shrinks 65,304 → 52,440 B. The loop gains less than the
+emitter because its overflow/div guards block vectorization — the same
+semantic cost recorded in §4.3.
+
+Correctness: differential 14/14 (30 s → 42 s, the price of optimizing 28
+small binaries), ladder 21/21, driver 6/6, self-host Phase B/C green with
+the fixed point **byte-identical** under `-O2`.
+
+The next IR-quality gap is the pipeline's array length fact and
+literal-index BCE, not the optimizer level.

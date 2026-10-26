@@ -28,7 +28,7 @@ while read -r want name code; do
   if ! llvm-as "$TMPD/$base.ll" -o "$TMPD/$base.bc" 2>/dev/null; then echo "FAIL $name (llvm-as)"; fail=$((fail+1)); continue; fi
   if ! opt -passes=verify "$TMPD/$base.bc" -o /dev/null 2>/dev/null; then echo "FAIL $name (verify)"; fail=$((fail+1)); continue; fi
   # 4. link + 5. run
-  if ! clang "$TMPD/$base.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/$base" 2>/dev/null; then echo "FAIL $name (clang)"; fail=$((fail+1)); continue; fi
+  if ! clang -O2 "$TMPD/$base.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/$base" 2>/dev/null; then echo "FAIL $name (clang)"; fail=$((fail+1)); continue; fi
   "$TMPD/$base" > /dev/null 2>&1
   rc=$?
   if [ "$rc" -eq "$code" ]; then pass=$((pass+1));

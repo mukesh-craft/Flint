@@ -45,9 +45,9 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; **Phase 3 / P1 performance is the active work** (§4.3) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity) |
-| in flight | **P1 performance**: the safe `sum_array` is 1.42× C (its accumulator check still blocks vectorization); `--unsafe` is at C parity. The pipeline's `-O2` gates and its length fact/literal BCE are open (§4.3) |
-| next action | **Decide the safe-reduction path**: the measured max-abs guard is 10.7 ms vs 11.0 ms safe / 7.6 ms C; a wrapping operator is the alternative. Then the pipeline `-O2` gates. Phase 2's remaining gaps (typed HIR §4.2, NLL §4.4, capability types §4.5) come after |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical) |
+| in flight | **P1 performance**: the safe `sum_array` is 1.42× C (its accumulator check still blocks vectorization); `--unsafe` is at C parity. The pipeline's length fact/literal BCE are open (§4.3) |
+| next action | **Implement the pipeline's length fact + literal-index BCE** (the remaining IR-quality gap). The safe-reduction path is settled against the max-abs guard (10.7 ms vs 11.0 ms safe: not worth its complexity); a wrapping operator remains the explicit future option. Phase 2's remaining gaps (typed HIR §4.2, NLL §4.4, capability types §4.5) come after |
 | build | `bash build.sh` — ~3 min warm on this device (measured 2026-10-25); 12–15 min is the worst case under load. Poll at 60–120 s, never with a long sleep |
 | gates | `bash tests/v1_gate_check.sh ./flintc --full` — 32 gates (23 fast + 9 slow), ~30–35 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
@@ -429,7 +429,9 @@ compile time: the stage3 emitter `.o` went from ~3.0–3.5 s to ~3.9–4.3 s.
    10.7 ms vs 11.0 ms safe and 7.6 ms C — only ~3 %, because the guard's
    own max/abs work eats the vectorization gain. A wrapping operator is
    the explicit alternative; the guard is not worth its complexity.
-2. The pipeline's `-O2` gates and its length fact/literal BCE.
+2. The pipeline's length fact + literal-index BCE. Its `-O2` consumers are
+   done (§4.7.1): the self-hosted emitter is 2.37× faster and matches the
+   C++-compiled emitter, and the fixed point is byte-identical.
 3. Re-measure: the target is "safe within 1.2× of `--unsafe`" and "integer
    loops within 1.3× of C".
 
@@ -545,7 +547,7 @@ optimize either".**
 | | C++ compiler | the pipeline |
 |---|---|---|
 | runs an optimizer | **yes** — LLVM O2 in-process (`src/main.cpp:766-782`, called at `:14517`) | **no** — it writes text IR |
-| who optimizes the pipeline's IR | — | the consumer: every gate compiles it with plain `clang` = **-O0** (`tests/test_differential.sh:67`, `tests/test_selfhost.sh:97`, `tests/test_emit_stage3.sh:28`) |
+| who optimizes the pipeline's IR | — | the consumer. Since 2026-10-26 every gate, the self-host bootstrap and `driver/flintc.fl` compile it with `clang -O2`; before that, plain `clang` = **-O0** (`tests/test_differential.sh:67`, `tests/test_selfhost.sh:97`, `tests/test_emit_stage3.sh:28`) |
 | `--opt-level` | maps to `CodeGenOptLevel` only (`:13905-13915`); the IR pipeline is always O2 | none |
 | `--fast` | an explicit **no-op** (`:13868-13872`) | none |
 | the array length fact | yes (`:8120-8156`) → the bounds check compares against a *constant* | no → it compares against the length loaded from memory (`stage3/emitter.fl:2026-2029`) |
@@ -562,12 +564,19 @@ normally compiled at **-O0** — the same `.ll` at `-O2` is 50,944 B
 linked against the C++ post-O2 IR's 62,432 B, i.e. **the pipeline's IR
 optimizes BETTER once something optimizes it**.
 
-**The cheapest, highest-value fix is not in the compiler at all:** compile
-the pipeline's `.ll` with `-O2` in the differential gate and the
-self-host gate, and the two frontends become comparable *today*. That is
-a measurement question first: does the pipeline's IR survive `opt` and
-produce the same behaviour? (It must — the IR is the IR.) The gate
-compares *program output*, not IR, so the comparison stays valid.
+**The cheapest, highest-value fix was not in the compiler at all — and it
+is done (2026-10-26):** the differential gate, the self-host bootstrap,
+the stage3 ladder and `driver/flintc.fl` now compile the pipeline's `.ll`
+with `-O2` (the driver previously linked it at `-O0`). Measured on the
+same self IR: the pipeline-compiled emitter runs **0.452 s → 0.191 s
+(2.37×)**, matching the C++-compiled `emit.0` at 0.193 s, and emits
+byte-identical IR; a pipeline-built 5M-iteration loop runs **0.096–0.127 s
+→ 0.059–0.068 s** with the same output and a 65 KB → 52 KB binary. The
+differential is 14/14, the ladder 21/21, the driver 6/6, and the
+self-host fixed point is byte-identical under `-O2`. The gates compare
+program output, not IR, so the comparison stays valid; the compile-time
+cost is visible in the differential gate (30 s → 42 s), which is the
+price of actually optimizing 28 small binaries.
 
 **B. The LSP surface — a thin line scanner with one compiler-backed
 feature.**
@@ -597,9 +606,10 @@ feature.**
 
 **The ordering that follows from the two reviews** (the cheapest first):
 
-1. **Compile the pipeline's IR with `-O2` in the gates** (a one-line
-   change per gate) and measure. It removes the largest *measured*
-   performance difference between the frontends, and it costs nothing.
+1. **Done (2026-10-26): compile the pipeline's IR with `-O2`** in the
+   gates and the driver, and measure. It removed the largest *measured*
+   performance difference between the frontends (2.37× on the
+   pipeline-compiled emitter; 1.7× on a pipeline-built loop).
 2. **The pipeline's length fact + literal-index BCE** (the C++ compiler
    has both; the emitter has the tables to do it: `ENFCode`, the array
    length in `{ptr,i64}`).
