@@ -1,8 +1,15 @@
 # Flint Compiler — Complete Project Memory
 
-**Last updated:** 2026-10-25
+**Last updated:** 2026-10-27
 **Repository:** https://github.com/shell-bay/Flint
 **Branch:** main
+
+> **Start here for the queue (2026-10-27):** the single ordered backlog is
+> "2026-10-27 — the ordered backlog" near the end of this file. The global
+> order is PERF -> SAFE -> LANG -> PORT -> TOOL -> ECO -> DOMAIN -> DOC ->
+> LONG; "finish the <category> update" means do that category in ID order,
+> skip blocked rows, then continue to the next category. `STATE.md` §0.1 is
+> the live position.
 
 > **File-rename note (2026-10-21, Phase 2E):** the self-host pipeline files
 > were renamed `stage1/flint_lex.fl` → `stage1/lexer.fl`,
@@ -5949,3 +5956,353 @@ C++ post-O2 IR keeps 2. So the planned pipeline length fact/literal BCE
 is redundant for the subset the pipeline can compile; the runtime-array
 case is blocked on the pipeline's missing array builtins. Do not add the
 fact without a surviving check to remove.
+
+---
+
+## 2026-10-27 — the ordered backlog
+
+**Why this exists.** Unfinished work is described in a dozen places
+(`STATE.md` §4, `ROADMAP.md` Phases G–J, `docs/LANGUAGE-ROADMAP.md`
+Phases 0–10, `docs/IMPROVEMENT-PLAN.md`, `docs/tiers.md`,
+`COMPATIBILITY.md` D5, `REQUIREMENTS.md`). This section is the single
+ordered queue. It does not replace those documents: every row cites its
+source, and the source keeps the design detail. A row is finished only
+when its **gate** passes and the commit is on the branch.
+
+### How to use it
+
+1. Read `STATE.md` §0.1 first (build/gate recipes, current position).
+2. Pick the first `ready` row in the global order below.
+3. When the user says **"finish the <category> update"**, do that
+   category's rows in ID order, skipping `blocked` / `needs decision`
+   rows. When the category is exhausted, continue with the next category
+   in the global order **without asking** — that is what "and the updates
+   below it" means. Stop only when (a) a row is blocked and no ready row
+   remains in the category, (b) a gate fails and cannot be fixed in the
+   same step, or (c) a decision is genuinely the maintainer's.
+4. Every row is one commit unless marked *large*: gate green, a
+   `CHANGELOG.md` entry if user-visible, and the status updated here.
+5. A row is `done` only when its gate command passes from a clean tree.
+   "Code written" is not done.
+
+**Status vocabulary:** `ready` = can start now; `blocked: <reason>` =
+needs something outside the compiler; `needs decision` = maintainer call;
+`done` = gate green + commit.
+
+**Global order (the default when no category is named):**
+
+```
+PERF -> SAFE -> LANG -> PORT -> TOOL -> ECO -> DOMAIN -> DOC -> LONG
+```
+
+Rationale: measure first (PERF owns the measurement infrastructure), then
+soundness (SAFE), then language surface (LANG), then reach (PORT), then
+the developer surface (TOOL), then distribution (ECO), then the
+differentiator (DOMAIN), then the record (DOC), then the long bets
+(LONG). Blocked rows are skipped, never silently reordered.
+
+**Command mapping (the contract):**
+
+| the user says | do, in this order | then continue with |
+|---|---|---|
+| "finish the performance update" | PERF-1 … PERF-16, skipping blocked | SAFE-1 … |
+| "finish the safety update" | SAFE-1 … SAFE-11, skipping blocked | LANG-1 … |
+| "finish the language update" | LANG-1 … LANG-13, skipping blocked | PORT-1 … |
+| "finish the portability update" | PORT-1 … PORT-7, skipping blocked | TOOL-1 … |
+| "finish the tooling update" | TOOL-1 … TOOL-14, skipping blocked | ECO-1 … |
+| "finish the ecosystem update" | ECO-1 … ECO-6, skipping blocked | DOMAIN-1 |
+| "finish the domain update" | DOMAIN-1 | DOC-1 … |
+| "finish the docs update" | DOC-1 … DOC-5, skipping blocked | LONG-1 … |
+| "finish the long bets" | LONG-1 … LONG-4 | — |
+| "finish the next item" | first ready row in global order | — |
+| "finish everything" | global order, pausing at each blocked/decision row | — |
+
+A category request never crosses a `needs decision` row silently: report
+it, do the next ready row in the same category, and leave the decision in
+the table.
+
+**Phase map** (the roadmap phase that owns each row):
+
+| roadmap phase | rows |
+|---|---|
+| Phase 0 — measurement | PERF-6, PERF-7, PERF-8 |
+| Phase 1 — recover regressions | PERF-3, PERF-4, PORT-1 … PORT-7 |
+| Phase 2 — compiler unification | SAFE-1, SAFE-8, LANG-9, LANG-10, LANG-11 |
+| Phase 3 — static safety | SAFE-2 … SAFE-7, SAFE-10, SAFE-11 |
+| Phase 4 — type system | LANG-1 … LANG-7, LANG-13 |
+| Phase 5 — optimization | PERF-1, PERF-2, PERF-9 … PERF-12, PERF-14 … PERF-16 |
+| Phase 6 — binary size | PERF-3, PERF-4, PERF-5 |
+| Phase 7 — LSP/tooling | TOOL-1 … TOOL-5, TOOL-9 … TOOL-14 |
+| Phase 8 — package ecosystem | ECO-1 … ECO-5 |
+| Phase 9 — domain-aware compilation | DOMAIN-1 |
+| Phase 10 — differentiation | LONG-1 … LONG-4 |
+| release / hygiene | DOC-1 … DOC-5, TOOL-6, TOOL-7 |
+
+### Already done — do not redo
+
+Several docs still call these open. Verified in the tree on 2026-10-27;
+where a doc disagrees, the doc is stale and DOC-1 fixes it.
+
+- 38-gate battery (29 fast + 9 slow), `tests/v1_gate_check.sh`.
+- High-level `flint run` / `flint build` driver (`f585eb2`), 78 checks.
+- CQMA analyzer moved in-tree (`284e321`), 12/12 regressions.
+- Warning-free LLVM 21 build (`b7f096d`), 0 warnings.
+- `AegisChecker` restored (`tests/test_aegis.sh` 16/16); `BorrowChecker`
+  covers all node kinds and the loop fixpoint.
+- PGO / ThinLTO opt-in recipes in `build.sh`; cold panic attributes in
+  `runtime/runtime.c`; `LICENSE` exists.
+- Date/time parse and format (`flint_time_parse`, `flint_time_format`).
+- `--target` emits `.ll` / `.o` with the target's canonical triple and
+  datalayout (`tests/test_target.sh`).
+- `bytes` type, native string methods, `W0001`/`W0002` unused warnings,
+  bounded-range facts, middle-end `TargetMachine`, pipeline `-O2`
+  consumers, escaping closures, secure line input.
+- `verifyFunction` gate in codegen (the old "verifyModule gate" item).
+
+---
+
+### PERF — performance update
+
+Phase 0/1/5/6. **Category exit:** safe integer loops within 1.3× of C,
+the dashboard reports every commit, hello-world within 5 % of C's
+stripped size, the monomorphization share is measured, and the PGO /
+allocator decisions are recorded (keep or revert, with numbers).
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| PERF-1 | Wrapping-operator opt-in (`+%` / `-%` / `*%`, exact syntax a design choice) — the only sound route to a vectorized checked reduction; measured 1.45× on reductions. Default stays checked. [STATE §4.3; IMPROVEMENT-PLAN Tier 2 #8] | 5 | ready | — | new `tests/test_wrapping.sh`: opted-in `sum_array` ≤1.05× C, default IR unchanged, overflow still traps by default |
+| PERF-2 | Native `split()` plus the hot string builtins. `flint_str_split` is already in the pointer-returning builtin set but has no runtime implementation — a latent gap. Inline `flint_str_length` / `char_at` / `substring` where measured. [IMPROVEMENT-PLAN Tier 2 #6] | 5 | ready | — | `flint_str_split` runs; `tests/test_string_methods.sh` extended; the hot string loop IR has no opaque call |
+| PERF-3 | Split `flint_std.o` (~880 KB monolithic) into one object per subsystem so `--gc-sections` can drop whole subsystems. [LANGUAGE-ROADMAP §24; Phase 1] | 1, 6 | ready | — | `flint_std_*.o` set; hello artifact not larger than today's 8,088 B; `--print-size` attributes each subsystem; `tests/test_print_size.sh` 11/11 |
+| PERF-4 | Profile-sized / lazy arenas: 48 MB + 16 MB + 4 MB + 1 MB reserved in `.bss`. Add a `tiny` profile without changing the default. [LANGUAGE-ROADMAP §24; Phase 1/6] | 1, 6 | ready | — | `tiny` hello runs with `.bss` < 1 MB; default unchanged; `--print-size` reports the profile; gate |
+| PERF-5 | Monomorphization share in `--print-size` (twiggy's `monos` idea) — the one size contributor still unmeasurable. [STATE §4.1; LANGUAGE-ROADMAP §24] | 6 | ready | — | `--print-size` and `--print-size-json` report duplicated generic bytes; `tests/test_print_size.sh` extended |
+| PERF-6 | Per-commit benchmark history plus a dashboard page (runtime, compile time, RSS, binary size, checks emitted/elided). [LANGUAGE-ROADMAP §21; Phase 0] | 0 | ready | — | `tools/bench_gate.sh` appends JSONL; a renderer produces the page; `tests/test_bench_history.sh` |
+| PERF-7 | Per-runner baselines so the measurement CI job can become required. [LANGUAGE-ROADMAP §21.2; Phase 0] | 0 | ready | PERF-6 | a baseline recorded on the CI runner; the measurement job is required, not advisory |
+| PERF-8 | Workload coverage: allocation, strings, collections, channels/threads, networking, and one realistic application, each with a C/Rust mirror. [LANGUAGE-ROADMAP §21.1; Phase 0] | 0 | ready | PERF-6 | six workloads with baselines; the dashboard shows all of them |
+| PERF-9 | Measure PGO and ThinLTO on the compiler; keep only a ≥5 % win. The opt-in recipes already exist in `build.sh`. [ROADMAP J-C3] | 5 | ready | — | compile-time corpus before/after; keep or revert recorded; default unchanged unless it wins |
+| PERF-10 | Allocator A/B (arena vs the current path); kill if <5 % on peak RSS or runtime; never a default switch without numbers. [ROADMAP J-C3] | 5 | ready | — | measured A/B table; keep or revert; peak RSS < 3.6 GB on Termux |
+| PERF-11 | Interface-cache remainder plus process-init timing (the open half of J-B3). [ROADMAP J-B3] | 5 | ready | — | hit rate and init time logged; no cold-build slowdown; 38 gates green |
+| PERF-12 | CGU auto-tune. [ROADMAP J non-goal] | 5 | blocked: needs PERF-11 data and the CGU code is absent | PERF-11 | data first; re-implement only if it beats the current split |
+| PERF-13 | BOLT. [ROADMAP J-C3] | 5 | blocked: no `llvm-bolt` on this device | — | measured on a host that has it; never shipped as default |
+| PERF-14 | TPDE-LLVM spike: evaluate it as a drop-in for `addPassesToEmitFile` (claimed 13× over LLVM -O0, ±9 % code quality). Timeboxed. [ROADMAP H3] | 5 | ready | — | reject if <10 % total compile-time win or any codegen regression; record the number |
+| PERF-15 | LRU eviction for the module/function cache (today it grows without a size policy). [ROADMAP F3] | 5 | ready | — | a size cap evicts least-recently-used entries; `tests/test_cache.sh` extended; a warm rebuild stays fast |
+| PERF-16 | Parallel function-body emission (G3e). Deferred because single-pass emit mode makes per-thread parsers impractical. [ROADMAP G3e] | 5 | blocked: needs an AST or per-thread parser design | — | a design decision first; then 2× on multicore or reject with numbers |
+
+---
+
+### SAFE — correctness / safety update
+
+Phase 2/3. **Category exit:** the safe build is within 1.2× of `--unsafe`
+on the suite, a data race in a test program is a compile error, escaped
+closure boxes are freed, and D5 is closed.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| SAFE-1 | Typed HIR: introduce HIR/MIR alongside the current path and migrate codegen to consume it incrementally. The precondition for range analysis, escape analysis, capabilities, and the LSP. *Large.* [STATE §4.2; LANGUAGE-ROADMAP §13.3] | 2 | ready | — | codegen consumes HIR; 181/181 type-audit corpus and 14/14 pipeline differential; 0 drift / 0 contract violations; `--emit-hir` dump; no behavior change |
+| SAFE-2 | Full NLL region inference from the CFG (the current escape analysis is intraprocedural and syntactic, not a region solver). [STATE §4.4; Phase 3] | 3 | ready | SAFE-1 | conditional-borrow corpus accepted/rejected correctly; no false rejects over the 181-file corpus |
+| SAFE-3 | Free an escaped closure box. There is no closure destructor, so a loop that creates escaping closures grows the heap. [STATE §4.4] | 3 | ready | — | loop creating escaping closures has bounded RSS; IR shows the free; `tests/test_closure_escape.sh` extended |
+| SAFE-4 | Capability markers (Send/Sync-like) on leases plus a check where a value crosses a thread boundary. [STATE §4.5; Phase 3] | 3 | ready | — | a data-race test is a compile error; valid parallel code still compiles |
+| SAFE-5 | Typed channels as the safe way to share mutable state. [STATE §4.5] | 3 | ready | SAFE-4 | send/recv type-checked; a race through a channel is rejected |
+| SAFE-6 | Safe parallel loops as reductions with an explicit result channel and capability-checked closures (capture-free builtins, not syntax sugar). [STATE §4.5; memory.md B6] | 3 | ready | SAFE-4, SAFE-5 | parallel sum equals serial; a capturing closure is rejected |
+| SAFE-7 | Atomics. [STATE §4.5] | 3 | ready | SAFE-4 | atomic ops exposed; stress test clean under sanitizers |
+| SAFE-8 | Close D5: enum equality by per-variant payload compare and a named function used as a value in the self-host pipeline. [COMPATIBILITY D5; STATE §4.9] | 2 | ready | — | both features compile and run in stage2/stage3; differential manifest extended; D5 table closed |
+| SAFE-9 | AEGIS lease coverage for `str` / `map` / `chan` (today they are covered by the quarantine backstop, not by leases). [runtime/flint_aegis.h] | 3 | needs decision: hot-path tax vs quarantine | — | decision recorded; if yes, a UAF through each is a compile-time reject or a trap |
+| SAFE-10 | UBSan/ASan sweep of the runtime and generated IR; fix what it finds. [ROADMAP J-B1; IMPROVEMENT-PLAN Tier 1] | 3 | ready | — | `tests/test_sanitizers.sh` green over the corpus; findings fixed or recorded |
+| SAFE-11 | General value escape analysis, precise lifetimes, and const/alias qualifiers on leases (the non-closure half of §8.4; the optimizer needs the alias facts). [LANGUAGE-ROADMAP §8.4] | 3 | ready | SAFE-2 | stack promotion for provably local values; `&T`/`&mut T` non-alias facts visible in IR; no false promotion |
+
+---
+
+### LANG — language update
+
+Phase 2/4. **Category exit:** a third-party package can implement a trait
+and return it polymorphically; `T?` works; const generics work; the
+pipeline deviations are gone.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| LANG-1 | Associated types / generic traits. [LANGUAGE-ROADMAP §11 #2; Phase 4] | 4 | ready | — | a trait with an associated type compiles; package-style example; gate |
+| LANG-2 | `dyn`-style trait objects (vtable dispatch, representation documented). [LANGUAGE-ROADMAP §11 #3] | 4 | ready | — | polymorphic return plus vtable dispatch; ABI recorded; gate |
+| LANG-3 | Operator overloading (requires the trait system). [ROADMAP I-E; LANGUAGE-ROADMAP §11 #5] | 4 | ready | LANG-1 | `+` on a user struct; builtin operators unchanged |
+| LANG-4 | Nullable types `T?` — cheap and high value. [LANGUAGE-ROADMAP §11 #7] | 4 | ready | — | null-safe access checked; no UB; gate |
+| LANG-5 | Const generics (last of the type-system features). [LANGUAGE-ROADMAP §11] | 4 | ready | LANG-1 | `[T; N]`-style parameter; monomorphized; gate |
+| LANG-6 | Async/await. [LANGUAGE-ROADMAP §11 #4; Phase 4] | 4 | blocked: needs SAFE-4 … SAFE-7 | SAFE-7 | async fn + await; `Send` checked; gate |
+| LANG-7 | Type-level programming. [LANGUAGE-ROADMAP §30.2] | 4 | blocked: low immediate value (maintainer call) | — | only after the cheaper type features ship |
+| LANG-8 | M7 `[T]` containers (generic element-size arrays). [STATE §4.10; LANGUAGE-ROADMAP §5.2] | 3/4 | blocked: ABI decision on `{length, elem_size, ptr}` | — | generic element-size array; `primes` char parity; gate |
+| LANG-9 | Pipeline `bool` type code (it mangles as `.i64` today). [STATE §4.9.1] | 2 | ready | — | symbol matches the C++ `.bool`; differential |
+| LANG-10 | Pipeline function table becomes a multimap (two implementations of one method name cannot coexist). [STATE §4.9.1] | 2 | ready | — | two impls of one method name coexist; differential |
+| LANG-11 | Per-file query in multi-file builds (today the main file's signatures are passed to imports). [STATE §4.9.1] | 2 | ready | — | imported functions get their own query; differential |
+| LANG-12 | Date/time arithmetic (parse, format, diff). [ROADMAP I-D] | 4 | done — stale doc | — | `flint_time_parse` / `flint_time_format` exist; DOC-1 corrects the row |
+| LANG-13 | Safe FFI wrapper types: owned/borrowed/unsafe handles, explicit `take`/`borrow`, null via `T?`, error-code conversion, capture rules for callbacks. [LANGUAGE-ROADMAP §25.2] | 4 | ready | LANG-4 | a C resource is owned by a Flint type with a destructor; a borrowed handle cannot outlive its region; gate |
+
+---
+
+### PORT — portability update
+
+Phase 1/C2. **Category exit:** a WASI hello executes end-to-end, macOS is
+T1, MinGW is T2, and `--static` produces a working binary.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| PORT-1 | WASM/WASI execution: `_start`, WASI sysroot + libc + crt1.o linkage, and a runner. Emit already works. [docs/tiers.md; ROADMAP J-C2] | 1 | blocked: no WASI sysroot or runner here; policy forbids vendoring SDKs | — | hello runs under wasmtime/node; execution test per triple |
+| PORT-2 | macOS T2 → T1: run the full gate list on macOS hardware and record it. [docs/tiers.md] | 1 | blocked: needs macOS hardware | — | recorded full-gate green run; row flipped |
+| PORT-3 | MinGW T3 → T2: confirm the native `windows-2025` CI job is fully green. [docs/tiers.md] | 1 | blocked: needs native Windows CI | — | build + smoke + registry green; row flipped |
+| PORT-4 | MSVC native thread shim (the pthreads path only covers MinGW). [docs/tiers.md] | 1 | blocked: needs a Windows host | — | MSVC build plus threads; gate |
+| PORT-5 | `--static` linking mode. [ROADMAP I-A] | 1 | ready (may fail loud if static libs are absent) | — | `--static` hello runs; `ldd` shows no dynamic deps; a missing static lib is a loud error, not a silent fallback |
+| PORT-6 | `--target` execution tests per triple (emit is tested; execution is not). [docs/tiers.md] | 1 | blocked: runners/sysroots per target | — | `tests/test_target_exec.sh` per triple |
+| PORT-7 | Hermetic temp-path audit: no hardcoded `/tmp` left in the harness; `$TMPDIR` honored everywhere. [docs/tiers.md C2] | 1 | ready | — | grep finds no hardcoded scratch path; the gate runs under a custom `$TMPDIR` |
+
+---
+
+### TOOL — tooling update
+
+Phase 7. **Category exit:** the LSP's diagnostics are byte-identical to
+the CLI's over the corpus; rename and per-file incremental analysis work;
+the `flint` driver covers the everyday subcommands.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| TOOL-1 | Compiler-backed LSP: serve diagnostics from the compiler's own type checker instead of the Rust reimplementation. *Large.* [STATE §4.7; Phase 7] | 7 | ready | SAFE-1 | LSP diagnostics byte-identical to the CLI over the corpus; a test compares them |
+| TOOL-2 | Rename/refactor in the LSP (needs the symbol table). [STATE §4.7] | 7 | ready | TOOL-1 | rename across files; references updated; gate |
+| TOOL-3 | Per-file incremental analysis (the compiler caches whole modules by source hash today). [STATE §4.7] | 7 | ready | TOOL-1 | editing one file reanalyzes only it; latency measured |
+| TOOL-4 | `flint fmt` / `doc` / `lsp` / `test` / `new` subcommands that delegate to the existing tools. [README known tooling gaps] | 7 | ready | — | each subcommand works; `tests/test_flint_cli.sh` extended |
+| TOOL-5 | Auto-docs: generate the reference pages from the source instead of hand-maintaining them. [ROADMAP J-A1 "auto-docs open"] | 7 | ready | — | generated docs match the source; `tools/docs_check.sh` green |
+| TOOL-6 | `flintc api` plus `llms.txt` (stable, machine-readable surface). [README known gaps] | 7 | needs decision: shape of the manifest | — | a versioned manifest parses; one source of truth |
+| TOOL-7 | Signed tags plus SBOM automation. [docs/RELEASE.md] | release | blocked: needs a GPG key | — | `git tag -v vA.B.C` passes; SBOM version equals the tag |
+| TOOL-8 | Per-PR fuzz smoke (nightly 100-seed fuzzing already runs; a PR can merge before it). [LANGUAGE-ROADMAP §14.2] | 7 | ready | — | a fast fuzz smoke gates PRs; the nightly 100-seed job stays |
+| TOOL-9 | Property-based tests: optimized vs unoptimized output identical; safe vs `--unsafe` output identical; random programs from `fuzz/generate.py`. [LANGUAGE-ROADMAP §14.3 layer 2] | 7 | ready | — | "semantics preserved: N/N" and "check equivalence: N/N" gates |
+| TOOL-10 | Negative/compile-fail corpus asserting invalid programs are rejected, not merely that messages match. [LANGUAGE-ROADMAP §14.3 layer 4] | 7 | ready | — | every documented error code has a compile-fail case; gate |
+| TOOL-11 | Per-pass golden IR tests (optimizer bugs are only visible end-to-end today). [LANGUAGE-ROADMAP §14.3 layer 1] | 7 | ready | — | one golden IR test per optimizer pass; `tests/test_opt_identity.sh` extended |
+| TOOL-12 | ABI/versioning test for the `.flint.bc` interface format (golden interface plus a compatibility matrix). [LANGUAGE-ROADMAP §14.3 layer 5] | 7 | ready | — | old and new compilers read the golden interface; version mismatch is loud |
+| TOOL-13 | Extend the differential gate from 14 fixtures to the whole corpus, both directions (C++ vs pipeline, O0 vs O2, safe vs unsafe). [LANGUAGE-ROADMAP §14.3 layer 3] | 7 | ready | — | the whole corpus is in the manifest; both directions green |
+| TOOL-14 | Reproducible-build check: the same source compiled twice in different directories is byte-identical. [LANGUAGE-ROADMAP §26.4] | 7 | ready | — | a gate builds in two directories and compares hashes |
+
+---
+
+### ECO — ecosystem update
+
+Phase 8. **Category exit:** a package can be published by one user and
+installed by another from a lockfile, reproducibly.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| ECO-1 | `flint add` / `build` / `publish` / `audit` / `search` package subcommands. [STATE §4.6; Phase 8] | 8 | ready | — | publish and install from a lockfile |
+| ECO-2 | Static, self-hostable registry. [STATE §4.6] | 8 | ready | ECO-1 | the registry serves a package; an offline mirror works |
+| ECO-3 | Resolver: minimal-version selection with a published deterministic algorithm, semver enforcement, `flint.lock` with content hashes. [STATE §4.6] | 8 | ready | ECO-1 | resolution is deterministic; the lockfile reproduces byte-for-byte |
+| ECO-4 | Content-addressed cache, signing, advisories, provenance on publish. [STATE §4.6] | 8 | ready | ECO-3 | tamper detected; an advisory blocks; provenance verified |
+| ECO-5 | Ten good packages plus discovery (quality over count). [STATE §4.6] | 8 | ready | ECO-2, ECO-3 | ten packages install and build from a lockfile |
+| ECO-6 | HTTP server API (listen + respond). TCP primitives exist; the server API does not. [ROADMAP I-D] | 8 | ready | — | a server listens and responds; gate |
+
+---
+
+### DOMAIN — domain-aware update
+
+Phase 9. **Category exit:** `@domain(ai)` measurably improves the AI
+benchmark suite and the "identical output with and without the domain"
+gate passes for every domain.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| DOMAIN-1 | `@domain(...)` syntax, the data-driven policy table, safety separation enforced by construction and by a test, LSP and build integration. *Large.* [LANGUAGE-ROADMAP §15–19; Phase 9] | 9 | ready | SAFE-1 | the AI benchmark improves; the identical-output gate passes for every domain |
+
+---
+
+### DOC — docs / release update
+
+Release hygiene. **Category exit:** no stale claim in the audited docs; a
+signed release with a matching SBOM.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| DOC-1 | Correct the stale claims: `AegisChecker` restored, `BorrowChecker` node kinds + loop fixpoint, PGO/ThinLTO opt-in, cold panic attributes, `LICENSE`, date/time, `--target` `.ll`/`.o`, `verifyFunction`, the ROADMAP "Planned" markers that already shipped. [audit 2026-10-27] | release | ready | — | `tools/docs_check.sh` failures=0; every corrected claim re-verified against the code |
+| DOC-2 | Refresh README "Honest gaps", REQUIREMENTS platform rows, and the tier matrix so they match `--help` and the code. [README; REQUIREMENTS; docs/tiers.md] | release | ready | DOC-1 | the statements match `--help`/code; docs gate green |
+| DOC-3 | Release checklist: signed tag, SBOM version, CHANGELOG section, migration note. [docs/RELEASE.md] | release | blocked: needs a GPG key | TOOL-7 | the checklist runs end to end on a dry run |
+| DOC-4 | Error-catalog drift gate: `docs/errors-cpp.md` must match the compiler's codes. [README diagnostics section] | release | ready | — | a script compares codes; CI fails on drift |
+| DOC-5 | Migration/versioning notes for the 0.0.x line (semver freeze rules). [docs/RELEASE.md] | release | ready | — | a migration note exists for every breaking change since 0.0.20 |
+
+---
+
+### LONG — long-term differentiation
+
+Phase 10, ongoing. These are not "finish and close"; they are the claims
+the project is betting on. Each needs evidence, not a feature count.
+
+| ID | item | phase | status | depends on | evidence that it is working |
+|---|---|---|---|---|---|
+| LONG-1 | Safety with no borrow-checker tax: leases + regions + backstop, with Rust-level ergonomics and no false rejects. [LANGUAGE-ROADMAP §30.4] | 10 | ongoing | SAFE-2, SAFE-4 | the corpus has no false rejects; a user study or a documented ergonomics comparison |
+| LONG-2 | Deterministic memory with a runtime backstop — the niche Go/Python cannot enter and Rust declines. [LANGUAGE-ROADMAP §0.2] | 10 | ongoing | SAFE-3 | a long-running server is leak-free with bounded RSS; the backstop catches a seeded UAF |
+| LONG-3 | Agent-native toolchain: stable tokens, machine-readable diagnostics, one binary. [LANGUAGE-ROADMAP §30.4] | 10 | ongoing | TOOL-6 | a machine-readable diagnostic stream; stable tokens documented; one binary |
+| LONG-4 | Domain-aware specialization without unsafe escape hatches, if the safety/optimization separation holds. [LANGUAGE-ROADMAP §17] | 10 | ongoing | DOMAIN-1 | DOMAIN-1's identical-output gate plus a measured win |
+
+---
+
+### Blocked and decision register
+
+Everything here is outside the compiler's control or is a maintainer
+call. A blocked row is skipped, never silently reordered.
+
+| item | blocked on | unblocks when |
+|---|---|---|
+| PERF-12 | PERF-11 data; CGU code absent since the 09-14 wipe | PERF-11 lands |
+| PERF-13 | no `llvm-bolt` on this device | a host with BOLT |
+| PERF-16 | single-pass emit mode makes per-thread parsers impractical | an AST or per-thread parser design |
+| SAFE-9 | hot-path tax of leases on `str`/`map`/`chan` | maintainer decision |
+| LANG-6 | SAFE-4 … SAFE-7 | capabilities, channels, atomics land |
+| LANG-7 | low immediate value | the cheaper type features ship |
+| LANG-8 (M7) | ABI decision on `{length, elem_size, ptr}` | maintainer decision |
+| PORT-1 | WASI sysroot + runner; no-vendoring policy | a sysroot/runner is available off-device |
+| PORT-2 | macOS hardware | a full-gate run is recorded there |
+| PORT-3 | native Windows CI | the `windows-2025` job is green |
+| PORT-4 | a Windows host | MSVC build + threads |
+| PORT-6 | per-target runners | each target has a runner |
+| TOOL-6 | shape of the API manifest | maintainer decision |
+| TOOL-7, DOC-3 | GPG key | a signing key is configured |
+| DOMAIN-1 | SAFE-1 (typed HIR) | typed HIR lands |
+
+### Measured and rejected — do not re-litigate without new numbers
+
+| idea | why it is not on the queue |
+|---|---|
+| A hand-written vectorizer | LLVM's vectorizer does the work once checks are gone; `--unsafe` is already at C parity and the IR has zero `vector.body` on the checked path [STATE §4.3] |
+| The max-abs guard for the safe reduction | 10.7 ms vs 11.0 ms safe and 7.6 ms C — the guard's own max/abs work eats the gain (~3 %) [STATE §4.3] |
+| The pipeline length fact / literal-index BCE for the supported subset | the pipeline's `for_array` IR already has 0 surviving bounds/overflow checks at `-O2`; the runtime-array case is blocked on missing builtins [memory.md, bounded-range facts] |
+| QBE as a compile-speed path | ~2.6 s vs LLVM -O0 ~0.9 s on a 3.5k-line program; process spawn + IL bloat [ROADMAP H2] |
+| H4 custom ARM64 emission | no measured headroom over LLVM; enormous surface [ROADMAP H4] |
+| Region-based memory management | conflicts with deterministic free; escape analysis gets most of the benefit [LANGUAGE-ROADMAP §30.2] |
+| A custom register allocator / instruction selection | LLVM is at C parity for this code; no measured headroom [LANGUAGE-ROADMAP §30.2] |
+| Rewriting the compiler in Flint | the ladder should converge on the shared HIR, not become a second authoritative compiler [LANGUAGE-ROADMAP §30.2] |
+| A second ownership system (Rust's borrow checker on top of leases) | two competing systems; leases are the user-visible model [STATE §4.8] |
+| BOLT as a default | no `llvm-bolt` here; never shipped as default [ROADMAP J-C3] |
+| CGU auto-tune now | cache-split is done; the CGU code is absent and the fit is low until PERF-11 data exists [ROADMAP J non-goal] |
+
+### Per-category exit criteria (what "finished" means)
+
+- **PERF:** safe integer loops ≤1.3× C; the dashboard reports every
+  commit; hello-world ≤ C + 5 % stripped; monomorphization share measured;
+  PGO and allocator decisions recorded.
+- **SAFE:** safe build ≤1.2× `--unsafe`; a data race is a compile error;
+  escaped boxes are freed; D5 closed.
+- **LANG:** a third-party package implements a trait and returns it
+  polymorphically; `T?` and const generics work; pipeline deviations gone.
+- **PORT:** a WASI hello executes; macOS T1; MinGW T2; `--static` works.
+- **TOOL:** LSP diagnostics identical to the CLI; rename and per-file
+  incremental analysis work; the driver covers everyday subcommands.
+- **ECO:** publish and install from a lockfile, reproducibly.
+- **DOMAIN:** the AI benchmark improves; the identical-output gate passes.
+- **DOC:** no stale claim in the audited docs; a signed release with a
+  matching SBOM.
+- **LONG:** ongoing; each row has evidence, not a feature count.
+
+### The next three actions, concretely
+
+1. **PERF-1** (wrapping-operator opt-in) — the highest-value ready row:
+   it closes the last measured safe-performance gap without weakening the
+   default. If the syntax decision is unwelcome, **PERF-2** (`split()` +
+   hot string builtins) is the other ready row.
+2. Then PERF-3 (stdlib split) and PERF-4 (arena profiles) — the two
+   binary-size items that also make the size report honest.
+3. Then PERF-5/6/8 (monos share, history/dashboard, workload coverage) so
+   every later category is measured by the same instrument.
+
+If the user says "finish the performance update", run PERF-1 … PERF-16 in
+order, skip PERF-12/13/16 with a one-line report, then continue to SAFE-1
+without asking. That is the contract this section exists to make
+unambiguous.
