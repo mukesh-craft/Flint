@@ -45,7 +45,7 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; **Phase 3 / P1 performance is the active work** (§4.3) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical); **the corrected one-command CLI** (`-o` builds AND runs, `--no-run` is build-only, `tests/test_cli_run.sh` 52/52); **the scoped `bytes` type** (`tests/test_bytes.sh` 18/18); **native string methods** (`tests/test_string_methods.sh` 11/11); **Rust-style unused-variable warnings** (`W0001`/`W0002`, `tests/test_unused_warnings.sh` 20/20); **the high-level `flint` driver** (`flint run`/`flint build`, `tests/test_flint_cli.sh` 78/78); **38 gates** |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical); **the corrected one-command CLI** (`-o` builds AND runs, `--no-run` is build-only, `tests/test_cli_run.sh` 52/52); **the scoped `bytes` type** (`tests/test_bytes.sh` 18/18); **native string methods** (`tests/test_string_methods.sh` 11/11); **Rust-style unused-variable warnings** (`W0001`/`W0002`, `tests/test_unused_warnings.sh` 20/20); **the high-level `flint` driver** (`flint run`/`flint build`, `tests/test_flint_cli.sh` 78/78); **the warning-free LLVM 21 build** (0 warnings); **38 gates** |
 | in flight | **P1 performance**: the safe `sum_array` is 1.42× C (its accumulator check still blocks vectorization); `--unsafe` is at C parity; `fib` is at parity; the `bytes` sieve is 185.8 ms vs C char 195.5 ms (same session) and is 2.74× faster than the i64 sieve. The pipeline `-O2` consumers are done; its length fact is measured redundant for the supported subset (§4.3) |
 | next action | **Choose the next safe-performance feature**: the wrapping-operator opt-in (1.45× on reductions, opt-in only) or a native `split()` string method. The default safety model is unchanged either way. Phase 2's remaining gaps (typed HIR §4.2, NLL §4.4, capability types §4.5) come after |
 | build | `bash build.sh` — ~3 min warm on this device (measured 2026-10-25); 12–15 min is the worst case under load. Poll at 60–120 s, never with a long sleep |
@@ -818,6 +818,23 @@ propagation, mode and cross-target errors, compile failures that never run a
 stale artifact, edited sources that beat the cache, paths with spaces, and a
 PATH install of both binaries. **Verify**:
 `bash tests/test_flint_cli.sh ./flint ./flintc` → 78/78.
+
+### 4.13 Warning-free build against LLVM 21 (2026-10-27)
+
+`build.log` carried 17 warnings, all deprecated LLVM spellings:
+`createTargetMachine(StringRef)` (1), `PointerType::get(Type*, 0)` (14),
+`Intrinsic::getDeclaration` (1), and an unqualified `cast<StructType>` that
+Clang accepts only as a C++20 extension (1). None was a Flint bug, but each
+one hides the next real warning and ties the source to one LLVM generation.
+All are replaced with the supported overloads; opaque pointers make the
+`PointerType` change IR-identical. **Verify**: `bash build.sh` → 0 warnings;
+`test_flint_cli.sh` 78/78, `test_cli_run.sh` 52/52, `test_emit.sh` 3/3,
+`test_driver.sh` 7/7, `test_print_size.sh` 11/11, `test_vectorize.sh` 3/3,
+`test_unsafe_flag.sh` 6/6, and a manual cross-target `.ll`/`.o` build.
+
+**Backlog**: the categorised, ordered list of unfinished work lives in
+`memory.md` under "2026-10-27 — the ordered backlog". Read that first when
+choosing what to finish next; §3 of this file remains the detailed record.
 
 ---
 
