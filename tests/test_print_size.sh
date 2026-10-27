@@ -39,7 +39,7 @@ for src in hello bigger; do
     out="$T/$src.bin"
     json="$T/$src.json"
     rm -f "$out" "$json"
-    if ! "$FLINTC" "$T/$src.fl" --print-size --print-size-json="$json" -o "$out" > "$T/$src.report" 2>&1; then
+    if ! "$FLINTC" "$T/$src.fl" --print-size --print-size-json="$json" --no-run -o "$out" > "$T/$src.report" 2>&1; then
         bad "$src: compile failed"
         continue
     fi
@@ -82,7 +82,7 @@ for src in hello bigger; do
 done
 
 # A program that does NOT exist must fail loudly, not silently.
-if "$FLINTC" "$T/nope.fl" --print-size -o "$T/nope.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/nope.fl" --print-size --no-run -o "$T/nope.bin" >/dev/null 2>&1; then
     bad "missing input was accepted"
 else
     ok

@@ -76,7 +76,7 @@ echo "  $(grep '^CODES' "$WORK/codes.txt")"
 python3 - <<'PY' > "$WORK/table.txt" 2>&1
 import csv, re, sys
 src = open('src/main.cpp').read()
-live = set(re.findall(r'\b(?:codegenError|parseError|typeError)\("(E\d{4})"', src))
+live = set(re.findall(r'\b(?:codegenError|parseError|typeError|emitWarning)\("([EW]\d{4})"', src))
 try:
     rows = list(csv.DictReader(open('docs/error-codes.csv')))
 except Exception as e:
@@ -130,7 +130,7 @@ fi
 json="$(timeout -s KILL 120 "$FLINTC" --error-format json "$WORK/bad.fl" 2>&1)"
 printf '%s\n' "$json" > "$WORK/out.jsonl"
 if python3 - "$WORK/out.jsonl" <<'PY'
-import json, sys
+import json, re, sys
 ok = True
 for i, line in enumerate(open(sys.argv[1])):
     line = line.strip()
@@ -143,7 +143,7 @@ for i, line in enumerate(open(sys.argv[1])):
     for k in ('message', 'code', 'level', 'spans'):
         if k not in d:
             print("MISSINGKEY %s in line %d" % (k, i+1)); ok = False
-    if d.get('code', '') and not d['code'].startswith('E'):
+    if d.get('code', '') and not re.match(r'^[EW][0-9]{4}$', d['code']):
         print("BADCODE %r" % d.get('code')); ok = False
     if not d.get('spans'):
         print("NOSPAN in line %d" % (i+1)); ok = False

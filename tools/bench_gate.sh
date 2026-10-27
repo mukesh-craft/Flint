@@ -58,7 +58,7 @@ run_one() { # $1=workload $2=reps -> ns (minimum)
     local w="$1" reps="$2" i best=0 t
     local bin="$TMPD/$w.bin"
     for i in $(seq 1 "$reps"); do
-        "$FLINTC" "benchmarks/$w.fl" -o "$bin" >/dev/null 2>&1 || { echo 0; return; }
+        "$FLINTC" "benchmarks/$w.fl" --no-run -o "$bin" >/dev/null 2>&1 || { echo 0; return; }
         t=$("$bin" 2>/dev/null | awk '/^time:/ {print $2; exit}')
         [ -z "$t" ] && t=0
         if [ "$best" = 0 ] || [ "$t" -lt "$best" ]; then best=$t; fi
@@ -71,7 +71,7 @@ pi_ns=$(run_one pi 2)
 
 # Binary size: stripped hello-world.
 printf 'fn main() {\n    print("hello")\n}\n' > "$TMPD/hello.fl"
-"$FLINTC" "$TMPD/hello.fl" -o "$TMPD/hello.bin" >/dev/null 2>&1
+"$FLINTC" "$TMPD/hello.fl" --no-run -o "$TMPD/hello.bin" >/dev/null 2>&1
 hello_raw=$(stat -c %s "$TMPD/hello.bin" 2>/dev/null || echo 0)
 cp "$TMPD/hello.bin" "$TMPD/hello.stripped" 2>/dev/null
 strip "$TMPD/hello.stripped" >/dev/null 2>&1
@@ -82,7 +82,7 @@ hello_stripped=$(stat -c %s "$TMPD/hello.stripped" 2>/dev/null || echo 0)
 ct_best=0
 for i in 1 2 3; do
     t0=$(date +%s%N)
-    "$FLINTC" "$TMPD/hello.fl" -o "$TMPD/ct.bin" >/dev/null 2>&1
+    "$FLINTC" "$TMPD/hello.fl" --no-run -o "$TMPD/ct.bin" >/dev/null 2>&1
     t1=$(date +%s%N)
     t=$(( (t1 - t0) / 1000000 ))
     if [ "$ct_best" = 0 ] || [ "$t" -lt "$ct_best" ]; then ct_best=$t; fi

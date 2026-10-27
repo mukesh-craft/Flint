@@ -517,6 +517,47 @@ FlintArray flint_array_concat(FlintArray a, FlintArray b) {
     return result;
 }
 
+// ---- Byte buffers ----
+//
+// A `bytes` value has the same {data, len} slice layout as an array, but one
+// byte per element. The compiler lowers b[i] and b[i] = v inline (i8 load /
+// trunc store, checked); these functions are the runtime ABI and the safe
+// fallback when a call reaches them directly. Zero-filled on purpose, for
+// the same reason flint_array_alloc is: a sieve must start at 0, and heap
+// reuse must not leak another allocation's bytes.
+#define FLINT_MAX_BYTES ((int64_t)(1u << 30)) // 1 GiB
+
+typedef struct { void* data; int64_t len; } FlintBytes;
+
+FlintBytes flint_bytes_alloc(int64_t n) {
+    FlintBytes b = { NULL, 0 };
+    if (n < 0 || n > FLINT_MAX_BYTES) { flint_set_err(1); return b; }
+    if (n == 0) return b;
+    void* p = calloc((size_t)n, 1);
+    if (!p) { flint_set_err(1); return b; }
+    b.data = p;
+    b.len = n;
+    return b;
+}
+
+int64_t flint_bytes_len(FlintBytes b) { return b.len; }
+
+void* flint_bytes_data(FlintBytes b) { return b.data; }
+
+int64_t flint_bytes_get(FlintBytes b, int64_t i) {
+    flint_bounds_check(i, b.len);
+    return (int64_t)((const unsigned char*)b.data)[i];
+}
+
+void flint_bytes_set(FlintBytes b, int64_t i, int64_t v) {
+    flint_bounds_check(i, b.len);
+    ((unsigned char*)b.data)[i] = (unsigned char)(v & 0xff);
+}
+
+void flint_bytes_free(FlintBytes b) {
+    if (b.data) free(b.data);
+}
+
 // ---- Threading ----
 #include <pthread.h>
 #include <unistd.h>
@@ -754,6 +795,74 @@ char* flint_str_trim(const char* s) {
     memcpy(r, start, (size_t)len);
     r[len] = '\0';
     return r;
+}
+
+// ASCII case helpers. Like upper/lower, these operate on bytes; a UTF-8
+// multi-byte sequence is copied unchanged rather than case-mapped.
+char* flint_str_capitalize(const char* s) {
+    if (!s) return NULL;
+    char* r = strdup(s);
+    if (!r) flint_panic("out of memory");
+    for (char* p = r; *p; p++) *p = (char)tolower((unsigned char)*p);
+    if (r[0]) r[0] = (char)toupper((unsigned char)r[0]);
+    return r;
+}
+
+char* flint_str_title(const char* s) {
+    if (!s) return NULL;
+    char* r = strdup(s);
+    if (!r) flint_panic("out of memory");
+    int wordStart = 1;
+    for (char* p = r; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isspace(c)) {
+            wordStart = 1;
+        } else if (wordStart) {
+            *p = (char)toupper(c);
+            wordStart = 0;
+        } else {
+            *p = (char)tolower(c);
+        }
+    }
+    return r;
+}
+
+char* flint_str_lstrip(const char* s) {
+    if (!s) return strdup("");
+    while (*s && isspace((unsigned char)*s)) s++;
+    return strdup(s);
+}
+
+char* flint_str_rstrip(const char* s) {
+    if (!s) return strdup("");
+    const char* end = s + strlen(s);
+    while (end > s && isspace((unsigned char)end[-1])) end--;
+    int64_t len = end - s;
+    char* r = (char*)malloc((size_t)len + 1);
+    if (!r) return NULL;
+    memcpy(r, s, (size_t)len);
+    r[len] = '\0';
+    return r;
+}
+
+int64_t flint_str_contains(const char* s, const char* sub) {
+    if (!s || !sub) return 0;
+    return strstr(s, sub) != NULL ? 1 : 0;
+}
+
+// Non-overlapping occurrences, like Python's str.count. An empty needle
+// counts the gaps around every character (len + 1), as Python does.
+int64_t flint_str_count(const char* s, const char* sub) {
+    if (!s || !sub) return 0;
+    if (!*sub) return (int64_t)strlen(s) + 1;
+    int64_t count = 0;
+    size_t n = strlen(sub);
+    for (const char* p = s; (p = strstr(p, sub)) != NULL; p += n) count++;
+    return count;
+}
+
+int64_t flint_str_is_empty(const char* s) {
+    return (!s || *s == '\0') ? 1 : 0;
 }
 
 int64_t flint_str_index_of(const char* s, const char* sub) {

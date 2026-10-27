@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Benchmark the CLI's one-command path against the old two-step workflow.
+# Benchmark the two one-command paths against each other.
 #
-#   new: flintc main.fl                     (compile + run via ORC JIT)
-#   old: flintc main.fl -o app && ./app     (compile + link + run)
+#   JIT: flintc main.fl                 (compile + run via ORC, no artifact)
+#   AOT: flintc main.fl -o app          (compile + link + run ./app)
 #
-# The AOT side clears the module cache before every build so the number is
-# a cold build, which is what a user gets the first time. JIT never reads
-# the module cache, so its number is already cold by construction.
+# Both rows execute the program exactly once. The AOT side clears the module
+# and binary caches before every build so the number is a cold build, which
+# is what a user gets the first time; JIT never reads the module cache, so
+# its number is already cold by construction.
 #
 # Usage: bash tools/bench_cli_run.sh [path/to/flintc]
 # Report medians; absolute times are machine-specific (STATE.md §8).
@@ -16,7 +17,7 @@ FLINTC="${1:-./flintc}"
 T="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/flint-cli-bench.$$"
 rm -rf "$T"
 mkdir -p "$T/home"
-export HOME="$T/home" # isolate the module cache so the AOT rows are cold
+export HOME="$T/home" # isolate the cache so the AOT rows are cold
 trap 'rm -rf "$T"' EXIT
 
 cat > "$T/hello.fl" <<'EOF'
@@ -54,12 +55,12 @@ bench_aot() { # $1=source $2=binary
     local s e
     rm -rf "$T/home/.cache/flintc"
     s=$(now_ms)
-    "$FLINTC" "$1" -o "$2" > /dev/null 2>&1 && "$2" > /dev/null 2>&1
+    "$FLINTC" "$1" -o "$2" > /dev/null 2>&1
     e=$(now_ms)
     echo $((e - s))
 }
 
-printf 'workload   new: flintc f.fl   old: flintc f.fl -o app && app   ratio (old/new)\n'
+printf 'workload   JIT: flintc f.fl   AOT: flintc f.fl -o app   ratio (AOT/JIT)\n'
 for name in hello loop; do
     jit=""
     aot=""

@@ -73,7 +73,7 @@ else
 fi
 
 # 3. The unsafe binary's value is still exact: sum(2*i, i=0..999) = 999000.
-if "$FLINTC" --unsafe "$T/vec.fl" -o "$T/vec.bin" >/dev/null 2>&1; then
+if "$FLINTC" --unsafe "$T/vec.fl" --no-run -o "$T/vec.bin" >/dev/null 2>&1; then
     out=$("$T/vec.bin" 2>&1)
     [ "$out" = "999000" ] && ok || bad "unsafe sum: expected 999000, got '$out'"
 else

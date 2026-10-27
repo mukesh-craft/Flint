@@ -17,7 +17,7 @@ mkdir -p "$T"
 pass=0; fail=0
 
 # 1. An out-of-range LITERAL index must trap (the proof must not fire).
-if ! "$FLINTC" tests_manual/t_bounds_oob.fl -o "$T/oob.bin" >/dev/null 2>&1; then
+if ! "$FLINTC" tests_manual/t_bounds_oob.fl --no-run -o "$T/oob.bin" >/dev/null 2>&1; then
     echo "FAIL t_bounds_oob.fl did not compile"; fail=$((fail+1))
 else
     out=$("$T/oob.bin" 2>&1); rc=$?
@@ -36,7 +36,7 @@ fi
 # 2. In UNSAFE mode the check is gone on purpose -- the build is stamped
 #    as unsafe, so the program must NOT be expected to trap. This checks
 #    that the escape hatch is real and that the safe build is not.
-if "$FLINTC" --unsafe tests_manual/t_bounds_oob.fl -o "$T/oob_unsafe.bin" >/dev/null 2>&1; then
+if "$FLINTC" --unsafe tests_manual/t_bounds_oob.fl --no-run -o "$T/oob_unsafe.bin" >/dev/null 2>&1; then
     if strings "$T/oob_unsafe.bin" 2>/dev/null | grep -q "flint:safety=unsafe"; then
         pass=$((pass+1))
     else
@@ -64,7 +64,7 @@ fn main() -> i64 {
     return 0
 }
 EOF
-if "$FLINTC" "$T/range_oob.fl" -o "$T/range_oob.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/range_oob.fl" --no-run -o "$T/range_oob.bin" >/dev/null 2>&1; then
     out=$("$T/range_oob.bin" 2>&1); rc=$?
     if [ "$rc" -eq 0 ]; then
         echo "FAIL the loop-range analysis removed a real bounds check (no trap)"
@@ -90,7 +90,7 @@ fn main() -> i64 {
     return 0
 }
 EOF
-if "$FLINTC" "$T/inrange.fl" -o "$T/inrange.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/inrange.fl" --no-run -o "$T/inrange.bin" >/dev/null 2>&1; then
     out=$("$T/inrange.bin" 2>&1)
     if [ "$out" = "20" ]; then pass=$((pass+1)); else
         echo "FAIL in-range literal index printed '$out', expected 20"
@@ -117,7 +117,7 @@ fn main() -> i64 {
     return 0
 }
 EOF
-if "$FLINTC" --check-bce "$T/policy.fl" -o "$T/policy.bin" > "$T/policy.txt" 2>&1 \
+if "$FLINTC" --check-bce "$T/policy.fl" --no-run -o "$T/policy.bin" > "$T/policy.txt" 2>&1 \
    && "$FLINTC" --check-bce "$T/policy.fl" --emit-llvm -o "$T/policy.ll" >/dev/null 2>&1; then
     # The policy's own counts (exact, pre-optimization) against the
     # compiler's pre-optimization IR count ("checks emitted"). The

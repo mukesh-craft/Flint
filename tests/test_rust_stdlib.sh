@@ -150,7 +150,7 @@ else
 fi
 
 # --- AOT path ---------------------------------------------------------------
-if timeout -s KILL 600 "$FLINTC" tests/t_csv.fl -o "$WORK/t_csv.bin" > "$WORK/aot.log" 2>&1; then
+if timeout -s KILL 600 "$FLINTC" tests/t_csv.fl --no-run -o "$WORK/t_csv.bin" > "$WORK/aot.log" 2>&1; then
     if out="$("$WORK/t_csv.bin" 2>&1)"; then
         expect_all "AOT: csv behaves as in JIT" "$out" "3" "widget, large" "42" "-1" "csv-ok"
     else
@@ -160,7 +160,7 @@ else
     bad "AOT: csv links" "$(tail -n 3 "$WORK/aot.log" | tr '\n' ' ')"
 fi
 
-if timeout -s KILL 600 "$FLINTC" tests/t_brotli.fl -o "$WORK/t_brotli.bin" > "$WORK/aot_brotli.log" 2>&1; then
+if timeout -s KILL 600 "$FLINTC" tests/t_brotli.fl --no-run -o "$WORK/t_brotli.bin" > "$WORK/aot_brotli.log" 2>&1; then
     if out="$("$WORK/t_brotli.bin" 2>&1)"; then
         if [ "$(printf '%s' "$out" | grep -c '^0$')" = "0" ]; then
             ok "AOT: brotli behaves as in JIT"
@@ -174,7 +174,7 @@ else
     bad "AOT: brotli links" "$(tail -n 3 "$WORK/aot_brotli.log" | tr '\n' ' ')"
 fi
 
-if timeout -s KILL 600 "$FLINTC" tests/t_png.fl -o "$WORK/t_png.bin" > "$WORK/aot_png.log" 2>&1; then
+if timeout -s KILL 600 "$FLINTC" tests/t_png.fl --no-run -o "$WORK/t_png.bin" > "$WORK/aot_png.log" 2>&1; then
     if out="$("$WORK/t_png.bin" 2>&1)"; then
         if [ "$(printf '%s' "$out" | grep -c '^0$')" = "0" ]; then
             ok "AOT: png behaves as in JIT"
@@ -188,7 +188,7 @@ else
     bad "AOT: png links" "$(tail -n 3 "$WORK/aot_png.log" | tr '\n' ' ')"
 fi
 
-if timeout -s KILL 600 "$FLINTC" tests/t_sqlite.fl -o "$WORK/t_sqlite.bin" > "$WORK/aot3.log" 2>&1; then
+if timeout -s KILL 600 "$FLINTC" tests/t_sqlite.fl --no-run -o "$WORK/t_sqlite.bin" > "$WORK/aot3.log" 2>&1; then
     if out="$("$WORK/t_sqlite.bin" 2>&1)"; then
         expect_all "AOT: sqlite behaves as in JIT" "$out" "bolt" "42" "sqlite-ok"
     else
@@ -198,7 +198,7 @@ else
     bad "AOT: sqlite links" "$(tail -n 3 "$WORK/aot3.log" | tr '\n' ' ')"
 fi
 
-if timeout -s KILL 600 "$FLINTC" tests/t_crypto.fl -o "$WORK/t_crypto.bin" > "$WORK/aot2.log" 2>&1; then
+if timeout -s KILL 600 "$FLINTC" tests/t_crypto.fl --no-run -o "$WORK/t_crypto.bin" > "$WORK/aot2.log" 2>&1; then
     if out="$("$WORK/t_crypto.bin" 2>&1)"; then
         expect_all "AOT: crypto behaves as in JIT" "$out" \
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" \

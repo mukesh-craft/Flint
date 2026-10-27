@@ -28,7 +28,7 @@ bad() { echo "FAIL $*"; fail=$((fail+1)); }
 # The third `bce:` line reports what the analysis WOULD prove. It is printed
 # with the facts disabled, so it never changes the artifact being measured.
 facts() { # $1 = source file
-    "$FLINTC" --check-bce "$1" -o "$T/probe.bin" 2>&1 |
+    "$FLINTC" --check-bce "$1" --no-run -o "$T/probe.bin" 2>&1 |
         awk '/bounded-range facts prove/ {print $5; exit}'
 }
 
@@ -71,7 +71,7 @@ fn main() -> i64 {
 EOF
 n=$(facts "$T/inc_small.fl")
 [ "$n" = "1" ] && ok || bad "inc(42): expected 1 fact, got '${n:-none}'"
-if "$FLINTC" "$T/inc_small.fl" -o "$T/inc_small.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/inc_small.fl" --no-run -o "$T/inc_small.bin" >/dev/null 2>&1; then
     out=$("$T/inc_small.bin" 2>&1)
     [ "$out" = "43" ] && ok || bad "inc(42): expected 43, got '$out'"
 else
@@ -89,7 +89,7 @@ fn main() -> i64 {
 EOF
 n=$(facts "$T/inc_overflow.fl")
 [ "$n" = "0" ] && ok || bad "inc(INT64_MAX): expected 0 facts, got '${n:-none}'"
-if "$FLINTC" "$T/inc_overflow.fl" -o "$T/inc_overflow.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/inc_overflow.fl" --no-run -o "$T/inc_overflow.bin" >/dev/null 2>&1; then
     out=$("$T/inc_overflow.bin" 2>&1); rc=$?
     if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qi "integer overflow"; then
         ok
@@ -115,7 +115,7 @@ fn main() -> i64 {
 EOF
 n=$(facts "$T/inc_dynamic.fl")
 [ "$n" = "0" ] && ok || bad "inc(dynamic): expected 0 facts, got '${n:-none}'"
-if "$FLINTC" "$T/inc_dynamic.fl" -o "$T/inc_dynamic.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/inc_dynamic.fl" --no-run -o "$T/inc_dynamic.bin" >/dev/null 2>&1; then
     out=$("$T/inc_dynamic.bin" 2>&1); rc=$?
     if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qi "integer overflow"; then
         ok
@@ -162,7 +162,7 @@ fn main() -> i64 {
 EOF
 n=$(facts "$T/branch_assign.fl")
 [ "$n" = "0" ] && ok || bad "branch assign: expected 0 facts, got '${n:-none}'"
-if "$FLINTC" "$T/branch_assign.fl" -o "$T/branch_assign.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/branch_assign.fl" --no-run -o "$T/branch_assign.bin" >/dev/null 2>&1; then
     out=$("$T/branch_assign.bin" 2>&1); rc=$?
     if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qi "integer overflow"; then
         ok
@@ -192,7 +192,7 @@ n=$(facts "$T/return_leak.fl")
 # Only the `n - 1` argument subtraction is provable; both sums overflow for
 # n = 2 (the buggy analysis also "proved" them, so this count is 3).
 [ "$n" = "1" ] && ok || bad "return leak: expected 1 fact, got '${n:-none}'"
-if "$FLINTC" "$T/return_leak.fl" -o "$T/return_leak.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/return_leak.fl" --no-run -o "$T/return_leak.bin" >/dev/null 2>&1; then
     out=$("$T/return_leak.bin" 2>&1); rc=$?
     if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qi "integer overflow"; then
         ok
@@ -217,7 +217,7 @@ fn main() -> i64 {
 EOF
 n=$(facts "$T/map_root.fl")
 [ "$n" = "0" ] && ok || bad "map-literal root: expected 0 facts, got '${n:-none}'"
-if "$FLINTC" "$T/map_root.fl" -o "$T/map_root.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/map_root.fl" --no-run -o "$T/map_root.bin" >/dev/null 2>&1; then
     out=$("$T/map_root.bin" 2>&1); rc=$?
     if [ "$rc" -ne 0 ] && printf '%s\n' "$out" | grep -qi "integer overflow"; then
         ok
@@ -255,7 +255,7 @@ fi
 # 12. The linked executable really has no overflow branch left in fib, and
 #     the value is still right. (llvm-objdump ships with the LLVM the
 #     compiler already requires; skip the disassembly check if absent.)
-if "$FLINTC" "$T/fib.fl" -o "$T/fib.bin" >/dev/null 2>&1; then
+if "$FLINTC" "$T/fib.fl" --no-run -o "$T/fib.bin" >/dev/null 2>&1; then
     out=$("$T/fib.bin" 2>&1)
     [ "$out" = "832040" ] && ok || bad "fib(30): expected 832040, got '$out'"
     if command -v llvm-objdump >/dev/null 2>&1; then

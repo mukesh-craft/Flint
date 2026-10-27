@@ -31,7 +31,7 @@ for src in $CASES; do
       unsafe) flag="--unsafe" ;;
     esac
     # shellcheck disable=SC2086
-    if ! timeout -s KILL 300 "$FLINTC" "$src" -o "$TMPD/p" $flag > /dev/null 2>&1; then
+    if ! timeout -s KILL 300 "$FLINTC" "$src" --no-run -o "$TMPD/p" $flag > /dev/null 2>&1; then
       echo "FAIL $b/$cfg (build)"; fail=$((fail+1)); ref_ok=0; continue
     fi
     out="$(timeout -s KILL 120 "$TMPD/p" 2>&1 | norm)"; rc=$?
