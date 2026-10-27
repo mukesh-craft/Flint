@@ -1,0 +1,10 @@
+// Flint program that leaks stdlib strings: flint_i64_to_string returns an
+// owned char* that the caller must release with flint_str_free.
+fn main() {
+    mut i: i64 = 0
+    while i < 5 {
+        let s = flint_i64_to_string(i)
+        print(s)
+        i = i + 1
+    }
+}
