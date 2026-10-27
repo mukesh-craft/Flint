@@ -5551,7 +5551,7 @@ was measured under load and is the worst case, not the norm.
 
 This session had three jobs: finish the phase-by-phase audit of what the plan
 still has not delivered, add the language's missing line-input primitive, and
-fix the external review of `~/tools/cqma-rs` without letting any of its
+fix the external review of `~/Flint/cqma_tool/cqma-rs` without letting any of its
 "could not finish" paths look like "found nothing". The audit result is the
 report that follows this entry; the code and the measurements are below.
 
@@ -5646,7 +5646,7 @@ was added. That number now has one home (`STATE.md` §2.2) and is repeated in
 
 ### CQMA: the external review's false-clean findings
 
-`~/tools/cqma-rs` is a separate Rust analyzer, not part of Flint. The review
+`~/Flint/cqma_tool/cqma-rs` is a separate Rust analyzer, not part of Flint. The review
 found that it could print a clean verdict when it had not actually finished
 checking. The fixes, in the order the review listed them:
 
@@ -5685,7 +5685,7 @@ Verification: `cargo test` **10/10** (all-disabled, skipped files, failed
 stage, a coverage note with no stage note, operational warnings do not lower
 the score, incomplete has no score, a confirmed warning cannot score 100,
 same-size leaks at different sites, dedupe stack, pipe cap).
-`~/tools/cqma-tests/test_regressions.sh` **12/12**: all-disabled, max-files,
+`~/Flint/cqma_tool/cqma-tests/test_regressions.sh` **12/12**: all-disabled, max-files,
 failed analyzer, valgrind timeout, valid valgrind, and a valgrind summary
 that says `ERROR SUMMARY: 2` while the detail is unparsed (the new case;
 before the fix it exited 1 with score 100).
