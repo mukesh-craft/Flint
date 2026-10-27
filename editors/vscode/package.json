@@ -2,7 +2,7 @@
   "name": "Flint",
   "displayName": "Flint",
   "description": "Flint language support: syntax highlighting, semantic highlighting scope, and the Rust-based flint-lsp language server (diagnostics, completion, hover, go-to-definition, references, outline).",
-  "version": "0.22.0",
+  "version": "0.0.23",
   "publisher": "flint-lang",
   "license": "Apache-2.0",
   "repository": {

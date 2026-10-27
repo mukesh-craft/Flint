@@ -4,9 +4,19 @@ All notable changes to Flint are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
-## [Unreleased]
+## [0.0.23] — 2026-10-27
 
 ### Changed
+- **`-o` now compiles, links, and runs the native artifact**, then keeps it.
+  `--no-run` / `--build-only` is the explicit build-only escape hatch;
+  `.ll` / `.o` / `--target` outputs remain emit-only. Every host-binary path
+  (fresh AOT, module-cache hit, binary-cache hit, QBE) executes through one
+  hook after a successful link, so a failed build never runs a stale file and
+  nothing runs twice. `tests/test_cli_run.sh` is 52 checks.
+- **`-o` refuses to overwrite its own input source** (device+inode
+  comparison): the corrected path links an executable, so `flintc bench.fl -o
+  bench.fl` would replace the program with the binary. The source survives,
+  gated by the CLI test.
 - **The self-host pipeline files are renamed to their stage roles**:
   `stage1/flint_lex.fl` → `stage1/lexer.fl`, `stage2/flint_parse.fl` →
   `stage2/parser.fl`, `stage3/flint_emit.fl` → `stage3/emitter.fl`. All
@@ -21,6 +31,19 @@ All notable changes to Flint are documented here. Format follows
   server, and the README gap list no longer calls the server untested.
 
 ### Added
+- **`bytes`**: a scoped `i8` buffer with the same `{i8*, i64}` ABI as
+  `[i64]`, checked `b[i]` reads/writes, a distinct checker type, and no full
+  M7 generics. The `primes` control drops from 509.5 ms (`[i64]`) to 185.8 ms
+  (`bytes`), at 1-byte C parity (195.5 ms), without dropping checks.
+- **Native string methods**: `capitalize`, `title`, `lstrip`, `rstrip`,
+  `contains`, `count`, `is_empty` plus the compact/underscored aliases,
+  rewritten to `flint_str_*` at parse time. One table feeds dispatch, arity
+  checks and diagnostics.
+- **Unused-variable warnings** `W0001` (unused) and `W0002` (assigned but
+  never read), with the Rust underscore opt-out, parameters/match/destructure
+  coverage, imports linted against their own file, JSON output, and
+  `--no-warn-unused` / `-Wno-unused`. Warnings never fail a build and are
+  re-emitted on cache hits.
 - **Argon2id password hashing** (`runtime/rust/src/argon2.rs`), the OWASP
   recommendation — the crypto module had HMAC/SHA/AES but nothing suitable for
   stored credentials, and hashing a password with a *fast* primitive is the
@@ -217,7 +240,7 @@ All notable changes to Flint are documented here. Format follows
   flag inventory grouped by purpose (output, codegen, safety, diagnostics
   and modes), each entry read from the parser so the text cannot drift
   from the flags it documents; `--version` prints the build-stamped
-  version (`flintc 0.22.0`). Both exit 0 and are smoke-gated
+  version (`flintc 0.0.23`). Both exit 0 and are smoke-gated
   (`tests/run.sh`, 25 -> 27 checks).
 - **`tests/test_errors.sh --fix`: the error catalog regenerates itself.**
   The 12 diagnostics added with the as-cast / tensor-literal / map-index
@@ -296,6 +319,10 @@ All notable changes to Flint are documented here. Format follows
 - **`tests/test_ai.sh`** — the standard-library and AI gate, now 17 checks.
 
 ### Fixed
+- **stage2 accepts `b[i] = v`** for `bytes` and arrays (type code 9),
+  closing the real pipeline gap the corpus gates exposed once the benchmark
+  source was restored. Parse-gate and fixpoint are 153/153; the self-host
+  fixed point stays byte-identical.
 - **`flint-fmt` applied to the three self-host canon files**
   (`stage1/flint_lex.fl`, `stage2/flint_parse.fl`, `stage3/flint_emit.fl`).
   `tests/test_fmt.sh` had been failing since commit 809a172 landed new
@@ -420,7 +447,7 @@ All notable changes to Flint are documented here. Format follows
   splitters ws-skipped around string lengths (fused forms, dropped
   closers on leading-space content).
 
-## [0.22.0] — 2026-09-06
+## [0.0.22] — 2026-09-06
 
 ### Added
 - Channels (`flint_chan_*`), tutorial, registry, tooling, Windows
@@ -430,4 +457,4 @@ All notable changes to Flint are documented here. Format follows
 - `--emit-header` and a WASM target were listed here previously. Neither was
   ever implemented; both are listed in README.md under "Not implemented".
 
-See `memory.md` Phase History for the full 0.9–0.22 record.
+See `memory.md` Phase History for the full 0.0.9–0.0.22 record.

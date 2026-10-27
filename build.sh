@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# v0.17: portable build — Termux, generic Linux, macOS (Xcode CLT).
+# v0.0.17: portable build — Termux, generic Linux, macOS (Xcode CLT).
 # Requires on PATH: clang/clang++, llvm-config, python3 (+headers), make.
 set -e
 

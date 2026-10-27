@@ -579,11 +579,11 @@ done), hygiene/docs (commit + push done, auto-docs open).
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 0.1.0   | 2026-06-30 | Phase 0 MVP: immutable vars, print, arithmetic |
-| 0.2.0   | 2026-06-30 | Phase A: functions, if/while, types, block scoping |
-| 0.3.0   | 2026-06-30 | Phase B: C++ FFI — extern "C" blocks, varargs, linker integration |
-| 0.4.0   | 2026-06-30 | Phase C: Python embedding — `python{}` blocks, `py_eval()`, auto-linking |
-| 0.5.0   | 2026-06-30 | Phase D: Ownership + safety — move semantics, borrow checker, arrays |
-| 0.6.0   | 2026-06-30 | Phase E (complete): overflow checking, structs, enums, pattern matching, generics, module system |
-| 0.7.0   | 2026-07-06 | Phase F: Flux Compilation — Extreme Performance |
-| **0.8.0** | **2026-07-06** | **Phase I: Ship Ready — AOT + Stdlib + Tooling** |
+| 0.0.1   | 2026-06-30 | Phase 0 MVP: immutable vars, print, arithmetic |
+| 0.0.2   | 2026-06-30 | Phase A: functions, if/while, types, block scoping |
+| 0.0.3   | 2026-06-30 | Phase B: C++ FFI — extern "C" blocks, varargs, linker integration |
+| 0.0.4   | 2026-06-30 | Phase C: Python embedding — `python{}` blocks, `py_eval()`, auto-linking |
+| 0.0.5   | 2026-06-30 | Phase D: Ownership + safety — move semantics, borrow checker, arrays |
+| 0.0.6   | 2026-06-30 | Phase E (complete): overflow checking, structs, enums, pattern matching, generics, module system |
+| 0.0.7   | 2026-07-06 | Phase F: Flux Compilation — Extreme Performance |
+| **0.0.8** | **2026-07-06** | **Phase I: Ship Ready — AOT + Stdlib + Tooling** |

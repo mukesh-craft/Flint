@@ -1,4 +1,4 @@
-// flint_os.cpp — v0.20: portable OS services (see flint_os.h).
+// flint_os.cpp — v0.0.20: portable OS services (see flint_os.h).
 // This file intentionally avoids LLVM: `x86_64-w64-mingw32-clang++ -c` must
 // stay clean so Windows support is machine-verified, not hand-waved.
 #include "flint_os.h"

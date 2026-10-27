@@ -60,7 +60,7 @@ before running anything), and the git log has one commit per completed step.
 
 ## 1. Current position
 
-**Flint is a 0.22.0 systems language with a safety model, a
+**Flint is a 0.0.23 systems language with a safety model, a
 batteries-included standard library, and a compiler that is also its
 toolchain.** The C++ compiler (`src/main.cpp`, ~16K lines) is authoritative;
 a self-hosted Flint pipeline (stage1/2/3) exists as the bootstrap ladder.

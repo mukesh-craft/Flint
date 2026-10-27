@@ -15,7 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-// PORT(v0.20): pthread mutex guards the lease table. POSIX (Linux/macOS/
+// PORT(v0.0.20): pthread mutex guards the lease table. POSIX (Linux/macOS/
 // Android) fine; Windows needs SRWLOCK/CRITICAL_SECTION or MinGW pthreads.
 #include <pthread.h>
 #include <stdlib.h>

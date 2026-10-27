@@ -12,7 +12,7 @@ The measurements in the README were taken on:
 - Termux on Android, AArch64 (`Linux localhost 4.19.157-perf+`, 8 cores)
 - `clang`/`clang++` 21.1.8 (`aarch64-unknown-linux-android24`)
 - Python 3.14.6
-- Flint `0.22.0` (`./flintc --version`)
+- Flint `0.0.23` (`./flintc --version`)
 
 Absolute timings on a phone move with thermal state. The README records the
 observed core clocks when a session was noisy; compare same-session medians,

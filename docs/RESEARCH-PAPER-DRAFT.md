@@ -12,7 +12,7 @@ and every number re-verified before writing.
 ## Abstract
 
 Flint is a statically typed, ahead-of-time and JIT-compiled systems
-language (v0.22.0) that runs entirely on an Android phone (Termux,
+language (v0.0.23) that runs entirely on an Android phone (Termux,
 AArch64). Its thesis: the "two-language problem" is worst on-device,
 where Python training frameworks either do not run or do not train —
 ExecuTorch training is experimental (C++ SGD and AdamW, with Adam

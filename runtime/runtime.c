@@ -7,7 +7,7 @@
 #include <math.h>
 #include <time.h>
 #include <sys/stat.h>
-// PORT(v0.20): POSIX-only headers below (dirent/unistd/sys-wait/regex/pthread).
+// PORT(v0.0.20): POSIX-only headers below (dirent/unistd/sys-wait/regex/pthread).
 // Linux + macOS + Android: fine as-is. Windows/MinGW: mostly provided by the
 // toolchain; MSVC needs shims (FindFirstFile, threads, bundled regex).
 #include <dirent.h>
