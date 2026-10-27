@@ -3,6 +3,8 @@
 *.bc
 *.bin
 flintc
+/flint
+/.flint/
 flintc_prof
 flintc_prof*
 flintc_bincache

@@ -17,6 +17,12 @@ All notable changes to Flint are documented here. Format follows
   comparison): the corrected path links an executable, so `flintc bench.fl -o
   bench.fl` would replace the program with the binary. The source survives,
   gated by the CLI test.
+- **`--print-size` no longer depends on cache state.** A binary-cache hit
+  restored the artifact without a link and printed no report, so measuring the
+  same source twice was silent on the second run. The binary shortcut is now
+  skipped when a size report is requested, the same rule `--check-bce` and
+  `--type-audit` already follow. `tests/test_print_size.sh` is repeatable with
+  a warm cache (11 checks).
 - **The self-host pipeline files are renamed to their stage roles**:
   `stage1/flint_lex.fl` → `stage1/lexer.fl`, `stage2/flint_parse.fl` →
   `stage2/parser.fl`, `stage3/flint_emit.fl` → `stage3/emitter.fl`. All
@@ -31,6 +37,21 @@ All notable changes to Flint are documented here. Format follows
   server, and the README gap list no longer calls the server untested.
 
 ### Added
+- **`flint`, a beginner-friendly command driver.** `flint run app.fl` builds
+  the native artifact through the existing content-addressed cache and runs
+  it; `flint build app.fl` stops after a successful link. Artifacts default
+  to `.flint/bin/<name>` (`.exe` on Windows, `.o` for `build --target`) and
+  `-o` overrides the path. `flint run app.fl one two` and
+  `flint run app.fl -- one two` forward program arguments; the program's exit
+  status is the driver's exit status. Compiler flags pass through unchanged,
+  while flintc-only modes (`--emit-interface`, `--emit-signatures`,
+  `--use-interface`, `--dump-tokens`, `--test`) are refused with a pointer to
+  `flintc`. The driver finds the compiler via `FLINTC`, its own directory,
+  then `PATH`. `flintc` keeps its flags and behavior as the lower-level
+  interface; it now resolves runtime objects next to the real executable
+  (`getMainExecutable`), so project-directory and symlinked installations
+  link correctly. Gate: `tests/test_flint_cli.sh` (78 checks), registered as
+  `flint-cli` in the v1 battery.
 - **`bytes`**: a scoped `i8` buffer with the same `{i8*, i64}` ABI as
   `[i64]`, checked `b[i]` reads/writes, a distinct checker type, and no full
   M7 generics. The `primes` control drops from 509.5 ms (`[i64]`) to 185.8 ms

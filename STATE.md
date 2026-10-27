@@ -45,11 +45,11 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; **Phase 3 / P1 performance is the active work** (§4.3) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical); **the corrected one-command CLI** (`-o` builds AND runs, `--no-run` is build-only, `tests/test_cli_run.sh` 52/52); **the scoped `bytes` type** (`tests/test_bytes.sh` 18/18); **native string methods** (`tests/test_string_methods.sh` 11/11); **Rust-style unused-variable warnings** (`W0001`/`W0002`, `tests/test_unused_warnings.sh` 20/20); **36 gates** |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical); **the corrected one-command CLI** (`-o` builds AND runs, `--no-run` is build-only, `tests/test_cli_run.sh` 52/52); **the scoped `bytes` type** (`tests/test_bytes.sh` 18/18); **native string methods** (`tests/test_string_methods.sh` 11/11); **Rust-style unused-variable warnings** (`W0001`/`W0002`, `tests/test_unused_warnings.sh` 20/20); **the high-level `flint` driver** (`flint run`/`flint build`, `tests/test_flint_cli.sh` 78/78); **38 gates** |
 | in flight | **P1 performance**: the safe `sum_array` is 1.42× C (its accumulator check still blocks vectorization); `--unsafe` is at C parity; `fib` is at parity; the `bytes` sieve is 185.8 ms vs C char 195.5 ms (same session) and is 2.74× faster than the i64 sieve. The pipeline `-O2` consumers are done; its length fact is measured redundant for the supported subset (§4.3) |
 | next action | **Choose the next safe-performance feature**: the wrapping-operator opt-in (1.45× on reductions, opt-in only) or a native `split()` string method. The default safety model is unchanged either way. Phase 2's remaining gaps (typed HIR §4.2, NLL §4.4, capability types §4.5) come after |
 | build | `bash build.sh` — ~3 min warm on this device (measured 2026-10-25); 12–15 min is the worst case under load. Poll at 60–120 s, never with a long sleep |
-| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 36 gates (27 fast + 9 slow), ~30–35 min; run it detached and poll |
+| gates | `bash tests/v1_gate_check.sh ./flintc --full` — 38 gates (29 fast + 9 slow), ~30–35 min; run it detached and poll |
 | invariant | the tree must be GREEN and COMMITTED at every step; if a step cannot be finished safely, leave it documented rather than half-done |
 | do not | hand-write a vectorizer (the roadmap rejects it); use `llvm.assume` for range facts instead |
 
@@ -71,18 +71,18 @@ Measured on this device (Termux AArch64, 3.6 GB RAM, clang 21.1.8, rustc
 controls and the per-workload method); this file does not repeat it.
 Reproduce with §2.3.
 
-**The v1 battery is green: 36 gates** (measured 2026-10-27; per-gate counts
+**The v1 battery is green: 38 gates** (measured 2026-10-27; per-gate counts
 in §2.2), and the standalone gates are green with it. The whole battery runs
-as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 36/36). The
+as one command (`bash tests/v1_gate_check.sh ./flintc --full`: 38/38). The
 checker's differential is 181/181 over every `.fl` in the tree, the type
 audit reports **0 contract violations and 0 drift**, the two frontends are
 compared by the differential gate (14/14), the query-mode gate is 14/14,
 the explicit-type-argument gate is 6/6, the closure-escape gate is 7/7, the
 input gate is 8/8, the bounds-safety gate is 5/5, the unsafe-flag gate is
 6/6, the range-facts gate is 19/19, the vectorize gate is 3/3, the cli-run
-gate is 52/52, the bytes gate is 18/18, the string-method gate is 11/11,
-the unused-warning gate is 20/20, and the bootstrap's fixed point is
-byte-identical.
+gate is 52/52, the flint-driver gate is 78/78, the size-report gate is 11/11,
+the bytes gate is 18/18, the string-method gate is 11/11, the unused-warning
+gate is 20/20, and the bootstrap's fixed point is byte-identical.
 
 ---
 
@@ -118,6 +118,8 @@ bash tests/test_fixpoint.sh        # 153/153 — self-host byte-identical
 bash tests/test_errors.sh          # 149/149 — stage3 emitter catalog
 bash tests/test_errors_cpp.sh      # 149/149 — C++ fixed-pattern catalog
 bash tests/test_cli_run.sh         # 52/52  — one-command CLI contract
+bash tests/test_flint_cli.sh       # 78/78  — high-level `flint` driver
+bash tests/test_print_size.sh      # 11/11  — size attribution, cold + cached
 bash tests/test_bytes.sh           # 18/18  — scoped `bytes` type
 bash tests/test_string_methods.sh  # 11/11  — native string methods
 bash tests/test_unused_warnings.sh # 20/20  — W0001/W0002 lints
@@ -143,14 +145,16 @@ with `bash tests/test_selfhost.sh A`; `test_explicit_targs.sh` fails rather
 than skipping when they are absent, and the corpus gates use them when
 `SELF_DIR` points at that directory.
 
-**The v1 battery (2026-10-27, 36 gates, all green):**
-`bash tests/v1_gate_check.sh ./flintc --full` → **36 passed, 0 failed**.
+**The v1 battery (2026-10-27, 38 gates, all green):**
+`bash tests/v1_gate_check.sh ./flintc --full` → **38 passed, 0 failed**.
 Every gate prints its own count; the counts re-measured at the 2D/2E landing
 and the CLI/bytes/string/warning landing:
 
 | gate | measured |
 |---|---|
 | cli-run (corrected 2026-10-27) | 52/52 — bare compile+run, `-o` builds AND runs, `--no-run` build-only, flag order, args, stdin, exit codes, cache-hit runs, `.ll`/`.o` emit, no source overwrite |
+| print-size (gated 2026-10-27) | 11/11 — reported file size matches disk, sections fit, JSON parses, and a warm cache still reports |
+| flint-cli (new 2026-10-27) | 78/78 — `flint run`/`flint build`, `.flint/bin` defaults, `-o`, arg forwarding and exit codes, mode errors, cross-target `.o`/`.ll`, missing compiler, paths with spaces, PATH install |
 | bytes (new 2026-10-27) | 18/18 — i8 storage, zero-extend reads, truncating writes, bounds checks, distinct from `[i64]`, JIT/AOT agree |
 | string-methods (new 2026-10-27) | 11/11 — native case/search/slice/convert methods, chaining, E0126/E0097, JIT/AOT agree |
 | unused-warnings (new 2026-10-27) | 20/20 — W0001/W0002, parameters, `_` opt-out, imports, JSON form, `--no-warn-unused`, AOT still runs |
@@ -776,10 +780,44 @@ propagation (JIT and AOT), binary-cache and module-cache hits still run,
 `--no-run` without `-o` is a usage error, `.ll`/`.o` stay emit-only, and
 `-o` refuses to overwrite the input source (device+inode check; a
 benchmark was once replaced by its own executable). It is in the fast
-battery, which is now 36 gates.
+battery, which is now 38 gates.
 
 **Verify**: `bash tests/test_cli_run.sh ./flintc` → 52/52;
 `bash tools/bench_cli_run.sh ./flintc`.
+
+### 4.12 High-level `flint` driver (2026-10-27)
+
+**Request**: a beginner should write `flint run app.fl`, not
+`flintc app.fl -o app && ./app`; `flintc` stays the low-level interface
+with every flag unchanged.
+
+**Implementation**: `src/flint_cli.cpp` is a small separate driver built by
+`build.sh`. It never parses Flint source — every build is delegated to
+`flintc`, so the cache, source-overwrite guard, diagnostics, and codegen
+flags have one implementation. `flint run` invokes
+`flintc <input> -o <artifact>` (which builds and runs) and forwards program
+arguments after `--`; `flint build` adds `--no-run` and rejects program
+arguments. The default artifact is `.flint/bin/<stem>` (`.exe` on Windows),
+or `.flint/bin/<stem>.o` for `build --target`; `-o` overrides. flintc-only
+modes (`--emit-interface`, `--emit-signatures`, `--use-interface`,
+`--dump-tokens`, `--test`) are refused with a pointer to `flintc`. The
+compiler is found via `FLINTC`, then a sibling of argv[0], then `PATH`, and
+is always passed to the child as an absolute path.
+
+**Runtime-object resolution**: `flintc` now sets `gRuntimeDir` from
+`llvm::sys::fs::getMainExecutable(argv[0])`, and `rtObj()` resolves
+`runtime.o`, the `flint_*.o` set, `pyruntime.o`, and `ffi_helper.o` next to
+the real binary (falling back to the historical cwd-relative name). Without
+this, `flint run` from a project directory failed at link time with
+`clang: runtime.o: no such file`, and a symlinked `flintc` looked beside the
+link instead of beside the real executable.
+
+**Gate**: `tests/test_flint_cli.sh` — 78 checks: run/build separation,
+default and `-o` artifacts, direct and `--` argument forwarding, exit-status
+propagation, mode and cross-target errors, compile failures that never run a
+stale artifact, edited sources that beat the cache, paths with spaces, and a
+PATH install of both binaries. **Verify**:
+`bash tests/test_flint_cli.sh ./flint ./flintc` → 78/78.
 
 ---
 
@@ -1206,7 +1244,7 @@ region work, not to a feature list ✓.
 |---|---|
 | `src/main.cpp` | the whole compiler (~16K lines). Key sites: `spawnLinker` (~293, the link line — §6.1), `emitCompareValues` / `createCallChecked` / `emitPrintCall` / `emitArray*Core` (the shared cores, P0-NEW-1), `emitEnumEqual` (P0-NEW-2), `inferGenericArgType` (M2c, strict), `namedFnThunk` / `namedFnValue` (named-fn-as-value), `llvmType` (array case = `{ptr,i64}`), `Type::fn_` |
 | `tests/run.sh` | the smoke suite + `check_fail` cases (60 checks) |
-| `tests/test_*.sh` | the standalone gates; the v1 battery is 28 (§2.2) |
+| `tests/test_*.sh` | the standalone gates; the v1 battery is 38 (§2.2) |
 | `tests_manual/` | fixtures for **new syntax** (not globbed by the self-host parse gates): `t_explicit_targs*.fl`, `t_named_fn_*.fl`, `t_generic_no_infer.fl`, and the M4 lambda fixtures |
 | `benchmarks/` | the workloads and their C/C++/Rust/Python mirrors |
 | `tools/bench_compare.sh`, `tools/bench_tooling.sh` | the harnesses (§2.3) |

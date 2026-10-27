@@ -427,6 +427,21 @@ struct SizeReport {
 // The objects the last link pulled in, recorded by spawnLinker.
 static std::vector<std::string> gLastLinkObjects;
 
+// Runtime objects live next to the compiler, not in the caller's working
+// directory. `flint run` and `flint build` invoke flintc from a project
+// directory, so a bare "runtime.o" would be looked up in the project and the
+// link would fail. Resolve each object against the compiler's own directory
+// first; fall back to the historical cwd-relative name when it is absent
+// (this keeps a relocated/partial tree working exactly as before).
+static std::string gRuntimeDir;
+static std::string rtObj(const std::string& name) {
+    if (gRuntimeDir.empty()) return name;
+    std::string beside = gRuntimeDir + "/" + name;
+    struct stat st;
+    if (stat(beside.c_str(), &st) == 0) return beside;
+    return name;
+}
+
 // Reads the artifact and fills the report.
 //
 // Sections come from the portable ObjectFile API; the symbol table and the
@@ -643,7 +658,7 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
                              "ffi_helper.o"};
     struct stat st;
     // Build the argv array directly — no shell, no string interpolation.
-    std::vector<std::string> args = {"clang", objPath, "runtime.o"};
+    std::vector<std::string> args = {"clang", objPath, rtObj("runtime.o")};
     // --as-needed makes the linker drop a DT_NEEDED entry for a library whose
     // symbols the program never uses. Without it every binary carried
     // libsqlite3, libcurl and libopenblas as hard runtime dependencies, so a
@@ -683,18 +698,23 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     };
     bool needsSqlite = false, needsCurl = false;
     for (auto* lib : stdLibs) {
-        if (stat(lib, &st) != 0) continue;
-        if (objectNeedsSymbols(lib, {"sqlite3_"})) needsSqlite = true;
-        if (objectNeedsSymbols(lib, {"curl_"})) needsCurl = true;
+        std::string libPath = rtObj(lib);
+        if (stat(libPath.c_str(), &st) != 0) continue;
+        if (objectNeedsSymbols(libPath, {"sqlite3_"})) needsSqlite = true;
+        if (objectNeedsSymbols(libPath, {"curl_"})) needsCurl = true;
     }
     if (needsSqlite) addLib("libsqlite3.so", "-lsqlite3");
     if (needsCurl) addLib("libcurl.so", "-lcurl");
 
     // Include standard library .o files if they exist
     gLastLinkObjects.clear();
-    gLastLinkObjects.push_back("runtime.o");
+    gLastLinkObjects.push_back(rtObj("runtime.o"));
     for (auto* lib : stdLibs) {
-        if (stat(lib, &st) == 0) { args.push_back(lib); gLastLinkObjects.push_back(lib); }
+        std::string libPath = rtObj(lib);
+        if (stat(libPath.c_str(), &st) == 0) {
+            args.push_back(libPath);
+            gLastLinkObjects.push_back(libPath);
+        }
     }
 
     // OpenBLAS, when it is installed. flint_blas.o references cblas_dgemm
@@ -736,8 +756,9 @@ static bool spawnLinker(const std::string& objPath, const std::string& outputPat
     // Either signal counts: the flag covers a direct compile, the symbol scan
     // covers a cache-served module that skipped codegen.
     bool needsPython = gProgramUsesPython || objectNeedsPython(objPath);
-    if (needsPython && stat("pyruntime.o", &st) == 0) {
-        args.push_back("pyruntime.o");
+    std::string pyRuntimeObj = rtObj("pyruntime.o");
+    if (needsPython && stat(pyRuntimeObj.c_str(), &st) == 0) {
+        args.push_back(pyRuntimeObj);
         // Detect python3-config linker flags. The command here is a fixed
         // literal (no user input), so popen is safe; the *output* is tokenized
         // and passed literally to exec, never re-interpreted by a shell.
@@ -910,9 +931,10 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
     using namespace llvm::orc;
     struct stat st;
     auto loadOne = [&](const std::string& objName, bool required) -> bool {
-        auto buf = MemoryBuffer::getFile(objName);
+        std::string objPath = rtObj(objName);
+        auto buf = MemoryBuffer::getFile(objPath);
         if (!buf) {
-            if (required) std::cerr << "JIT error: cannot open '" << objName << "': " << buf.getError().message() << "\n";
+            if (required) std::cerr << "JIT error: cannot open '" << objPath << "': " << buf.getError().message() << "\n";
             return !required;
         }
         if (auto err = JIT.addObjectFile(std::move(*buf))) {
@@ -921,7 +943,7 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
         }
         return true;
     };
-    if (stat("runtime.o", &st) == 0 && !loadOne("runtime.o", true)) return false;
+    if (stat(rtObj("runtime.o").c_str(), &st) == 0 && !loadOne("runtime.o", true)) return false;
     // OpenBLAS for the JIT path too. flint_blas.o reaches cblas_dgemm through a
     // WEAK symbol, so unless the library itself is loaded the probe resolves to
     // NULL and every matmul silently takes the portable triple loop -- which is
@@ -951,9 +973,9 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
     const char* libObjs[] = {"flint_math.o", "flint_fmt.o", "flint_coll.o",
                             "flint_nn.o", "flint_util.o", "flint_time.o"};
     for (auto* objName : libObjs)
-        if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
+        if (stat(rtObj(objName).c_str(), &st) == 0 && !loadOne(objName, true)) return false;
     for (auto* objName : aiObjs)
-        if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
+        if (stat(rtObj(objName).c_str(), &st) == 0 && !loadOne(objName, true)) return false;
     // Rust stdlib modules (runtime/rust) load as a plain object, exactly like
     // the C modules, because they are #![no_std]: no allocator, no TLS, no
     // libc handles. That is what makes this work at all -- a Rust `std` object
@@ -964,7 +986,7 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
     const char* stdObjs[] = {"flint_serial.o", "flint_crypto.o", "flint_net.o",
                              "flint_aegis.o", "flint_chan.o", "flint_std.o"};
     for (auto* objName : stdObjs)
-        if (stat(objName, &st) == 0 && !loadOne(objName, true)) return false;
+        if (stat(rtObj(objName).c_str(), &st) == 0 && !loadOne(objName, true)) return false;
     // libsqlite3: a C engine the Rust stdlib module wraps. Optional by design --
     // a Flint program that never touches sqlite runs fine without it.
     {
@@ -1004,12 +1026,13 @@ static bool loadJITObjects(llvm::orc::LLJIT& JIT, const std::vector<std::string>
         std::vector<std::string> names(std::begin(kCurlSymbols), std::end(kCurlSymbols));
         publishJITLibrary(JIT, candidates, names);
     }
-    if (stat("pyruntime.o", &st) == 0 && !loadOne("pyruntime.o", true)) return false;
+    if (stat(rtObj("pyruntime.o").c_str(), &st) == 0 && !loadOne("pyruntime.o", true)) return false;
     // Auto-load ffi_helper.o if present (unless already listed in extraObjs)
     bool hasFfiHelper = false;
     for (auto& obj : extraObjs) if (obj.find("ffi_helper") != std::string::npos) { hasFfiHelper = true; break; }
-    if (!hasFfiHelper && stat("ffi_helper.o", &st) == 0) {
-        auto buf = MemoryBuffer::getFile("ffi_helper.o");
+    std::string ffiHelperObj = rtObj("ffi_helper.o");
+    if (!hasFfiHelper && stat(ffiHelperObj.c_str(), &st) == 0) {
+        auto buf = MemoryBuffer::getFile(ffiHelperObj);
         if (buf) {
             if (auto err = JIT.addObjectFile(std::move(*buf))) {
                 std::cerr << "JIT error: " << toString(std::move(err)) << "\n";
@@ -1168,7 +1191,8 @@ static std::string cacheSalt(llvm::CodeGenOptLevel ol, bool releaseMode,
     };
     for (const char* obj : kRuntimeObjs) {
         struct stat rs;
-        if (stat(obj, &rs) == 0) {
+        std::string objPath = rtObj(obj);
+        if (stat(objPath.c_str(), &rs) == 0) {
             rt = rt * 1000003u + (uint64_t)rs.st_mtime;
             rt = rt * 1000003u + (uint64_t)rs.st_size;
         } else {
@@ -16490,12 +16514,23 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> libPaths;
     // Default library path: compiler's parent dir / std
     {
-        std::string compilerDir = argv[0];
-        auto slash = compilerDir.find_last_of('/');
+        // Resolve the real executable, not argv[0] as typed: an installed
+        // flintc may have been found through PATH or be a symlink, and the
+        // runtime objects live next to the real binary. getMainExecutable
+        // asks the OS (/proc/self/exe, _NSGetExecutablePath, or
+        // GetModuleFileName) and falls back to argv[0] only where no such
+        // query exists.
+        std::string compilerDir =
+            llvm::sys::fs::getMainExecutable(argv[0], (void*)&argc);
+        auto slash = compilerDir.find_last_of("/\\");
         if (slash != std::string::npos)
             compilerDir = compilerDir.substr(0, slash);
         else
             compilerDir = ".";
+        // Runtime objects are resolved against this directory by rtObj(),
+        // so flintc works from a project directory as well as from the
+        // compiler's own tree.
+        gRuntimeDir = compilerDir;
         libPaths.push_back(compilerDir + "/std");
         libPaths.push_back("./std");
     }
@@ -16895,7 +16930,12 @@ int main(int argc, char* argv[]) {
     // And skip in --test mode: a cached binary would skip the tests silently.
     bool emitBinary = !emitLl && !emitObj && !runMode;
 
-    if (emitBinary && !testModeFlag && !checkBce && !gTypeAudit && cache.hasBinary(sourceHash)) {
+    // --print-size is a measurement: its report (including the object list)
+    // must be identical on a cold build and a warm cache, so the binary
+    // shortcut is skipped. Without this, the second run printed no report at
+    // all because the cached copy was restored without a link.
+    if (emitBinary && !testModeFlag && !checkBce && !gTypeAudit &&
+        !gPrintSize && gPrintSizeJsonPath.empty() && cache.hasBinary(sourceHash)) {
         if (cache.loadBinary(sourceHash, outputPath)) {
             if (getenv("FLINT_LOG_CACHE"))
                 std::cerr << "cache: hit binary (skipped lex/parse/codegen/link)\n";

@@ -22,22 +22,28 @@ pkg update && pkg install clang llvm python make bash
 cd ~/Flint
 bash build.sh
 
-# Compile and run in one command (ORC JIT; no artifact on disk)
-./flintc examples/hello.fl
+# Beginner path: build if needed, then run (.flint/bin/hello)
+./flint run examples/hello.fl
 
-# Build, run, and keep a standalone executable
-./flintc examples/hello.fl -o hello
+# Build only, no execution; the artifact stays runnable
+./flint build examples/hello.fl
+./.flint/bin/hello
 
-# Build it without running (the explicit artifact-only path)
-./flintc examples/hello.fl -o hello --no-run
+# Lower-level compiler interface: choose the artifact path yourself
+./flintc examples/hello.fl -o hello           # build AND run
+./flintc examples/hello.fl -o hello --no-run  # build only
 ./hello
 ```
 
-A bare `flintc file.fl` is the fast one-command path: it compiles the
-current source and runs it in memory. `-o` compiles, links, and then runs
-the native executable, leaving that exact file on disk. `--no-run` keeps
-the artifact without executing it; `.ll`/`.o` outputs are emit-only, and
-`--target` never runs a cross-target artifact.
+`flint` is the high-level driver: `run` builds through the existing
+content-addressed cache and executes the artifact, `build` stops after the
+link. Artifacts default to `.flint/bin/<name>` (`-o` overrides), and
+`flint run app.fl -- one two` forwards arguments to the program while
+returning its exit status. `flintc` remains the lower-level interface: a
+bare `flintc file.fl` compiles and runs in memory, `-o` compiles, links,
+and runs the named file, and `--no-run` keeps it without executing.
+`.ll`/`.o` outputs are emit-only, and `--target` never runs a cross-target
+artifact.
 
 New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 (`bash tests/run_tutorial.sh ./flintc` checks your answers — 8/8 green).
@@ -577,11 +583,17 @@ returns a partial value.
 ## Tooling (verified flags only)
 
 `./flintc --help` lists every flag; `./flintc --version` prints the
-version. There are no `flintc <subcommand>` verbs — the interface is
+version. `./flint` is the high-level driver with two verbs (`run`,
+`build`); `flintc` itself has no subcommand verbs — its interface is
 flags plus standalone Python scripts:
 
 ```bash
-./flintc --help                       # every flag, grouped
+./flint run main.fl                   # build if needed, then run
+./flint build main.fl                 # build only (.flint/bin/main)
+./flint run main.fl -- one two        # forward program arguments
+./flint build main.fl -o myapp        # explicit artifact path
+./flint --help                        # driver usage; --version too
+./flintc --help                       # every flintc flag, grouped
 ./flintc --version                    # flintc 0.0.23
 ./flintc main.fl -o myapp            # native binary (AOT); builds and runs
 ./flintc main.fl -o myapp --no-run   # native binary (AOT); build only
@@ -622,7 +634,10 @@ python3 tools/flamegraph.py profile_report.json --folded   # folded stacks
 
 Known tooling gaps (do not rely on these):
 - `flintc run/build/test/fmt/doc/lsp/fetch/new/api` subcommands do not
-  exist — use the flags above plus `flint-fmt`/`flint-doc`/`flint-lsp`.
+  exist. The high-level driver provides only `flint run` and `flint build`;
+  formatting, docs, the language server, and package fetching remain
+  separate tools (`flint-fmt`, `flint-doc`, `flint-lsp`, and the
+  `flint.toml` dependency fetch built into `flintc`).
 - `--cgu`, `--no-strip`, `--emit-obj`, `--emit-header`, `--emit-llvm` are
   not flags: the **output extension** picks the artifact form
   (`.ll` = IR text, `.o` = object, other = linked executable), so

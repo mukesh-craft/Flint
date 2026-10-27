@@ -85,6 +85,7 @@ Expected output:
  profiled compiler: ./flintc_prof   (optional)
 === Build complete ===
  compiler: ./flintc
+ driver: ./flint
  profiled: ./flintc_prof
  runtime: ./runtime.o
  tensor: ./flint_tensor.o
@@ -99,12 +100,20 @@ Expected output:
 
 The build compiles:
 1. `src/main.cpp` → `flintc` (the compiler, ~1.2 MB on Termux AArch64)
-2. `runtime/runtime.c` → `runtime.o`
-3. Optional: `pyruntime.c` → `pyruntime.o` (if Python headers available)
-4. Optional: `ffi_helper.c` → `ffi_helper.o`
-5. Stdlib modules: `flint_serial.c`, `flint_crypto.c`, `flint_net.c`, `flint_tensor.c`, `flint_ai.c`, `flint_ai_opt.c`
+2. `src/flint_cli.cpp` → `flint` (the high-level `run`/`build` driver)
+3. `runtime/runtime.c` → `runtime.o`
+4. Optional: `pyruntime.c` → `pyruntime.o` (if Python headers available)
+5. Optional: `ffi_helper.c` → `ffi_helper.o`
+6. Stdlib modules: `flint_serial.c`, `flint_crypto.c`, `flint_net.c`, `flint_tensor.c`, `flint_ai.c`, `flint_ai_opt.c`
 
 ## Run
+
+### High-level driver (build and run)
+```bash
+./flint run examples/hello.fl    # build if needed, then run (.flint/bin/hello)
+./flint build examples/hello.fl  # build only
+```
+The modes below use the lower-level `flintc` interface directly.
 
 ### JIT Mode (default — no output file)
 ```bash
@@ -183,4 +192,4 @@ flint/
 2. **`true`/`false` literals exist:** they evaluate to `1`/`0` (verified: `print(true)` → `1`). Older docs saying otherwise are stale.
 3. **strrev at n=100K: fixed 2026-09-13 (R5).** Rebuilt on the linear `flint_sb_*` builder; now passes with correct checksum (5044012, verified 2026-09-24).
 4. **LLVM ISEL edge cases:** Mixed i64/f64 arithmetic is mostly fixed but may still crash in rare unsupported cases on AArch64.
-5. **Self-hosting: done.** Lexer/parser/emitter are Flint programs (`stage1-3/*.fl`); bootstrap A/B/C + stable promotion green. The v1 battery is **28/28** (`bash tests/v1_gate_check.sh ./flintc --full`, measured 2026-10-26), and the self-host pipeline's fixed point is byte-identical. This is pipeline completeness, not full feature parity with the C++ compiler — see `COMPATIBILITY.md` D5 for the remaining constructs (partial lambda parsing, enum equality, named function values).
+5. **Self-hosting: done.** Lexer/parser/emitter are Flint programs (`stage1-3/*.fl`); bootstrap A/B/C + stable promotion green. The v1 battery is green (`bash tests/v1_gate_check.sh ./flintc --full`; the current gate counts live in `STATE.md` §2.2), and the self-host pipeline's fixed point is byte-identical. This is pipeline completeness, not full feature parity with the C++ compiler — see `COMPATIBILITY.md` D5 for the remaining constructs (partial lambda parsing, enum equality, named function values).

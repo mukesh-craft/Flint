@@ -17,6 +17,20 @@ gate() { # $1=name $2...=command...
 gate parse-golden bash tests/test_parse.sh "$FLINTC"
 gate emit-gate bash tests/test_emit.sh "$FLINTC"
 gate cli-run bash tests/test_cli_run.sh "$FLINTC"
+# The high-level `flint` driver ships beside flintc; derive its path so an
+# out-of-tree compiler invocation (e.g. /path/to/flintc) tests the matching
+# driver rather than a stale ./flint.
+FLINT_BIN="${FLINT:-}"
+if [ -z "$FLINT_BIN" ]; then
+  case "$FLINTC" in
+    */flintc) FLINT_BIN="${FLINTC%flintc}flint" ;;
+    *)        FLINT_BIN="./flint" ;;
+  esac
+fi
+gate flint-cli bash tests/test_flint_cli.sh "$FLINT_BIN" "$FLINTC"
+# The size report is a measurement, so it must be identical on a cold build
+# and a warm cache; the gate runs the same sources twice.
+gate print-size bash tests/test_print_size.sh "$FLINTC"
 gate smoke bash tests/run.sh "$FLINTC"
 gate merge bash tests/test_merge.sh "$FLINTC"
 gate registry bash tests/test_registry.sh "$FLINTC"

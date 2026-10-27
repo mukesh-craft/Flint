@@ -92,6 +92,20 @@ else
     echo "  flintc up to date (skipped)"
 fi
 
+echo "=== Building Flint command driver (flint) ==="
+if needs_rebuild flint src/flint_cli.cpp src/flint_os.cpp src/flint_os.h VERSION; then
+    FLINT_CLI_LD="$STDLIB_FLAG"
+    case "$OS" in
+        # -ldl: flint_os.cpp uses dlopen; glibc before 2.34 needs the separate
+        # library (bionic and macOS keep it in libc, where -ldl is harmless or
+        # absent respectively).
+        Linux*) FLINT_CLI_LD="$FLINT_CLI_LD -Wl,-z,relro,-z,now,-z,noexecstack -ldl" ;;
+    esac
+    $CXX $CXXFLAGS -std=c++17 src/flint_cli.cpp src/flint_os.cpp $FLINT_CLI_LD -pie -o flint
+else
+    echo "  flint up to date (skipped)"
+fi
+
 echo "=== Building profiled build (FLINTC_PROFILE) ==="
 if needs_rebuild flintc_prof src/main.cpp src/flint_os.cpp src/flint_os.h; then
 $CXX $CXXFLAGS -std=c++17 -DFLINTC_PROFILE src/main.cpp src/flint_os.cpp $LDFLAGS -o flintc_prof 2>/dev/null && \
@@ -227,6 +241,7 @@ fi
 
 echo "=== Build complete ==="
 echo "  compiler:     ./flintc"
+echo "  driver:       ./flint"
 echo "  profiled:     ./flintc_prof"
 echo "  runtime:      ./runtime.o"
 echo "  tensor:       ./flint_tensor.o"
