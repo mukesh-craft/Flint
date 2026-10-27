@@ -624,12 +624,16 @@ Three fixes, in increasing cost:
    (§13), Flint can prove `0 <= i < len` and emit the access unchecked.
    This is the principled version and it needs the IR first.
 
-**Measured (2026-10-26): the element-size gap is worth ~2.3× on sieve-like
-code.** Flint's `[i64]` primes is within 7% of the C/C++/Rust i64 mirrors
+**Measured (2026-10-27): the element-size gap was worth ~2.3× on
+sieve-like code, and the scoped `bytes` type closes it.** Flint's `[i64]`
+primes is within 7% of the C/C++/Rust i64 mirrors in a clean session
 (422.5 vs 399.3/396.6/408.5 ms, medians), but a 1-byte C sieve runs at
-183.0 ms. So the headline gap is the missing byte-array type (item 2 /
-M7), not check elimination; see `tools/bench_primes_i64.sh` and
-`benchmarks/controls/`.
+183.0 ms. Rather than wait for full M7, Flint now has `bytes`, a checked
+i8 buffer with the same array ABI. Same-session medians: `bytes`
+**185.8 ms** vs 1-byte C **195.5 ms** — parity, without dropping checks.
+Generic element-size arrays (item 2 / M7) remain future work for types
+other than bytes; see `tools/bench_primes_i64.sh`,
+`benchmarks/primes_bytes.fl`, and `benchmarks/controls/`.
 
 ### 5.3 Cheap wins that need no new IR [D]
 

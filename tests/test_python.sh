@@ -41,7 +41,7 @@ else
 fi
 
 # --- AOT: same behaviour, and it must link libpython because it uses Python --
-if timeout -s KILL 120 "$FLINTC" tests/t_python.fl -o "$WORK/py.bin" > "$WORK/aot.log" 2>&1; then
+if timeout -s KILL 120 "$FLINTC" tests/t_python.fl --no-run -o "$WORK/py.bin" > "$WORK/aot.log" 2>&1; then
     if out="$("$WORK/py.bin" 2>/dev/null)"; then
         if [ "$(printf '%s' "$out" | tr '\n' ' ' | sed 's/  */ /g;s/ *$//')" = "$EXPECTED" ]; then
             ok "AOT: python behaves as in JIT"
@@ -66,7 +66,7 @@ fn main() {
     print(1 + 1)
 }
 FL
-if timeout -s KILL 120 "$FLINTC" "$WORK/nopy.fl" -o "$WORK/nopy.bin" > "$WORK/nopy.log" 2>&1; then
+if timeout -s KILL 120 "$FLINTC" "$WORK/nopy.fl" --no-run -o "$WORK/nopy.bin" > "$WORK/nopy.log" 2>&1; then
     if readelf -d "$WORK/nopy.bin" 2>/dev/null | grep -q libpython; then
         bad "AOT: a Python-free program does not link libpython" \
             "$(readelf -d "$WORK/nopy.bin" 2>/dev/null | grep libpython | tr -s ' ' | cut -d' ' -f2)"

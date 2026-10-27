@@ -35,7 +35,7 @@ else
 
 # --- Flint program calls Rust ------------------------------------------------
 if [ -f "$WORK/libflintrust.a" ] && \
-   "$FLINTC" tests/rust/from_flint.fl -o "$WORK/from_flint" \
+   "$FLINTC" tests/rust/from_flint.fl --no-run -o "$WORK/from_flint" \
         --link "$WORK/libflintrust.a" > "$WORK/ff.log" 2>&1; then
     ok "flint links the rust library"
 else

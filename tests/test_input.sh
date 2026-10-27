@@ -32,7 +32,7 @@ fn main() -> i64 {
 }
 EOF
 
-"$FLINTC" "$T/probe.fl" -o "$T/probe" > "$T/build.log" 2>&1
+"$FLINTC" "$T/probe.fl" --no-run -o "$T/probe" > "$T/build.log" 2>&1
 if [ $? -ne 0 ]; then
   echo "FAIL: probe did not compile"; cat "$T/build.log"; exit 1
 fi

@@ -22,6 +22,9 @@ CALLS = [
     # Phase 2 / 2A: the type checker's diagnostics are part of the same
     # catalogue (one code space, one renderer, one JSON stream).
     ("typeError", r"typeError"),
+    # Warnings share the catalogue too: W0001/W0002 are the unused-variable
+    # lints. Their messages are literal+interpolated, like every error.
+    ("emitWarning", r"emitWarning"),
 ]
 
 

@@ -179,8 +179,8 @@ Regenerate: `python3 tools/errors_cpp.py --format md` (or
 - `E0122  undefined variable ' <...> '`
 - `E0123  unknown enum ' <...> '`
 - `E0124  unknown enum in match`
-- `E0125  unknown method ' <...> ' for map (available: get, set, has, len, keys)`
-- `E0126  unknown method ' <...> ' for str (available: len, upper, lower, trim, reverse, get, repeat, startswith, endswith, indexof, replace)`
+- `E0125  unknown method ' <...> ' for map (available: <...> )`
+- `E0126  unknown method ' <...> ' for str (available: <...> )`
 - `E0127  unknown operator ' <...> '`
 - `E0128  unknown struct ' <...> '`
 - `E0129  unknown type ' <...> '`
@@ -196,5 +196,17 @@ Regenerate: `python3 tools/errors_cpp.py --format md` (or
 - `E0292  cannot assign a value of type <...> to ' <...> ' of type <...>`
 - `E0293  call to ' <...> ': argument <...> is <...> , but parameter <...> is <...>`
 - `E0294  cannot compare <...> with <...> ; convert one side explicitly`
+- `E0300  flint_bytes_get needs a bytes value`
+- `E0301  flint_bytes_set needs a bytes value`
+- `E0302  flint_bytes_set needs an integer value`
+- `E0303  flint_bytes_get needs 2 args`
+- `E0304  flint_bytes_set needs 3 args`
+- `E0305  flint_bytes_len needs 1 arg`
+- `E0306  flint_bytes_len needs a bytes value`
+- `E0307  flint_bytes_data needs 1 arg`
+- `E0308  flint_bytes_data needs a bytes value`
+- `E0309  index assignment requires an array or bytes variable`
+- `W0001  unused variable ' <...> '`
+- `W0002  variable ' <...> ' is assigned but never read`
 
-Total: 137 fixed-pattern diagnostics (145 stable codes; the other 8 build their message at runtime and are listed as `<variable message>` in docs/error-codes.csv).
+Total: 149 fixed-pattern diagnostics (157 stable codes; the other 8 build their message at runtime and are listed as `<variable message>` in docs/error-codes.csv).

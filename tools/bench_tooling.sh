@@ -60,7 +60,7 @@ strip_size() { # $1=path
 printf "%-22s %12s %12s\n" "artifact" "bytes" "stripped"
 printf "%-22s %12s %12s\n" "----------------------" "------------" "------------"
 
-"$FLINTC" "$T/hello.fl" -o "$T/hello.flint" >/dev/null 2>&1
+"$FLINTC" "$T/hello.fl" --no-run -o "$T/hello.flint" >/dev/null 2>&1
 printf "%-22s %12s %12s\n" "Flint (native)" "$(size_of "$T/hello.flint")" "$(strip_size "$T/hello.flint")"
 clang -O2 -o "$T/hello.c.bin" "$T/hello.c" >/dev/null 2>&1
 printf "%-22s %12s %12s\n" "C (clang -O2)" "$(size_of "$T/hello.c.bin")" "$(strip_size "$T/hello.c.bin")"
@@ -87,7 +87,7 @@ fn main() {
 }
 # build-time probe $RUNID
 EOF
-bt "Flint" "$FLINTC" "$T/bt.fl" -o "$T/bt.flint"
+bt "Flint" "$FLINTC" "$T/bt.fl" --no-run -o "$T/bt.flint"
 bt "C (clang -O2)" clang -O2 -o "$T/bt.c" "$T/hello.c"
 bt "C++ (clang++ -O2)" clang++ -O2 -o "$T/bt.cpp" "$T/hello.cpp"
 bt "Rust (rustc -O)" rustc -O -o "$T/bt.rs" "$T/hello.rs"

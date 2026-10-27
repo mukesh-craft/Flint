@@ -25,27 +25,32 @@ bash build.sh
 # Compile and run in one command (ORC JIT; no artifact on disk)
 ./flintc examples/hello.fl
 
-# Build a standalone executable (does NOT run it)
+# Build, run, and keep a standalone executable
 ./flintc examples/hello.fl -o hello
+
+# Build it without running (the explicit artifact-only path)
+./flintc examples/hello.fl -o hello --no-run
 ./hello
 ```
 
-A bare `flintc file.fl` is the one-command path: it compiles the current
-source and runs it, so the program's output appears immediately. `-o` is
-the explicit artifact path and always builds without running — even if
-`--run` also appears on the command line.
+A bare `flintc file.fl` is the fast one-command path: it compiles the
+current source and runs it in memory. `-o` compiles, links, and then runs
+the native executable, leaving that exact file on disk. `--no-run` keeps
+the artifact without executing it; `.ll`/`.o` outputs are emit-only, and
+`--target` never runs a cross-target artifact.
 
 New here? Work through `tutorial/01_hello.fl` … `tutorial/08_wrap.fl`
 (`bash tests/run_tutorial.sh ./flintc` checks your answers — 8/8 green).
 
-## Status (2026-10-26, verified on Termux AArch64)
+## Status (2026-10-27, verified on Termux AArch64)
 
 - **Working end to end** — compile, JIT, LLVM IR, interface files,
   content-addressed cache, generics (monomorphization), traits, closures,
-  enums + `match`, `for x in <array>`, C FFI, Python embedding, LSP,
-  formatter, and the standard-library/AI stack. The v1 battery and the full
-  gate suite are green; the counts and the per-gate table live in
-  [`STATE.md`](STATE.md) §2.2 (one home for status counts).
+  enums + `match`, `for x in <array>`, the scoped `bytes` type, native
+  string methods, Rust-style unused-variable warnings, C FFI, Python
+  embedding, LSP, formatter, and the standard-library/AI stack. The v1
+  battery and the full gate suite are green; the counts and the per-gate
+  table live in [`STATE.md`](STATE.md) §2.2 (one home for status counts).
 - **Self-hosted** — the lexer/parser/emitter are Flint programs
   (`stage1-3/*.fl`); the C++ `flintc` bootstraps them and the bootstrap
   fixed point is byte-identical. The pipeline compiles generics and traits,
@@ -183,6 +188,33 @@ Rules:
 - A JSON document with quoted keys is written `{{\"key\": value}}`.
 
 `tests/t_strings.fl` pins all of this, and `tests/run.sh` gates it.
+
+### String methods
+
+The common operations are native runtime calls, rewritten at parse time
+(`s.upper()` is exactly `flint_str_to_upper(s)`), so they work in JIT and
+AOT builds with no Python detour. Multi-word names accept both spellings
+(`startswith` / `starts_with`). Lengths and indices count **bytes**, not
+Unicode code points; `upper`, `lower`, `capitalize`, and `title` map ASCII
+bytes and leave multi-byte UTF-8 sequences unchanged.
+
+| group | methods |
+|---|---|
+| length / emptiness | `len()`, `is_empty()` / `isempty()` |
+| case | `upper()`, `lower()`, `capitalize()`, `title()` |
+| whitespace | `trim()` / `strip()`, `lstrip()` / `ltrim()`, `rstrip()` / `rtrim()` |
+| order | `reverse()` |
+| indexing | `get(i)`, `charat(i)` / `char_at(i)` — the **byte value** (0–255); `codepointat(i)` — the UTF-8 code point, or -1 |
+| search | `startswith(p)` / `starts_with(p)`, `endswith(s)` / `ends_with(s)`, `indexof(sub)` / `find(sub)`, `rfind(sub)` / `last_index_of(sub)`, `contains(sub)`, `count(sub)` |
+| edit | `repeat(n)`, `replace(old, new)`, `substring(start, end)` / `slice(start, end)` |
+| inspect / convert | `is_ascii()` / `isascii()`, `to_i64()` / `toi64()`, `to_f64()` / `tof64()`, `to_bool()` / `tobool()` |
+
+`capitalize()` lowercases everything and uppercases the first byte;
+`title()` does that per whitespace-separated word. `count("")` returns
+`len + 1` (Python's convention), and the search methods return `-1` when
+there is no match. Returned strings are heap-allocated by the runtime, as
+the existing `flint_str_*` functions are. The gate is
+`tests/test_string_methods.sh` (11 checks, JIT + AOT).
 
 ## Syntax
 
@@ -420,17 +452,27 @@ This compiles (all verified present after a clean build):
 ```
 
 The bare form always compiles the current source and then runs it in
-memory; it never reuses a stale executable. `-o` is the only switch that
-turns the run off.
+memory; it never reuses a stale executable.
 
-### AOT to executable (build only)
+### AOT: build + run in one command
 ```bash
-./flintc examples/hello.fl -o hello
+./flintc examples/hello.fl -o hello   # builds ./hello, runs it, keeps it
+./hello                               # the artifact is still there
+```
+`-o` compiles, links, and then executes the native executable it just
+produced. The child inherits stdin/stdout/stderr, receives arguments after
+`--`, and its exit status becomes `flintc`'s exit status. If compilation or
+linking fails, nothing is executed.
+
+The extension selects an emit-only form instead: `.ll` = LLVM IR text,
+`.o` = object file. Those are never run. `--no-run` (or `--build-only`)
+keeps a native artifact without executing it:
+```bash
+./flintc examples/hello.fl -o hello --no-run
 ./hello
 ```
-`-o` produces the artifact and does not execute it. The extension selects
-the form: `.ll` = LLVM IR text, `.o` = object file, anything else = linked
-executable.
+`--target` also emits without running, because a cross-target artifact is
+not a host executable.
 (Note: `-o` output may need `chmod +x` on some systems before running.)
 
 ### AOT to LLVM IR
@@ -511,7 +553,8 @@ flags plus standalone Python scripts:
 ```bash
 ./flintc --help                       # every flag, grouped
 ./flintc --version                    # flintc 0.22.0
-./flintc main.fl -o myapp            # native binary (AOT)
+./flintc main.fl -o myapp            # native binary (AOT); builds and runs
+./flintc main.fl -o myapp --no-run   # native binary (AOT); build only
 ./flintc main.fl out.ll              # LLVM IR text (by output extension)
 ./flintc main.fl out.o               # object file (by output extension)
 ./flintc --test main.fl              # run every test_ function, prints a summary
@@ -573,10 +616,11 @@ There is no `flintc api` command and no `llms.txt`. The diagnostic catalogs
 are the reference for what the compiler will reject:
 
 - [`docs/errors-cpp.md`](docs/errors-cpp.md) — the C++ `flintc` you run:
-  **137 fixed-pattern diagnostics over 145 stable codes**. Eight codes
+  **149 fixed-pattern diagnostics over 157 stable codes**. Eight codes
   (E0137–E0144) build their message at runtime and appear as
   `<variable message>` in the code table. Four codes retired by Phase 2 / 2D
-  (E0041–E0044) are not reused.
+  (E0041–E0044) are not reused. The two warning codes (`W0001`, `W0002`)
+  share the catalogue and the renderer but never fail a build.
 - [`docs/errors.md`](docs/errors.md) — the self-hosted emitter:
   **149 codes**.
 - [`docs/error-codes.csv`](docs/error-codes.csv) and
@@ -586,6 +630,28 @@ are the reference for what the compiler will reject:
 `tests/test_errors_cpp.sh`, `tests/test_errors.sh`, and
 `tests/test_diagnostic_codes.sh` keep the catalogs and the code tables in
 sync. The tutorial is the language tour; it is not a diagnostics reference.
+
+### Warnings: unused variables
+
+A local binding that is never **read** is reported like Rust's
+`unused_variables` lint. A write is not a use, so `mut x = 0; x = 1` reports
+`W0002` ("assigned but never read"), while a binding that is never touched
+at all reports `W0001` ("unused variable"). Parameters, match bindings, and
+destructured names are included; top-level globals are not (another
+imported file may use them).
+
+```flint
+fn main() -> i64 {
+    x = 1          # warning[W0001]: unused variable 'x'
+    _scratch = 2   # silent: the underscore opts out
+    0
+}
+```
+
+Warnings never change the exit status, and they are printed for cached
+builds too (the cache stores artifacts, not diagnostics). Silence them with
+`--no-warn-unused` or `-Wno-unused`. The gate is
+`tests/test_unused_warnings.sh` (20 checks).
 
 ## Concurrency
 
@@ -748,7 +814,7 @@ cold build time, and startup. The directory holds 6 shootout programs,
 ```bash
 bash tools/bench_compare.sh sum_array primes pi strrev
 bash tools/bench_tooling.sh
-./flintc benchmarks/matmul.fl -o matmul && ./matmul
+./flintc benchmarks/matmul.fl -o matmul   # builds, runs, keeps ./matmul
 ```
 
 The device, the exact commands, and the "what is not measured" caveats are
@@ -799,14 +865,18 @@ emitted, and a checked reduction cannot be reassociated/vectorized. The
 safety model is unchanged; `tests/test_vectorize.sh` pins the vectorizer
 metadata, the retained check, and the exact sum.
 
-Note (2026-10-26): the `primes` row compares different element sizes.
-Flint's only array is `[i64]`, so its sieve is 80 MB; the C/C++/Rust
-mirrors use 1-byte elements (10 MB). Same-session AOT control
-(`tools/bench_primes_i64.sh`, three rounds, medians): Flint **422.5 ms**
-vs C i64 **399.3 ms**, C++ i64 **396.6 ms**, Rust i64 **408.5 ms** —
-within 7%. The 1-byte C sieve is **183.0 ms**, so the headline gap is the
-missing byte-array type (roadmap §5.2/M7), not the compiler. The control
-sources are in `benchmarks/controls/`.
+Note (2026-10-27): the `primes` row compares different element sizes, and
+Flint now has both representations. `[i64]` is 8-byte elements (80 MB
+sieve); `bytes` is the scoped i8 buffer (10 MB, same as the C/C++/Rust
+mirrors). Same-session AOT control (`tools/bench_primes_i64.sh`, three
+rounds, medians): Flint i64 **509.5 ms** vs C i64 **423.5 ms**, C++ i64
+**386.7 ms**, Rust i64 **418.3 ms** (this session's i64 rows were noisy:
+419.8–542.3 ms; the 2026-10-26 session measured 422.5 ms, within 7% of
+C). The point of the control is the byte row: Flint `bytes` is
+**185.8 ms** vs the 1-byte C sieve **195.5 ms** — the element-size gap is
+closed by the new type, not by dropping checks. Generic element-size
+arrays (M7) remain future work; the scoped buffer is what sieve-like code
+needs. The control sources are in `benchmarks/controls/`.
 
 Note (2026-10-10): the `matmul` row is new — same-session, AOT Flint
 (OpenBLAS) vs naive C vs numpy 2.4.4 (`benchmarks/matmul_np.py`;
@@ -909,7 +979,7 @@ What exists and how to run it (file lists and line counts verified
 |-------|-------|-------|-----|
 | `tests/` smoke tests | 5 `.fl` (`t_hello` 8, `t_arith` 26, `t_flow` 48, `t_funcs` 15, `t_types` 23) | 120 | `bash tests/run.sh ./flintc` |
 | `tests/` runners | `run.sh` 116, `run_tutorial.sh` 18, `test_registry.sh` 43 | 177 | `bash tests/test_registry.sh` |
-| diagnostic catalogs | `docs/errors-cpp.md` (137 fixed-pattern diagnostics over 145 codes) + `docs/errors.md` (149 emitter codes) | — | `bash tests/test_errors_cpp.sh` · `bash tests/test_errors.sh` |
+| diagnostic catalogs | `docs/errors-cpp.md` (149 fixed-pattern diagnostics over 157 codes, including W0001/W0002) + `docs/errors.md` (149 emitter codes) | — | `bash tests/test_errors_cpp.sh` · `bash tests/test_errors.sh` |
 | `benchmarks/` workloads | 6 shootout `.fl` (`fib` 15, `fib2` 11, `pi` 23, `primes` 33, `strrev` 34, `sum_array` 31) + 13 `test_*` probes (86) | 233 | `bash tools/bench_compare.sh` |
 | `benchmarks/` mirrors | 7 workloads in C, C++, Python (+numpy matmul mirror) + 2 Rust oracle mirrors + the iterative `fib_iter` set | 461 | `clang -O2` / `g++` / `python3` / `rustc` |
 | `benchmarks/` iterative fib | `fib_iter` in Flint/C/C++/Rust/Python, same iterative algorithm | 122 | `bash tools/bench_compare.sh fib_iter` |
@@ -934,5 +1004,5 @@ for f in examples/*.fl; do echo "=== $f ===" && timeout 30 ./flintc "$f" 2>&1 | 
 
 # FFI demo needs its helper object; Python demo needs an AOT build:
 ./flintc examples/ffi_demo.fl --link "ffi_helper.o"
-./flintc examples/python_demo.fl -o pydemo && ./pydemo
+./flintc examples/python_demo.fl -o pydemo   # builds, runs, keeps ./pydemo
 ```

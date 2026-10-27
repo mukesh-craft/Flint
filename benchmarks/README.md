@@ -39,21 +39,25 @@ The harness **does not** time JIT execution. The README's large runtime table
 is a 2026-09-12 JIT snapshot; an AOT run through the harness will differ
 slightly. Both use the same in-program timer.
 
-## Same representation: the `primes` i64 control
+## Same representation: the `primes` i64 and `bytes` controls
 
-The headline `primes` row is not like-for-like: Flint's only array element
-type is i64 (80 MB sieve), while the C/C++/Rust mirrors use 1-byte
-elements (10 MB). `tools/bench_primes_i64.sh` builds i64 mirrors for all
-four and runs them in one session, alternating:
+The headline `primes` row is not like-for-like: `[i64]` is 8-byte
+elements (80 MB sieve), while the C/C++/Rust mirrors use 1-byte elements
+(10 MB). `tools/bench_primes_i64.sh` builds i64 mirrors for all four
+**and** the same algorithm over Flint's `bytes` type, then runs every
+variant in one session, alternating:
 
 ```bash
 bash tools/bench_primes_i64.sh 3
 ```
 
-Medians on 2026-10-26: Flint **422.5 ms**, C **399.3 ms**, C++ **396.6 ms**,
-Rust **408.5 ms** — Flint is within 7%. The 1-byte C sieve is **183.0 ms**,
-so the remaining gap is the missing byte-array type, not check
-elimination. The control sources live in `benchmarks/controls/`.
+Medians on 2026-10-27: Flint i64 **509.5 ms**, C **423.5 ms**, C++
+**386.7 ms**, Rust **418.3 ms** (the i64 rows were noisy this session:
+419.8–542.3 ms; the 2026-10-26 session measured 422.5 ms, within 7% of
+C). Flint `bytes` **185.8 ms** vs the 1-byte C sieve **195.5 ms** — the
+scoped byte buffer closes the element-size gap without dropping checks.
+Generic element-size arrays (M7) are still future work. The control
+sources live in `benchmarks/controls/`.
 
 `benchmarks/matmul.fl` is separate because it exercises the tensor/BLAS path:
 

@@ -38,7 +38,7 @@ check_out tests_manual/t_capturing_assign.fl "42"   # local assign, then return
 # stays in its frame must not. Checking the emitted module (not the source)
 # keeps the gate honest about what the compiler actually did.
 emit() { # $1=file $2=out.ll
-    "$FLINTC" "$1" -o "$2" >/dev/null 2>&1
+    "$FLINTC" "$1" --no-run -o "$2" >/dev/null 2>&1
 }
 
 if emit tests_manual/t_capturing_escape.fl "$T/escape.ll"; then

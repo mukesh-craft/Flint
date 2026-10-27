@@ -26,7 +26,7 @@ fmt() { awk -v n="$1" 'BEGIN{ if (n < 1000000) printf "%.1fus", n/1000; else pri
 
 run_flint() { # $1=workload
     local w="$1"
-    if ! "$FLINTC" "benchmarks/$w.fl" -o "$T/$w.flint" >/dev/null 2>&1; then
+    if ! "$FLINTC" "benchmarks/$w.fl" --no-run -o "$T/$w.flint" >/dev/null 2>&1; then
         echo "n/a"; return
     fi
     "$T/$w.flint" 2>/dev/null | awk '/^time:/ {print $2; exit}'

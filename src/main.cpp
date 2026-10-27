@@ -46,6 +46,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cctype>
+#include <cstring>
 #include <cstdint>
 #include <cmath>
 #include <cassert>
@@ -257,6 +258,49 @@ static int runProcess(const std::vector<std::string>& args) {
     if (waitpid(pid, &status, 0) < 0) return -1;
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     return -1;
+}
+
+// Run the native artifact that `-o` just produced. This is deliberately
+// execv, not execvp: the contract is "run that exact executable", not
+// "whatever the PATH finds under the same name". stdio is inherited, so the
+// child reads the caller's stdin and writes the caller's stdout/stderr; the
+// parent waits and returns the child's status (128+signal when killed).
+// Returns 127 with a diagnostic if the child cannot be launched.
+static int runExecutable(const std::string& path,
+                         const std::vector<std::string>& args) {
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 2);
+    argv.push_back(const_cast<char*>(path.c_str()));
+    for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
+    argv.push_back(nullptr);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        std::cerr << "flintc: cannot launch '" << path << "': "
+                  << std::strerror(errno) << "\n";
+        return 127;
+    }
+    if (pid == 0) {
+        execv(path.c_str(), argv.data());
+        std::cerr << "flintc: cannot launch '" << path << "': "
+                  << std::strerror(errno) << "\n";
+        _exit(127);
+    }
+
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno == EINTR) continue;
+        std::cerr << "flintc: waiting for '" << path << "' failed: "
+                  << std::strerror(errno) << "\n";
+        return 127;
+    }
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) {
+        std::cerr << "flintc: '" << path << "' terminated by signal "
+                  << WTERMSIG(status) << "\n";
+        return 128 + WTERMSIG(status);
+    }
+    return 127;
 }
 
 // Does this object file reference the embedded-CPython bridge?
@@ -1442,7 +1486,7 @@ private:
 // TYPE
 // ============================================================================
 
-enum class TypeKind { I64, F64, Str, Bool, Void, Ptr, Array, Ref, Struct, Enum, TypeParam, Map, Func };
+enum class TypeKind { I64, F64, Str, Bool, Void, Ptr, Array, Ref, Struct, Enum, TypeParam, Map, Func, Bytes };
 
 struct Type {
     TypeKind kind = TypeKind::Void;
@@ -1479,6 +1523,11 @@ struct Type {
     static Type void_()  { Type t; t.kind = TypeKind::Void; return t; }
     static Type ptr_()   { Type t; t.kind = TypeKind::Ptr; return t; }
     static Type array(Type e)  { Type t; t.kind = TypeKind::Array; t.elemType = std::make_shared<Type>(e); return t; }
+    // A byte buffer. Deliberately a DISTINCT kind from Array even though the
+    // LLVM representation is the same {ptr, i64}: the element width is what
+    // differs (i8 vs i64), and the type checker must not let a byte buffer
+    // be indexed as i64 or an i64 array be written as bytes.
+    static Type bytes()  { Type t; t.kind = TypeKind::Bytes; return t; }
     static Type ref(Type e)    { Type t; t.kind = TypeKind::Ref;   t.elemType = std::make_shared<Type>(e); return t; }
     static Type struct_(const std::string& n) { Type t; t.kind = TypeKind::Struct; t.structName = n; return t; }
     static Type enum_(const std::string& n) { Type t; t.kind = TypeKind::Enum; t.structName = n; return t; }
@@ -1547,7 +1596,10 @@ struct EnumDef {
         case TypeKind::Map:  return llvm::PointerType::get(ctx, 0);
         case TypeKind::Void: return llvm::Type::getVoidTy(ctx);
         case TypeKind::Ref:  return llvm::PointerType::get(ctx, 0);
-        case TypeKind::Array: {
+        case TypeKind::Array:
+        case TypeKind::Bytes: {
+            // Same runtime slice as an array; only the element GEP differs
+            // (i8 for bytes, i64 for an array).
             llvm::Type* elemPtrTy = llvm::PointerType::get(ctx, 0);
             llvm::Type* lenTy = llvm::Type::getInt64Ty(ctx);
             return llvm::StructType::get(ctx, {elemPtrTy, lenTy});
@@ -1832,6 +1884,9 @@ std::string gDiagFormat = "human";
 // threads, so the list is guarded.
 std::vector<Diagnostic> gDiagnostics;
 std::mutex gDiagMutex;
+// Rust-style unused-variable warnings are ON by default; --no-warn-unused
+// (or -Wno-unused) turns the lint off for generated code.
+static bool gWarnUnused = true;
 
 // JSON string escaping (the diagnostics carry source text and names).
 static std::string jsonEscape(const std::string& s) {
@@ -1996,6 +2051,28 @@ static void emitFileError(const char* code, const std::string& message) {
     d.level = "error";
     d.message = message;
     emitDiagnostic(d);
+}
+
+// A warning with a span. Warnings share the renderer, the stable-code
+// space (W####) and the JSON stream with errors, but they never set the
+// compiler's error flag: the program still builds and runs.
+static void emitWarning(const char* code, const std::string& message,
+                        int fileId, SourceLocation loc,
+                        const std::string& help) {
+    Diagnostic d;
+    d.code = code ? code : "";
+    d.level = "warning";
+    d.message = message;
+    DiagLabel l;
+    l.primary = true;
+    l.span.fileId = fileId;
+    l.span.start.line = loc.line;
+    l.span.start.col = loc.col;
+    l.span.end.line = loc.line;
+    l.span.end.col = loc.col + 1;
+    d.labels.push_back(l);
+    d.help = help;
+    emitDiagnostic(std::move(d));
 }
 
 // ============================================================================
@@ -2766,6 +2843,10 @@ struct FunctionAST : ExprAST {
     std::string name;
     std::vector<std::string> typeParams;
     std::vector<std::pair<std::string, Type>> params;
+    // Source position of each parameter, parallel to `params`. The unused-
+    // variable warning points at the parameter itself, not at the function
+    // name (a warning on the wrong line is worse than no warning).
+    std::vector<SourceLocation> paramLocs;
     std::vector<std::unique_ptr<ExprAST>> defaults; // default values for params
     Type returnType;
     // Phase 2 / 2A: was the return type WRITTEN (`-> T`) or inferred from
@@ -2799,6 +2880,266 @@ struct ProgramAST {
     std::vector<std::string> imports;
     std::vector<std::unique_ptr<VarDeclAST>> globals;
     std::vector<std::unique_ptr<ExprAST>> topStmts;
+};
+
+// ============================================================================
+// UNUSED-VARIABLE WARNINGS (Rust's `unused_variables`, adapted)
+//
+// A local binding (a `let`/declaration, a function or lambda parameter, a
+// match binding, or a destructured name) that is never READ is reported.
+// A WRITE is not a use: `mut x = 0; x = 1;` says "assigned but never read",
+// which is the dead store the warning is about.
+//
+// Scope rules mirror the parser: a block opens a scope, a declaration is
+// visible only after its initializer, and the nearest declaration wins, so
+// shadowing marks the inner binding and leaves the outer one alone. A
+// leading underscore opts out, exactly as in Rust -- this also keeps
+// compiler-generated names (`__coll`, `__idx`, ...) out of the report.
+//
+// This is a WARNING: compilation continues. It runs on the parsed AST, not
+// on tokens, so it sees exactly the bindings codegen sees. Top-level
+// declarations are deliberately excluded: they can be used by another
+// imported file, and warning on a cross-file use would be a false positive.
+// ============================================================================
+class UnusedVarAnalysis {
+public:
+    explicit UnusedVarAnalysis(int fileId) : fileId(fileId) {}
+
+    void run(ProgramAST& prog) {
+        for (auto& fn : prog.functions) {
+            if (!fn || fn->isDeclaration || !fn->body) continue;
+            runFunction(fn.get());
+        }
+    }
+
+private:
+    struct Decl {
+        std::string name;
+        SourceLocation loc;
+        bool read = false;
+        bool written = false;
+    };
+    struct Scope {
+        std::unordered_map<std::string, size_t> names;
+    };
+
+    int fileId;
+    std::vector<Decl> decls;
+    std::vector<Scope> scopes;
+
+    static bool optOut(const std::string& n) {
+        return !n.empty() && n[0] == '_';
+    }
+
+    void runFunction(FunctionAST* fn) {
+        decls.clear();
+        scopes.clear();
+        scopes.emplace_back();
+        for (size_t i = 0; i < fn->params.size(); i++) {
+            SourceLocation loc = (i < fn->paramLocs.size()) ? fn->paramLocs[i] : fn->loc;
+            declare(fn->params[i].first, loc);
+        }
+        walk(fn->body.get());
+        report();
+    }
+
+    void pushScope() { scopes.emplace_back(); }
+    void popScope() { if (scopes.size() > 1) scopes.pop_back(); }
+
+    void declare(const std::string& name, SourceLocation loc) {
+        if (optOut(name)) return;
+        if (scopes.empty()) scopes.emplace_back();
+        decls.push_back({name, loc, false, false});
+        scopes.back().names[name] = decls.size() - 1;
+    }
+
+    long lookup(const std::string& name) const {
+        for (size_t i = scopes.size(); i-- > 0;) {
+            auto it = scopes[i].names.find(name);
+            if (it != scopes[i].names.end()) return (long)it->second;
+        }
+        return -1;
+    }
+
+    void use(const std::string& name) {
+        long i = lookup(name);
+        if (i >= 0) decls[(size_t)i].read = true;
+    }
+    void write(const std::string& name) {
+        long i = lookup(name);
+        if (i >= 0) decls[(size_t)i].written = true;
+    }
+
+    void report() {
+        for (const auto& d : decls) {
+            if (d.read) continue;
+            // Rust splits these into two lints (unused_variables and
+            // unused_assignments); so do we, because "never read" and
+            // "written but never read" want different fixes.
+            if (d.written) {
+                emitWarning("W0002",
+                            "variable '" + d.name + "' is assigned but never read",
+                            fileId, d.loc,
+                            "remove the dead assignment, or read the variable");
+            } else {
+                emitWarning("W0001", "unused variable '" + d.name + "'",
+                            fileId, d.loc,
+                            "if this is intentional, prefix it with an underscore: '_" +
+                            d.name + "'");
+            }
+        }
+    }
+
+    void walk(ExprAST* e) {
+        if (!e) return;
+        switch (e->kind) {
+            case NodeKind::Number:
+            case NodeKind::String:
+            case NodeKind::Break:
+            case NodeKind::Continue:
+            case NodeKind::Tensor:
+            case NodeKind::PyBlock: // opaque Python source: no bindings visible
+                return;
+            case NodeKind::Variable:
+                use(static_cast<VariableExprAST*>(e)->name);
+                return;
+            case NodeKind::Assign: {
+                auto* a = static_cast<AssignExprAST*>(e);
+                walk(a->rhs.get());
+                write(a->varName);
+                return;
+            }
+            case NodeKind::Binary: {
+                auto* b = static_cast<BinaryExprAST*>(e);
+                walk(b->lhs.get()); walk(b->rhs.get());
+                return;
+            }
+            case NodeKind::Compare: {
+                auto* c = static_cast<CompareExprAST*>(e);
+                walk(c->lhs.get()); walk(c->rhs.get());
+                return;
+            }
+            case NodeKind::Call: {
+                auto* c = static_cast<CallExprAST*>(e);
+                // An indirect call (`h = inc; h(5)`) names a local binding
+                // in the callee position; that is a read of `h`. Builtin and
+                // user-function names simply do not resolve to a local.
+                use(c->callee);
+                for (auto& a : c->args) walk(a.get());
+                return;
+            }
+            case NodeKind::VarDecl: {
+                auto* v = static_cast<VarDeclAST*>(e);
+                walk(v->init.get());
+                declare(v->varName, v->loc);
+                return;
+            }
+            case NodeKind::Return:
+                walk(static_cast<ReturnStmtAST*>(e)->value.get());
+                return;
+            case NodeKind::If: {
+                auto* i = static_cast<IfStmtAST*>(e);
+                walk(i->condition.get());
+                walk(i->thenBlock.get());
+                walk(i->elseBlock.get());
+                return;
+            }
+            case NodeKind::While: {
+                auto* w = static_cast<WhileStmtAST*>(e);
+                walk(w->condition.get());
+                walk(w->body.get());
+                return;
+            }
+            case NodeKind::Block: {
+                auto* b = static_cast<BlockStmtAST*>(e);
+                pushScope();
+                for (auto& s : b->stmts) walk(s.get());
+                popScope();
+                return;
+            }
+            case NodeKind::Array: {
+                auto* a = static_cast<ArrayExprAST*>(e);
+                for (auto& el : a->elements) walk(el.get());
+                return;
+            }
+            case NodeKind::Index: {
+                auto* i = static_cast<IndexExprAST*>(e);
+                walk(i->base.get()); walk(i->index.get());
+                return;
+            }
+            case NodeKind::Slice: {
+                auto* s = static_cast<SliceExprAST*>(e);
+                walk(s->arr.get()); walk(s->start.get()); walk(s->end.get());
+                return;
+            }
+            case NodeKind::Ref:
+                walk(static_cast<RefExprAST*>(e)->target.get());
+                return;
+            case NodeKind::Deref:
+                walk(static_cast<DerefExprAST*>(e)->target.get());
+                return;
+            case NodeKind::StructLiteral: {
+                auto* s = static_cast<StructLiteralAST*>(e);
+                for (auto& f : s->fields) walk(f.second.get());
+                return;
+            }
+            case NodeKind::EnumConstruct: {
+                auto* en = static_cast<EnumConstructAST*>(e);
+                for (auto& a : en->args) walk(a.get());
+                return;
+            }
+            case NodeKind::Match: {
+                auto* m = static_cast<MatchExprAST*>(e);
+                walk(m->scrutinee.get());
+                for (auto& arm : m->arms) {
+                    pushScope();
+                    for (auto& bn : arm.bindNames) declare(bn, e->loc);
+                    walk(arm.body.get());
+                    popScope();
+                }
+                return;
+            }
+            case NodeKind::FieldAccess:
+                walk(static_cast<FieldAccessAST*>(e)->base.get());
+                return;
+            case NodeKind::Function: {
+                auto* f = static_cast<FunctionAST*>(e);
+                pushScope();
+                for (size_t i = 0; i < f->params.size(); i++) {
+                    SourceLocation loc = (i < f->paramLocs.size()) ? f->paramLocs[i] : f->loc;
+                    declare(f->params[i].first, loc);
+                }
+                walk(f->body.get());
+                popScope();
+                return;
+            }
+            case NodeKind::Lambda: {
+                auto* l = static_cast<LambdaExprAST*>(e);
+                pushScope();
+                for (auto& p : l->params) declare(p.first, e->loc);
+                walk(l->body.get());
+                popScope();
+                return;
+            }
+            case NodeKind::Unwrap:
+                walk(static_cast<UnwrapExprAST*>(e)->inner.get());
+                return;
+            case NodeKind::Destructure: {
+                auto* d = static_cast<DestructureAST*>(e);
+                walk(d->init.get());
+                for (auto& n : d->names) declare(n, e->loc);
+                return;
+            }
+            case NodeKind::MapLiteral: {
+                auto* m = static_cast<MapLiteralAST*>(e);
+                for (auto& v : m->values) walk(v.get());
+                return;
+            }
+            case NodeKind::Cast:
+                walk(static_cast<CastExprAST*>(e)->expr.get());
+                return;
+        }
+    }
 };
 
 // ============================================================================
@@ -3624,6 +3965,7 @@ public:
             "flint_bounds_check", "flint_str_free", "flint_print", "flint_println",
             "flint_csv_free",
             "flint_free", "flint_array_write_i64", "flint_array_free",
+            "flint_bytes_free", "flint_bytes_set",
             "flint_null_check", "flint_array_set_ptr", "flint_srand",
             "flint_vec_free", "flint_vec_set", "flint_vec_push", "flint_vec_clear",
             "flint_map_free", "flint_map_set", "flint_sb_free", "flint_sb_append",
@@ -3635,20 +3977,24 @@ public:
         };
         if (kVoid.count(callee)) return Type::void_();
 
-        // Aggregate handles: a map or array is a {ptr, i64} pair value, and
-        // only these three builtins produce one.
+        // Aggregate handles: a map, array or byte buffer is a {ptr, i64}
+        // pair value, and only these builtins produce one.
         if (callee == "flint_map_new" || callee == "flint_array_alloc" ||
-            callee == "flint_array_concat")
-            return callee == "flint_map_new" ? Type::map() : Type::array(Type::i64());
+            callee == "flint_array_concat" || callee == "flint_bytes_alloc")
+            return callee == "flint_map_new" ? Type::map()
+                 : (callee == "flint_bytes_alloc" ? Type::bytes()
+                                                  : Type::array(Type::i64()));
 
         // Opaque handles and strings: bare pointers.
         static const std::unordered_set<std::string> kPtr = {
             "flint_vec_new", "flint_array_slice", "flint_sb_new", "flint_sb_build",
             "flint_map_keys", "flint_array_data", "flint_array_data_ptr",
-            "flint_array_get_ptr",
+            "flint_array_get_ptr", "flint_bytes_data",
             "flint_str_concat", "flint_str_substring", "flint_str_upper",
             "flint_str_lower", "flint_i64_to_string", "flint_f64_to_string",
             "flint_str_trim", "flint_str_replace", "flint_str_split",
+            "flint_str_capitalize", "flint_str_title", "flint_str_lstrip",
+            "flint_str_rstrip",
             "flint_str_join", "flint_str_from_i64", "flint_str_from_f64",
             "flint_base64_encode", "flint_base64_decode", "flint_hex_encode",
             "flint_hex_decode", "flint_json_decode",
@@ -3814,6 +4160,10 @@ public:
             return true;
         }
         if (t.type == TokenType::IDENTIFIER) {
+            // The declaration pre-pass must see `-> bytes`; otherwise a
+            // forward call to a bytes-returning function infers i64 and the
+            // module is rejected by the verifier.
+            if (t.lexeme == "bytes") { out = Type::bytes(); i++; return true; }
             if (structRegistry.count(t.lexeme)) { out = Type::struct_(t.lexeme); i++; return true; }
             if (enumRegistry.count(t.lexeme)) { out = Type::enum_(t.lexeme); i++; return true; }
         }
@@ -4008,6 +4358,7 @@ public:
     std::unique_ptr<FunctionAST> parseFunctionDefNoKeyword() {
         Token nameTok = consume(TokenType::IDENTIFIER, "expected function name");
         std::vector<std::pair<std::string, Type>> params;
+        std::vector<SourceLocation> paramLocs;
         std::vector<std::unique_ptr<ExprAST>> defaults;
         std::vector<size_t> untyped;
         if (match(TokenType::LPAREN)) {
@@ -4023,6 +4374,7 @@ public:
                         defaults.push_back(nullptr);
                     }
                     params.emplace_back(pName.lexeme, pType);
+                    paramLocs.push_back(pName.loc);
                     if (!hadType) untyped.push_back(params.size() - 1);
                 } while (match(TokenType::COMMA));
             }
@@ -4038,6 +4390,7 @@ public:
                     defaults.push_back(nullptr);
                 }
                 params.emplace_back(pName.lexeme, pType);
+                paramLocs.push_back(pName.loc);
             }
         }
         Type retType = Type::void_();
@@ -4046,6 +4399,7 @@ public:
         auto fn = std::make_unique<FunctionAST>();
         fn->name = nameTok.lexeme;
         fn->params = std::move(params);
+        fn->paramLocs = std::move(paramLocs);
         fn->untypedParams = std::move(untyped);
         fn->defaults = std::move(defaults);
         fn->returnType = retType;
@@ -4316,6 +4670,10 @@ private:
         if (match(TokenType::IDENTIFIER)) {
             std::string name = previous().lexeme;
             if (name == "map") return Type::map();
+            // `bytes` is contextual, not a lexer keyword: a variable or
+            // function may still be named `bytes`. In TYPE position it is
+            // the byte-buffer type.
+            if (name == "bytes") return Type::bytes();
             if (structRegistry.count(name)) return Type::struct_(name);
             if (enumRegistry.count(name)) return Type::enum_(name);
             for (auto& tp : parserTypeParams) if (tp == name) return Type::typeParam(name);
@@ -4451,6 +4809,7 @@ private:
         consume(TokenType::LPAREN, "expected '(' after function name");
 
         std::vector<std::pair<std::string, Type>> params;
+        std::vector<SourceLocation> paramLocs;
         std::vector<std::unique_ptr<ExprAST>> defaults;
         std::vector<size_t> untyped;
         if (!check(TokenType::RPAREN)) {
@@ -4467,6 +4826,7 @@ private:
                     defaults.push_back(nullptr);
                 }
                 params.emplace_back(pName.lexeme, pType);
+                paramLocs.push_back(pName.loc);
                 if (!hadType) untyped.push_back(params.size() - 1);
             } while (match(TokenType::COMMA));
         }
@@ -4490,6 +4850,7 @@ private:
         fn->name = nameTok.lexeme;
         fn->typeParams = std::move(typeParams);
         fn->params = std::move(params);
+        fn->paramLocs = std::move(paramLocs);
         fn->untypedParams = std::move(untyped);
         fn->defaults = std::move(defaults);
         fn->returnType = retType;
@@ -5147,7 +5508,6 @@ private:
         // 2A: the declaration site is the variable NAME, so a diagnostic can
         // point at it (it used to default to line 1).
         decl->loc = nameTok.loc;
-        decl->loc = nameTok.loc;
         return decl;
     }
 
@@ -5206,6 +5566,8 @@ private:
             if (n == "flint_str_concat" || n == "flint_str_substring" ||
                 n == "flint_str_to_upper" || n == "flint_str_to_lower" ||
                 n == "flint_str_trim" || n == "flint_str_reverse" ||
+                n == "flint_str_capitalize" || n == "flint_str_title" ||
+                n == "flint_str_lstrip" || n == "flint_str_rstrip" ||
                 n == "flint_str_replace" || n == "flint_str_repeat" ||
                 n == "flint_str_join" || n == "flint_i64_to_string" ||
                 n == "flint_f64_to_string" || n == "flint_map_keys")
@@ -5214,35 +5576,92 @@ private:
         return 0;
     }
 
+    // The method table: receiver kind, source spelling, runtime symbol, and
+    // TOTAL arity (receiver included). One table feeds dispatch, the arity
+    // check, and the "available: ..." list in E0126/E0125 — a method cannot
+    // exist in one and be missing from another. Multi-word methods accept
+    // both the compact (startswith) and underscored (starts_with) spelling.
+    struct BuiltinMethod {
+        TypeKind recv;
+        const char* name;
+        const char* target;
+        size_t arity;
+    };
+    static const std::vector<BuiltinMethod>& builtinMethods() {
+        static const std::vector<BuiltinMethod> table = {
+            // str
+            {TypeKind::Str, "len",         "flint_str_length",       1},
+            {TypeKind::Str, "isempty",     "flint_str_is_empty",     1},
+            {TypeKind::Str, "is_empty",    "flint_str_is_empty",     1},
+            {TypeKind::Str, "upper",       "flint_str_to_upper",     1},
+            {TypeKind::Str, "lower",       "flint_str_to_lower",     1},
+            {TypeKind::Str, "capitalize",  "flint_str_capitalize",   1},
+            {TypeKind::Str, "title",       "flint_str_title",        1},
+            {TypeKind::Str, "trim",        "flint_str_trim",         1},
+            {TypeKind::Str, "strip",       "flint_str_trim",         1},
+            {TypeKind::Str, "lstrip",      "flint_str_lstrip",       1},
+            {TypeKind::Str, "ltrim",       "flint_str_lstrip",       1},
+            {TypeKind::Str, "rstrip",      "flint_str_rstrip",       1},
+            {TypeKind::Str, "rtrim",       "flint_str_rstrip",       1},
+            {TypeKind::Str, "reverse",     "flint_str_reverse",      1},
+            {TypeKind::Str, "isascii",     "flint_str_is_ascii",     1},
+            {TypeKind::Str, "is_ascii",    "flint_str_is_ascii",     1},
+            {TypeKind::Str, "get",         "flint_str_char_at",      2},
+            {TypeKind::Str, "charat",      "flint_str_char_at",      2},
+            {TypeKind::Str, "char_at",     "flint_str_char_at",      2},
+            {TypeKind::Str, "codepointat", "flint_str_codepoint_at", 2},
+            {TypeKind::Str, "codepoint_at","flint_str_codepoint_at", 2},
+            {TypeKind::Str, "repeat",      "flint_str_repeat",       2},
+            {TypeKind::Str, "startswith",  "flint_str_starts_with",  2},
+            {TypeKind::Str, "starts_with", "flint_str_starts_with",  2},
+            {TypeKind::Str, "endswith",    "flint_str_ends_with",    2},
+            {TypeKind::Str, "ends_with",   "flint_str_ends_with",    2},
+            {TypeKind::Str, "indexof",     "flint_str_index_of",     2},
+            {TypeKind::Str, "find",        "flint_str_index_of",     2},
+            {TypeKind::Str, "rfind",       "flint_str_last_index_of",2},
+            {TypeKind::Str, "lastindexof", "flint_str_last_index_of",2},
+            {TypeKind::Str, "last_index_of","flint_str_last_index_of",2},
+            {TypeKind::Str, "contains",    "flint_str_contains",     2},
+            {TypeKind::Str, "count",       "flint_str_count",        2},
+            {TypeKind::Str, "replace",     "flint_str_replace",      3},
+            {TypeKind::Str, "substring",   "flint_str_substring",    3},
+            {TypeKind::Str, "slice",       "flint_str_substring",    3},
+            {TypeKind::Str, "toi64",       "flint_str_to_i64",       1},
+            {TypeKind::Str, "to_i64",      "flint_str_to_i64",       1},
+            {TypeKind::Str, "tof64",       "flint_str_to_f64",       1},
+            {TypeKind::Str, "to_f64",      "flint_str_to_f64",       1},
+            {TypeKind::Str, "tobool",      "flint_str_to_bool",      1},
+            {TypeKind::Str, "to_bool",     "flint_str_to_bool",      1},
+            // map
+            {TypeKind::Map, "get",         "flint_map_get",          2},
+            {TypeKind::Map, "set",         "flint_map_set",          3},
+            {TypeKind::Map, "has",         "flint_map_has",          2},
+            {TypeKind::Map, "len",         "flint_map_len",          1},
+            {TypeKind::Map, "keys",        "flint_map_keys",         1},
+        };
+        return table;
+    }
     // Map a method name + receiver kind to its flint_* builtin.
     // Returns "" when unknown; sets *wantArity to the required TOTAL arg
     // count (incl. receiver) when the name is known but haveArity mismatches.
     std::string methodBuiltin(const std::string& m, TypeKind recv, size_t haveArity,
                               size_t* wantArity) {
-        const char* target = nullptr;
-        size_t want = 0;
-        if (recv == TypeKind::Str) {
-            if (m == "len") { target = "flint_str_length"; want = 1; }
-            else if (m == "upper") { target = "flint_str_to_upper"; want = 1; }
-            else if (m == "lower") { target = "flint_str_to_lower"; want = 1; }
-            else if (m == "trim") { target = "flint_str_trim"; want = 1; }
-            else if (m == "reverse") { target = "flint_str_reverse"; want = 1; }
-            else if (m == "get") { target = "flint_str_char_at"; want = 2; }
-            else if (m == "repeat") { target = "flint_str_repeat"; want = 2; }
-            else if (m == "startswith") { target = "flint_str_starts_with"; want = 2; }
-            else if (m == "endswith") { target = "flint_str_ends_with"; want = 2; }
-            else if (m == "indexof") { target = "flint_str_index_of"; want = 2; }
-            else if (m == "replace") { target = "flint_str_replace"; want = 3; }
-        } else if (recv == TypeKind::Map) {
-            if (m == "get") { target = "flint_map_get"; want = 2; }
-            else if (m == "set") { target = "flint_map_set"; want = 3; }
-            else if (m == "has") { target = "flint_map_has"; want = 2; }
-            else if (m == "len") { target = "flint_map_len"; want = 1; }
-            else if (m == "keys") { target = "flint_map_keys"; want = 1; }
+        for (const auto& e : builtinMethods()) {
+            if (e.recv != recv || m != e.name) continue;
+            if (haveArity != e.arity) { *wantArity = e.arity; return ""; }
+            return e.target;
         }
-        if (!target) return "";
-        if (haveArity != want) { *wantArity = want; return ""; }
-        return target;
+        return "";
+    }
+    // The spellings a receiver kind accepts, for diagnostics.
+    static std::string methodList(TypeKind recv) {
+        std::string out;
+        for (const auto& e : builtinMethods()) {
+            if (e.recv != recv) continue;
+            if (!out.empty()) out += ", ";
+            out += e.name;
+        }
+        return out;
     }
 
     // Collect variable uses in a lambda body for capture detection.
@@ -5448,10 +5867,10 @@ private:
                                 std::to_string(methodArity - 1) + " argument(s)");
                         else if (recvKind == 1)
                             parseError("E0126", "unknown method '" + fName.lexeme +
-                                "' for str (available: len, upper, lower, trim, reverse, get, repeat, startswith, endswith, indexof, replace)");
+                                "' for str (available: " + methodList(TypeKind::Str) + ")");
                         else
                             parseError("E0125", "unknown method '" + fName.lexeme +
-                                "' for map (available: get, set, has, len, keys)");
+                                "' for map (available: " + methodList(TypeKind::Map) + ")");
                         return nullptr;
                     } else {
                         auto call = std::make_unique<CallExprAST>("fa_" + fName.lexeme, std::move(args));
@@ -5547,13 +5966,17 @@ private:
         if (lhs->kind == NodeKind::Index && check(TokenType::ASSIGN)) {
             auto* ix = static_cast<IndexExprAST*>(lhs.get());
             bool isArray = false;
+            bool isBytes = false;
             if (ix->base && ix->base->kind == NodeKind::Variable) {
                 auto* bv = static_cast<VariableExprAST*>(ix->base.get());
                 auto it = varTypeMap.find(bv->name);
-                if (it != varTypeMap.end() && it->second.kind == TypeKind::Array) isArray = true;
+                if (it != varTypeMap.end()) {
+                    if (it->second.kind == TypeKind::Array) isArray = true;
+                    else if (it->second.kind == TypeKind::Bytes) isBytes = true;
+                }
             }
-            if (!isArray) {
-                parseError("E0085", "index assignment requires an array variable");
+            if (!isArray && !isBytes) {
+                parseError("E0309", "index assignment requires an array or bytes variable");
                 advance(); // '=' — guarantee progress, never spin
                 auto sink = parseExpression();
                 (void)sink;
@@ -5567,7 +5990,8 @@ private:
             sargs.push_back(std::move(ix->base));
             sargs.push_back(std::move(ix->index));
             sargs.push_back(std::move(rhs));
-            auto setCall = std::make_unique<CallExprAST>("flint_array_set", std::move(sargs));
+            auto setCall = std::make_unique<CallExprAST>(
+                isBytes ? "flint_bytes_set" : "flint_array_set", std::move(sargs));
             setCall->loc = aloc;
             return setCall;
         }
@@ -6375,6 +6799,7 @@ public:
             case TypeKind::Void: return "void";
             case TypeKind::Ptr: return "ptr";
             case TypeKind::Array: return "array";
+            case TypeKind::Bytes: return "bytes";
             case TypeKind::Map: return "map";
             case TypeKind::Struct: return "struct:" + t.structName;
             case TypeKind::Enum: return "enum:" + t.structName;
@@ -6588,6 +7013,7 @@ public:
             case TypeKind::Bool: return "bool";
             case TypeKind::Map: return "map";
             case TypeKind::Array: return "array";
+            case TypeKind::Bytes: return "bytes";
             case TypeKind::Ptr: return "ptr";
             default: return "?";
         }
@@ -6892,6 +7318,18 @@ public:
         add("flint_array_data_ptr", i8PtrTy, {arrPtrTy}, false);
         add("flint_array_free", voidTy, {arrTy}, false);
         add("flint_array_concat", arrTy, {arrTy, arrTy}, false);
+        // Byte buffers: the SAME {ptr, i64} runtime slice as an array, but
+        // i8 elements. `flintTypeOfLlvm` cannot tell the two apart (both
+        // are {ptr, i64}), so the Flint-level types are corrected here,
+        // at the one registry the parser and the checker both read.
+        add("flint_bytes_alloc", arrTy, {i64Ty}, false);
+        gBuiltinTypes["flint_bytes_alloc"] = Type::bytes();
+        add("flint_bytes_len", i64Ty, {arrTy}, false);
+        add("flint_bytes_get", i64Ty, {arrTy, i64Ty}, false);
+        add("flint_bytes_set", voidTy, {arrTy, i64Ty, i64Ty}, false);
+        add("flint_bytes_free", voidTy, {arrTy}, false);
+        add("flint_bytes_data", i8PtrTy, {arrTy}, false);
+        gBuiltinTypes["flint_bytes_data"] = Type::ptr_();
         add("flint_null_check", voidTy, {i8PtrTy, i8PtrTy}, false);
         // C1: loopOpt-gated check attrs (off by default → zero IR change).
         if (loopOpt) {
@@ -6959,8 +7397,15 @@ public:
         add("flint_str_to_upper", i8PtrTy, {i8PtrTy}, false);
         add("flint_str_to_lower", i8PtrTy, {i8PtrTy}, false);
         add("flint_str_trim", i8PtrTy, {i8PtrTy}, false);
+        add("flint_str_capitalize", i8PtrTy, {i8PtrTy}, false);
+        add("flint_str_title", i8PtrTy, {i8PtrTy}, false);
+        add("flint_str_lstrip", i8PtrTy, {i8PtrTy}, false);
+        add("flint_str_rstrip", i8PtrTy, {i8PtrTy}, false);
         add("flint_str_index_of", i64Ty, {i8PtrTy, i8PtrTy}, false);
         add("flint_str_last_index_of", i64Ty, {i8PtrTy, i8PtrTy}, false);
+        add("flint_str_contains", i64Ty, {i8PtrTy, i8PtrTy}, false);
+        add("flint_str_count", i64Ty, {i8PtrTy, i8PtrTy}, false);
+        add("flint_str_is_empty", i64Ty, {i8PtrTy}, false);
         add("flint_str_starts_with", i64Ty, {i8PtrTy, i8PtrTy}, false);
         add("flint_str_ends_with", i64Ty, {i8PtrTy, i8PtrTy}, false);
         add("flint_str_replace", i8PtrTy, {i8PtrTy, i8PtrTy, i8PtrTy}, false);
@@ -9382,15 +9827,17 @@ public:
             auto* tref = symTable.lookup(decl->varName);
             if (tref) tref->isTensor = true;
         }
-        // `arr = flint_array_alloc(n)`: the runtime length is exactly n, and
-        // n is the value the user's own loop compares against -- so the
-        // bounds check and the loop use the SAME value and LLVM folds the
-        // check away. Local bindings only (the value must dominate the use).
+        // `arr = flint_array_alloc(n)` / `b = flint_bytes_alloc(n)`: the
+        // runtime length is exactly n, and n is the value the user's own
+        // loop compares against -- so the bounds check and the loop use the
+        // SAME value and LLVM folds the check away. Local bindings only
+        // (the value must dominate the use).
         if (decl->init && decl->init->kind == NodeKind::Call && init) {
             auto* call = llvm::dyn_cast<llvm::CallInst>(init);
-            if (call && call->getCalledFunction() &&
-                call->getCalledFunction()->getName() == "flint_array_alloc" &&
-                call->arg_size() == 1) {
+            const bool lenProducer = call && call->getCalledFunction() &&
+                (call->getCalledFunction()->getName() == "flint_array_alloc" ||
+                 call->getCalledFunction()->getName() == "flint_bytes_alloc");
+            if (lenProducer && call->arg_size() == 1) {
                 auto* arrSym = symTable.lookup(decl->varName);
                 if (arrSym && arrSym->alloca) {
                     llvm::Value* n = call->getArgOperand(0);
@@ -10226,6 +10673,11 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         // Same lookup as the fa_* method lowering below.
         bool baseIsMap = false;
         ExprAST* be = idx->base.get();
+        // `bytes` and `[i64]` are the same LLVM struct, so the element
+        // width has to come from the Flint-level type.
+        Type baseStaticType;
+        bool baseIsBytes = staticExprType(be, baseStaticType) &&
+                           baseStaticType.kind == TypeKind::Bytes;
         if (be->kind == NodeKind::MapLiteral) baseIsMap = true;
         else if (be->kind == NodeKind::Variable) {
             auto* bv = static_cast<VariableExprAST*>(be);
@@ -10287,6 +10739,13 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             }
             if (!idx->unchecked) {
                 emitBoundsCheckInline(index, len);
+            }
+            if (baseIsBytes) {
+                // One byte per element; the language value is i64, so the
+                // load is zero-extended (0..255) exactly like str[i].
+                llvm::Value* elemPtr = builder->CreateGEP(i8Ty, dataPtr, index, "bytes_elem");
+                auto* byteVal = builder->CreateLoad(i8Ty, elemPtr, "bytes_byte");
+                return builder->CreateZExt(byteVal, i64Ty, "bytes_val");
             }
             llvm::Value* elemPtr = builder->CreateGEP(i64Ty, dataPtr, index, "arr_elem");
             return builder->CreateLoad(i64Ty, elemPtr, "arr_elem_val");
@@ -10732,6 +11191,79 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         builder->CreateStore(val, elemPtr);
         return llvm::ConstantInt::get(i64Ty, 0);
     }
+    // Byte-buffer cores. Same checked shape as the array cores, but the
+    // element is one byte: a read zero-extends to i64 (0..255), a write
+    // truncates the low 8 bits. `knownLen` carries the same exact-length
+    // fact, so the check folds when the user's loop bound is the alloc size.
+    llvm::Value* emitBytesGetCore(llvm::Value* buf, llvm::Value* idx,
+                                  llvm::Value* knownLen = nullptr) {
+        if (!buf || !idx) return nullptr;
+        if (!buf->getType()->isStructTy())
+            return codegenError("E0300", "flint_bytes_get needs a bytes value");
+        auto* dataPtr = builder->CreateExtractValue(buf, {0}, "bytes_data");
+        auto* len = builder->CreateExtractValue(buf, {1}, "bytes_len");
+        if (knownLen && valueDominatesHere(knownLen)) len = knownLen;
+        emitLoopBoundsCheck(idx, len);
+        auto* elemPtr = builder->CreateGEP(i8Ty, dataPtr, idx, "bytes_elem");
+        auto* byteVal = builder->CreateLoad(i8Ty, elemPtr, "bytes_byte");
+        return builder->CreateZExt(byteVal, i64Ty, "bytes_val");
+    }
+    llvm::Value* emitBytesSetCore(llvm::Value* buf, llvm::Value* idx,
+                                  llvm::Value* val, llvm::Value* knownLen = nullptr) {
+        if (!buf || !idx || !val) return nullptr;
+        if (!buf->getType()->isStructTy())
+            return codegenError("E0301", "flint_bytes_set needs a bytes value");
+        auto* dataPtr = builder->CreateExtractValue(buf, {0}, "bytes_data");
+        auto* len = builder->CreateExtractValue(buf, {1}, "bytes_len");
+        if (knownLen && valueDominatesHere(knownLen)) len = knownLen;
+        emitLoopBoundsCheck(idx, len);
+        // The language has no i8 value type, so a byte store takes the low
+        // 8 bits of the i64. This is documented, not silent: the bytes
+        // section of README says values are truncated modulo 256.
+        llvm::Value* narrowed = val;
+        if (!narrowed->getType()->isIntegerTy(8)) {
+            if (!narrowed->getType()->isIntegerTy())
+                return codegenError("E0302", "flint_bytes_set needs an integer value");
+            narrowed = builder->CreateIntCast(narrowed, i8Ty, true, "bytes_byte");
+        }
+        auto* elemPtr = builder->CreateGEP(i8Ty, dataPtr, idx, "bytes_elem");
+        builder->CreateStore(narrowed, elemPtr);
+        return llvm::ConstantInt::get(i64Ty, 0); // dummy return
+    }
+    // The static Flint type of an expression, for the places where the
+    // LLVM type is ambiguous. `bytes` and `[i64]` are both {ptr, i64}, so
+    // an index cannot dispatch on the LLVM shape alone.
+    bool staticExprType(ExprAST* e, Type& out) {
+        if (!e) return false;
+        if (e->kind == NodeKind::Variable) {
+            auto* v = static_cast<VariableExprAST*>(e);
+            if (const Symbol* sym = symTable.lookup(v->name)) { out = sym->type; return true; }
+            auto git = globalSymTable.find(v->name);
+            if (git != globalSymTable.end()) { out = git->second.type; return true; }
+            return false;
+        }
+        if (e->kind == NodeKind::Call) {
+            auto* c = static_cast<CallExprAST*>(e);
+            auto bit = gBuiltinTypes.find(c->callee);
+            if (bit != gBuiltinTypes.end()) { out = bit->second; return true; }
+            auto fit = functionDefs.find(c->callee);
+            if (fit != functionDefs.end()) { out = resolveType(fit->second->returnType); return true; }
+            return false;
+        }
+        if (e->kind == NodeKind::FieldAccess) {
+            auto* f = static_cast<FieldAccessAST*>(e);
+            Type base;
+            if (!staticExprType(f->base.get(), base)) return false;
+            if (base.kind != TypeKind::Struct) return false;
+            auto sit = gStructFieldTypes.find(base.structName);
+            if (sit == gStructFieldTypes.end()) return false;
+            for (auto& fd : sit->second) {
+                if (fd.first == f->fieldName) { out = fd.second; return true; }
+            }
+            return false;
+        }
+        return false;
+    }
 
     llvm::Value* emitAggregateEqual(llvm::Value* l, llvm::Value* r, int depth) {
         if (!l || !r || depth > 16) return nullptr;
@@ -10968,6 +11500,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             case TypeKind::TypeParam: s += "tp"; return;
             case TypeKind::Ref: s += "ref"; return;
             case TypeKind::Array: s += "arr"; return;
+            case TypeKind::Bytes: s += "bytes"; return;
             case TypeKind::Map: s += "map"; return;
             case TypeKind::Struct:
                 // Struct and enum names are user-supplied, so they must be
@@ -11384,6 +11917,40 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             return emitArrayDataCore(arrVal);
         }
 
+        // Byte-buffer builtins are lowered inline, exactly like their array
+        // counterparts: a runtime call per sieve store would defeat the
+        // point of the i8 element type. The C functions still exist for the
+        // ABI (extern callers and --emit-llvm consumers).
+        if (call->callee == "flint_bytes_get") {
+            if (call->args.size() != 2) { return codegenError("E0303", "flint_bytes_get needs 2 args"); }
+            auto* bufVal = emitExpr(call->args[0].get());
+            auto* idxVal = emitExpr(call->args[1].get());
+            emitLoopRangeAssume(call->args[1].get());
+            return emitBytesGetCore(bufVal, idxVal, knownLenOfArg(call->args[0].get()));
+        }
+        if (call->callee == "flint_bytes_set") {
+            if (call->args.size() != 3) { return codegenError("E0304", "flint_bytes_set needs 3 args"); }
+            auto* bufVal = emitExpr(call->args[0].get());
+            auto* idxVal = emitExpr(call->args[1].get());
+            auto* valVal = emitExpr(call->args[2].get());
+            emitLoopRangeAssume(call->args[1].get());
+            return emitBytesSetCore(bufVal, idxVal, valVal, knownLenOfArg(call->args[0].get()));
+        }
+        if (call->callee == "flint_bytes_len") {
+            if (call->args.size() != 1) { return codegenError("E0305", "flint_bytes_len needs 1 arg"); }
+            auto* bufVal = emitExpr(call->args[0].get());
+            if (!bufVal || !bufVal->getType()->isStructTy())
+                return codegenError("E0306", "flint_bytes_len needs a bytes value");
+            return builder->CreateExtractValue(bufVal, {1}, "bytes_len");
+        }
+        if (call->callee == "flint_bytes_data") {
+            if (call->args.size() != 1) { return codegenError("E0307", "flint_bytes_data needs 1 arg"); }
+            auto* bufVal = emitExpr(call->args[0].get());
+            if (!bufVal || !bufVal->getType()->isStructTy())
+                return codegenError("E0308", "flint_bytes_data needs a bytes value");
+            return builder->CreateExtractValue(bufVal, {0}, "bytes_data");
+        }
+
         if (call->callee == "flint_array_get_ptr") {
             if (call->args.size() != 2) { return codegenError("E0063", "flint_array_get_ptr needs 2 args"); }
             auto* ptrVal = emitExpr(call->args[0].get());
@@ -11559,7 +12126,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                     auto git = globalSymTable.find(v->name);
                     if (git != globalSymTable.end()) tk = git->second.type.kind;
                 }
-                if (tk == TypeKind::Array) lenKind = 4;
+                if (tk == TypeKind::Array || tk == TypeKind::Bytes) lenKind = 4;
                 else if (tk == TypeKind::Str) lenKind = 3;
                 else if (tk == TypeKind::Map) lenKind = 6;
             } else if (a0->kind == NodeKind::Call) {
@@ -11569,6 +12136,8 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
                 else if (c->callee == "flint_str_concat" || c->callee == "flint_str_substring" ||
                          c->callee == "flint_str_to_upper" || c->callee == "flint_str_to_lower" ||
                          c->callee == "flint_str_trim" || c->callee == "flint_str_reverse" ||
+                         c->callee == "flint_str_capitalize" || c->callee == "flint_str_title" ||
+                         c->callee == "flint_str_lstrip" || c->callee == "flint_str_rstrip" ||
                          c->callee == "flint_str_replace" || c->callee == "flint_str_repeat" ||
                          c->callee == "flint_str_join" || c->callee == "flint_i64_to_string" ||
                          c->callee == "flint_f64_to_string" || c->callee == "flint_map_keys") lenKind = 3;
@@ -11763,6 +12332,7 @@ static std::string signatureTypeName(const Type& t) {
         case TypeKind::Void: return "void";
         case TypeKind::Ptr: return "ptr";
         case TypeKind::Map: return "map";
+        case TypeKind::Bytes: return "bytes";
         case TypeKind::TypeParam: return t.structName;
         case TypeKind::Struct: return t.structName;
         case TypeKind::Enum: return t.structName;
@@ -13967,6 +14537,11 @@ static void processFile(const std::string& path, std::unique_ptr<ProgramAST>& co
         return;
     }
 
+    if (gWarnUnused) {
+        UnusedVarAnalysis unused(importFileId);
+        unused.run(*prog);
+    }
+
     mergeProgram(combined, prog);
 
     // Recursively process imports
@@ -13975,6 +14550,31 @@ static void processFile(const std::string& path, std::unique_ptr<ProgramAST>& co
         processFile(impPath, combined, seen, firstError, libPaths);
         if (!firstError.empty()) return;
     }
+}
+
+// Lint a source file on a cache HIT. The caches store artifacts, not
+// diagnostics: without this, the second build of an unchanged file would
+// silently drop the warnings the first build printed. Parsing is the cheap
+// phase (the cache exists to skip codegen and linking), so re-parsing here
+// keeps the lint deterministic at a small cost. A parse error cannot block
+// the hit -- the cached source parsed successfully when it was stored -- so
+// it is ignored rather than turning a cache hit into a failure.
+static void lintSourceFile(const std::string& path, llvm::StringRef source) {
+    if (!gWarnUnused) return;
+    // The builtin type registry is populated by the Codegen constructor and
+    // the parser reads it during inference. Construct it so the lint sees
+    // the same AST a fresh compile would.
+    Codegen lintCodegen;
+    (void)lintCodegen;
+    int fileId = gSourceMap.addFile(path, source.str());
+    Lexer lex(source);
+    Parser parser(lex);
+    parser.fileId = fileId;
+    parser.setSkipBodies(false);
+    auto prog = parser.parseProgram();
+    if (parser.hadError()) return;
+    UnusedVarAnalysis unused(fileId);
+    unused.run(*prog);
 }
 
 // ===================== Borrow/Move Checker =====================
@@ -15263,6 +15863,12 @@ private:
             return true;   // generic: substituted before codegen, not modelled here
         if (a.kind == TypeKind::Void || b.kind == TypeKind::Void)
             return false;  // a void expression has no value to store or return
+        // `bytes` and `[i64]` deliberately share the LLVM {ptr, i64} shape,
+        // but they are different language types with different element
+        // widths. The backend would happily store one into the other; the
+        // checker must not.
+        if ((a.kind == TypeKind::Bytes) != (b.kind == TypeKind::Bytes))
+            return false;
         llvm::Type* la = llvmType(a, *cg.ctx, cg.mod.get());
         llvm::Type* lb = llvmType(b, *cg.ctx, cg.mod.get());
         if (!la || !lb) return a == b;
@@ -15557,8 +16163,11 @@ private:
                 CType base = typeOf(ix->base.get());
                 typeOf(ix->index.get());
                 if (base.known) {
-                    if (base.t.kind == TypeKind::Array) return mkKnown(Type::i64());
-                    if (base.t.kind == TypeKind::Str ||
+                    // Array, bytes, str and map all yield an i64 at the
+                    // language level (a byte read is zero-extended).
+                    if (base.t.kind == TypeKind::Array ||
+                        base.t.kind == TypeKind::Bytes ||
+                        base.t.kind == TypeKind::Str ||
                         base.t.kind == TypeKind::Map) return mkKnown(Type::i64());
                 }
                 return mkUnknown();
@@ -15855,11 +16464,13 @@ int main(int argc, char* argv[]) {
     bool versionFlag = false;
     bool emitInterfaceMode = false;
     bool emitSignaturesMode = false;
-    // The one-command contract: a bare `flintc main.fl` compiles and runs.
-    // `-o`/positional output requests an artifact instead and NEVER runs it;
-    // `--test` is its own runner. The flags are resolved after the parse so
-    // `-o` wins regardless of where it appears on the command line.
+    // The one-command contract: a bare `flintc main.fl` compiles and runs via
+    // the JIT; `-o` compiles, links and then runs the native artifact;
+    // `--no-run` keeps the artifact without executing it; `--test` is its own
+    // runner. The flags are resolved after the parse so order never changes
+    // the mode.
     bool runMode = true; // resolved after argv parsing
+    bool noRunFlag = false; // --no-run/--build-only: artifact, no execution
     bool outputRequested = false;
     std::vector<std::string> useInterfaces;
     int parallelThreads = 1;
@@ -16014,6 +16625,10 @@ int main(int argc, char* argv[]) {
             loopOpt = true; // C1: loop-friendly check attrs (off by default)
         } else if (arg == "--run") {
             runMode = true; // explicit no-op (it's the default)
+        } else if (arg == "--no-run" || arg == "--build-only") {
+            noRunFlag = true; // keep the -o artifact, do not execute it
+        } else if (arg == "--no-warn-unused" || arg == "-Wno-unused") {
+            gWarnUnused = false; // silence the unused-variable lint
         } else if (arg == "--dump-tokens" && i + 1 < argc) {
             std::string dumpPath = argv[++i];
             auto buf = llvm::MemoryBuffer::getFile(dumpPath);
@@ -16036,9 +16651,14 @@ int main(int argc, char* argv[]) {
     }
 
     // Resolve the mode once, after every flag is known. This makes the
-    // contract order-independent: `-o` is an emit request and always wins
-    // over `--run`, and `--test` always selects the test runner.
+    // contract order-independent: `-o` always selects the artifact path (and
+    // that path runs the binary unless --no-run), and `--test` always selects
+    // the test runner.
     runMode = runMode && !outputRequested && !testModeFlag;
+    if (noRunFlag && !outputRequested) {
+        std::cerr << "error: --no-run requires -o <output> (it keeps an artifact without running it)\n";
+        return 1;
+    }
 
     if (versionFlag) {
         std::cout << "flintc " << kFlintVersion << "\n";
@@ -16053,24 +16673,29 @@ int main(int argc, char* argv[]) {
             << "  flintc --emit-signatures <input.fl> <out.sig>\n"
             << "  flintc --use-interface <in.flint.bc> <input.fl> <out> [--link flags]\n\n"
             << "A bare `flintc main.fl` compiles and runs in one step via the ORC\n"
-            << "JIT, with no artifact on disk. With -o, the output extension picks\n"
-            << "the form: .ll = LLVM IR text, .o = object file, any other name =\n"
-            << "linked executable. -o always builds without running, even when\n"
-            << "--run also appears.\n\n"
+            << "JIT, with no artifact on disk. `-o` compiles, links and then runs\n"
+            << "the native executable, leaving it on disk. The output extension\n"
+            << "selects an emit-only artifact instead: .ll = LLVM IR text, .o =\n"
+            << "object file. `--no-run` keeps a native artifact without executing\n"
+            << "it; `--target` also emits without running (cross artifacts are not\n"
+            << "host executables).\n\n"
             << "EXAMPLES\n"
             << "  flintc hello.fl              compile + run; print the program's output\n"
-            << "  flintc hello.fl -o hello     build ./hello; do NOT run it\n"
-            << "  ./hello                      run the built executable\n"
-            << "  flintc hello.fl -- a b       compile + run with program arguments\n\n"
+            << "  flintc hello.fl -o hello     build ./hello, run it, keep the file\n"
+            << "  flintc hello.fl -o hello --no-run   build ./hello without running\n"
+            << "  ./hello                      run the built executable again\n"
+            << "  flintc hello.fl -o hello -- a b     build, run, forward a and b\n\n"
             << "OUTPUT\n"
-            << "  -o, --output <path>      Build an artifact instead of running (never runs)\n"
+            << "  -o, --output <path>      Build and run a native executable (or emit .ll/.o)\n"
+            << "  --no-run, --build-only   Build the -o artifact without running it\n"
+            << "  --no-warn-unused         Silence the unused-variable warning (W0001)\n"
             << "  --link <flags>           Extra linker flags (with -o)\n"
             << "  --emit-interface         Emit a .flint.bc program interface\n"
             << "  --emit-signatures        Write resolved fn signatures (query mode)\n"
             << "  --use-interface <path>   Reuse an emitted interface (repeatable)\n\n"
             << "CODEGEN\n"
             << "  --opt-level <0|1|2|3>    Optimization level (default 2)\n"
-            << "  --target <triple>        Emit for a target triple (requires -o)\n"
+            << "  --target <triple>        Emit for a target triple (requires -o; never runs)\n"
             << "                           e.g. x86_64-pc-linux-gnu, wasm32-unknown-wasi\n"
             << "  --debug                  Emit DWARF line tables (requires -o)\n"
             << "  --parallel <N>           Parallel codegen threads (capped at hw*4)\n"
@@ -16090,7 +16715,7 @@ int main(int argc, char* argv[]) {
             << "  --print-size-json=PATH   Write the same attribution as JSON to PATH\n"
             << "  --test                   Run test_ functions after JIT compile\n"
             << "  --dump-tokens <path>     Write the stable token dump and exit\n"
-            << "  --run                    Explicit compile+run (the default; -o wins)\n"
+            << "  --run                    Explicit compile+run (the default; -o still builds)\n"
             << "  --offline                Registry: cache only, fail if missing\n"
             << "  --fast                   Compat no-op (kept for flag stability)\n"
             << "  -h, --help               This text\n"
@@ -16172,6 +16797,18 @@ int main(int argc, char* argv[]) {
 
     bool emitLl = outputPath.size() >= 3 && outputPath.substr(outputPath.size() - 3) == ".ll";
     bool emitObj = outputPath.size() >= 2 && outputPath.substr(outputPath.size() - 2) == ".o";
+    // A native -o artifact is executed by default, after the link succeeds.
+    // Emit-only extensions, --no-run, --test and cross-target builds keep the
+    // artifact-only contract; no run is ever attempted before a successful
+    // link (every call site below is after spawnLinker returns true).
+    bool runArtifact = outputRequested && !testModeFlag && !noRunFlag &&
+                       !emitLl && !emitObj && targetTripleSpec.empty();
+    auto runArtifactIfRequested = [&]() -> int {
+        if (!runArtifact) return 0;
+        std::vector<std::string> args;
+        for (int i = progArgStart; i < argc; i++) args.push_back(argv[i]);
+        return runExecutable(outputPath, args);
+    };
     // Phase 3 / P1: bounded range facts are only sound for a whole-program
     // output. An object/IR artifact can be linked and called with an argument
     // outside the analyzed call sites, and an interface/link build can add
@@ -16246,10 +16883,15 @@ int main(int argc, char* argv[]) {
         if (cache.loadBinary(sourceHash, outputPath)) {
             if (getenv("FLINT_LOG_CACHE"))
                 std::cerr << "cache: hit binary (skipped lex/parse/codegen/link)\n";
+            // The cache skips the parse, so re-run the lint on the source to
+            // keep warnings identical between a fresh and a cached build.
+            lintSourceFile(inputPath, sourceRef);
             PROFILE_BEGIN("total");
             PROFILE_END(); // total
             PROFILE_REPORT();
-            return 0;
+            // The cached copy is the artifact the user asked for; run that
+            // exact file, exactly as a fresh link would.
+            return runArtifactIfRequested();
         }
         if (getenv("FLINT_LOG_CACHE")) std::cerr << "cache: miss binary\n";
     }
@@ -16267,6 +16909,9 @@ int main(int argc, char* argv[]) {
         llvm::LLVMContext ctx;
         if (auto cachedMod = cache.load(sourceHash, ctx)) {
             PROFILE_END(); // cache_check
+            // Same reason as the binary-cache hit: the parse was skipped,
+            // but the warnings must not depend on cache state.
+            lintSourceFile(inputPath, sourceRef);
             {
                 PROFILE_BEGIN("llvm_opt");
                 // --debug: cached modules follow the same O0-pass rule (see
@@ -16293,7 +16938,7 @@ int main(int argc, char* argv[]) {
                 unlink(objectPath.c_str());
                 PROFILE_END(); // total
                 PROFILE_REPORT();
-                return 0;
+                return runArtifactIfRequested();
             }
             PROFILE_END(); // codegen_output
             PROFILE_END(); // total
@@ -16332,6 +16977,17 @@ int main(int argc, char* argv[]) {
     PROFILE_END(); // parse_error_check
     PROFILE_END(); // parse_decls
 
+    // Rust-style lint: report locals that are never read. This runs after a
+    // successful parse (so a syntax error is not buried under lint noise)
+    // and before imports are merged, so every warning points at the file it
+    // came from. Warnings never stop the build.
+    if (gWarnUnused) {
+        PROFILE_BEGIN("unused_warnings");
+        UnusedVarAnalysis unused(mainFileId);
+        unused.run(*combined);
+        PROFILE_END();
+    }
+
     PROFILE_BEGIN("imports");
     std::unordered_set<std::string> seen;
     std::string firstError;
@@ -16362,12 +17018,18 @@ int main(int argc, char* argv[]) {
                 }
                 llvm::StringRef src = buf.get()->getBuffer();
                 Lexer lex(src);
+                int impFileId = gSourceMap.addFile(impPath, src.str());
                 Parser p(lex);
+                p.fileId = impFileId;
                 auto prog = p.parseProgram();
                 if (p.hadError()) {
                     std::lock_guard<std::mutex> lock(importMutex);
                     if (firstError.empty()) firstError = p.errorMsg();
                     return;
+                }
+                if (gWarnUnused) {
+                    UnusedVarAnalysis unused(impFileId);
+                    unused.run(*prog);
                 }
                 // Process sub-imports sequentially within this thread
                 for (auto& subImp : prog->imports) {
@@ -16489,6 +17151,7 @@ int main(int argc, char* argv[]) {
         PROFILE_END(); // codegen
 
         // Binary output: link + cache
+        bool linked = false;
         if (!emitLl && !emitObj) {
             bool hasMain = false;
             for (auto& fn : combined->functions)
@@ -16505,12 +17168,13 @@ int main(int argc, char* argv[]) {
                 maybeReportSize(outputPath);
                 PROFILE_END(); // link
                 unlink(objectPath.c_str());
+                linked = true;
             }
         }
 
         PROFILE_END(); // total
         PROFILE_REPORT();
-        return 0;
+        return linked ? runArtifactIfRequested() : 0;
     }
 
     // ===== LLVM Backend (kept for --backend llvm) =====
@@ -16846,6 +17510,7 @@ int main(int argc, char* argv[]) {
     PROFILE_END(); // codegen
 
     // For binary output, spawn linker and cache
+    bool linked = false;
     if (!emitLl && !emitObj) {
         // Check for main function before linking
         bool hasMain = codegen.functionMap.count("main") > 0;
@@ -16862,6 +17527,7 @@ int main(int argc, char* argv[]) {
             PROFILE_END(); // link
             cache.saveBinary(sourceHash, outputPath);
             unlink(objectPath.c_str());
+            linked = true;
         }
     }
 
@@ -16872,5 +17538,8 @@ int main(int argc, char* argv[]) {
 
     PROFILE_END(); // total
     PROFILE_REPORT();
-    return 0;
+    // One-command AOT: the freshly linked executable is the program the user
+    // asked to run. Report compile/link timing first, then hand the terminal
+    // to the child; its exit status is ours.
+    return linked ? runArtifactIfRequested() : 0;
 }

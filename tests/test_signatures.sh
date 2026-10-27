@@ -128,7 +128,7 @@ fi
 # ---- 7. templates through the pipeline (and the C++ oracle) -------------
 # Same program, both frontends: the instance symbols and the output must
 # agree. The C++ run is the oracle, so a pipeline-only "fix" cannot pass.
-if "$FLINTC" tests/signatures/generic.fl -o "$TMPD/generic.cpp.bin" \
+if "$FLINTC" tests/signatures/generic.fl --no-run -o "$TMPD/generic.cpp.bin" \
      > "$TMPD/generic.cpp.log" 2>&1 \
    && "$TMPD/generic.cpp.bin" > "$TMPD/generic.cpp.out" 2>&1 \
    && pipeline tests/signatures/generic.fl "$TMPD/g" "$TMPD/generic.sig" \

@@ -68,7 +68,7 @@ check "bare --debug rc" '1' "$rc"
 if echo "$out" | grep -q 'builds an artifact with DWARF'; then pass=$((pass+1)); echo "PASS bare --debug message"; else fail=$((fail+1)); echo "FAIL bare --debug message: $out"; fi
 
 # 4. the linked artifact runs and print() output is unchanged
-"$FLINTC" tests/t_debug.fl --debug -o "$TMPD/dbgbin" > /dev/null 2>&1
+"$FLINTC" tests/t_debug.fl --debug --no-run -o "$TMPD/dbgbin" > /dev/null 2>&1
 check "artifact runs (12)" '12' "$(timeout 30 "$TMPD/dbgbin")"
 
 # 5. plain run still fine (default path untouched)

@@ -80,7 +80,7 @@ fi
 run() {
   name="$1"; want="$2"; src="$3"
   if [ ! -f "$src" ]; then echo "SKIP $name: $src missing"; return; fi
-  if ! "$FLINTC" "$src" -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
+  if ! "$FLINTC" "$src" --no-run -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
     echo "FAIL $name (build): $(head -n1 "$TMPD/$name.err")"
     fail=$((fail+1)); return
   fi
@@ -172,7 +172,7 @@ run f32 "1 24 1 2 2 58 64 139 154 58 154 1 2 12 1 0.731059 21 3.5 0 6 1 6 0 4000
 # in $TMPD (not the repo) so the parse-gate/fixpoint corpus stays green.
 run_fail() { # $1=name $2=want-substring $3=source-file
   name="$1"; want="$2"; src="$3"
-  if "$FLINTC" "$src" -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
+  if "$FLINTC" "$src" --no-run -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
     echo "FAIL $name (built, must reject)"
     fail=$((fail+1)); return
   fi

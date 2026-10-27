@@ -56,6 +56,8 @@ expect_reject() { # <file> <code>
 expect_reject tests/typecheck/e0290_str_i64.fl E0290
 expect_reject tests/typecheck/e0290_f64_i64.fl E0290
 expect_reject tests/typecheck/e0290_i64_f64.fl E0290
+expect_reject tests/typecheck/e0290_bytes_array.fl E0290
+expect_reject tests/typecheck/e0290_array_bytes.fl E0290
 expect_reject tests/typecheck/e0291_str_i64.fl E0291
 expect_reject tests/typecheck/e0291_i64_f64.fl E0291
 expect_reject tests/typecheck/e0292_assign.fl E0292

@@ -33,7 +33,7 @@ for c in "${CASES[@]}"; do
     if [ ! -f "$file" ]; then
         echo "FAIL $file (missing fixture)"; fail=$((fail+1)); continue
     fi
-    out="$("$FLINTC" "$file" -o "$T/out.bin" 2>&1)"
+    out="$("$FLINTC" "$file" --no-run -o "$T/out.bin" 2>&1)"
     rc=$?
     if [ $rc -eq 0 ]; then
         echo "FAIL $file (expected a compile error, exited 0)"; fail=$((fail+1)); continue

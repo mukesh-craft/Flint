@@ -78,9 +78,9 @@ PYEOF
 
 if [ "$PHASE" = all ] || [ "$PHASE" = A ]; then
   echo "=== Phase A: AOT builds"
-  timeout -s KILL 1200 "$FLINTC" stage1/lexer.fl -o "$OUT/lex.0" || { echo "FAIL lex.0 build"; exit 1; }
-  timeout -s KILL 1800 "$FLINTC" stage2/parser.fl -o "$OUT/parse.0" || { echo "FAIL parse.0 build"; exit 1; }
-  timeout -s KILL 1800 "$FLINTC" stage3/emitter.fl -o "$OUT/emit.0" || { echo "FAIL emit.0 build"; exit 1; }
+  timeout -s KILL 1200 "$FLINTC" stage1/lexer.fl --no-run -o "$OUT/lex.0" || { echo "FAIL lex.0 build"; exit 1; }
+  timeout -s KILL 1800 "$FLINTC" stage2/parser.fl --no-run -o "$OUT/parse.0" || { echo "FAIL parse.0 build"; exit 1; }
+  timeout -s KILL 1800 "$FLINTC" stage3/emitter.fl --no-run -o "$OUT/emit.0" || { echo "FAIL emit.0 build"; exit 1; }
   ls -la "$OUT"/lex.0 "$OUT"/parse.0 "$OUT"/emit.0
   # smoke: pipeline compiles g0_hello
   "$OUT/parse.0" stage3/ladder/g0_hello.sexp > /dev/null 2>&1 || true

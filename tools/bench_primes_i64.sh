@@ -15,8 +15,11 @@ T="${TMPDIR:-/data/data/com.termux/files/usr/tmp}/bench_primes_i64"
 ROUNDS="${1:-3}"
 mkdir -p "$T"
 
-if ! "$FLINTC" benchmarks/primes.fl -o "$T/primes.flint" >/dev/null 2>&1; then
+if ! "$FLINTC" benchmarks/primes.fl --no-run -o "$T/primes.flint" >/dev/null 2>&1; then
     echo "FAIL flint build"; exit 1
+fi
+if ! "$FLINTC" benchmarks/primes_bytes.fl --no-run -o "$T/primes.bytes" >/dev/null 2>&1; then
+    echo "FAIL flint bytes build"; exit 1
 fi
 if ! clang -O2 benchmarks/controls/primes_i64.c -o "$T/primes.c.bin" -lm; then
     echo "FAIL C build"; exit 1
@@ -40,27 +43,31 @@ ms() { awk -v n="$1" 'BEGIN { printf "%.1f", n / 1000000 }'; }
 median() { sort -n | awk '{a[NR]=$1} END { if (NR == 0) print "n/a"; else printf "%.1f", a[int((NR+1)/2)] / 1000000 }'; }
 
 rm -f "$T"/*.ns
-printf "%-6s %12s %12s %12s %12s %12s\n" "round" "Flint i64" "C i64" "C++ i64" "Rust i64" "C char"
+printf "%-6s %10s %10s %10s %10s %10s %10s\n" "round" "Flint i64" "Flint bytes" "C i64" "C++ i64" "Rust i64" "C char"
 for r in $(seq 1 "$ROUNDS"); do
     f=$(time_of "$T/primes.flint")
+    fb=$(time_of "$T/primes.bytes")
     c=$(time_of "$T/primes.c.bin")
     cpp=$(time_of "$T/primes.cpp.bin")
     rs=""
     [ -x "$T/primes.rs.bin" ] && rs=$(time_of "$T/primes.rs.bin")
     ch=$(time_of "$T/primes_char.c.bin")
-    echo "$f" >> "$T/flint.ns"; echo "$c" >> "$T/c.ns"
+    echo "$f" >> "$T/flint.ns"; echo "$fb" >> "$T/flint_bytes.ns"
+    echo "$c" >> "$T/c.ns"
     echo "$cpp" >> "$T/cpp.ns"; echo "$ch" >> "$T/char.ns"
     [ -n "$rs" ] && echo "$rs" >> "$T/rs.ns"
-    printf "%-6s %10sms %10sms %10sms %10sms %10sms\n" "$r" \
-        "$(ms "$f")" "$(ms "$c")" "$(ms "$cpp")" \
+    printf "%-6s %8sms %10sms %8sms %8sms %8sms %8sms\n" "$r" \
+        "$(ms "$f")" "$(ms "$fb")" "$(ms "$c")" "$(ms "$cpp")" \
         "$([ -n "$rs" ] && ms "$rs" || echo n/a)" "$(ms "$ch")"
 done
 echo
-printf "%-6s %10sms %10sms %10sms %10sms %10sms\n" "median" \
-    "$(median < "$T/flint.ns")" "$(median < "$T/c.ns")" \
+printf "%-6s %8sms %10sms %8sms %8sms %8sms %8sms\n" "median" \
+    "$(median < "$T/flint.ns")" "$(median < "$T/flint_bytes.ns")" \
+    "$(median < "$T/c.ns")" \
     "$(median < "$T/cpp.ns")" \
     "$([ -s "$T/rs.ns" ] && median < "$T/rs.ns" || echo n/a)" \
     "$(median < "$T/char.ns")"
 echo
-echo "The i64 columns are the same representation as Flint's [i64] array."
-echo "The C char column is the 1-byte mirror used by the headline table."
+echo 'Flint i64 is the [i64] array (8-byte elements); Flint bytes is the'
+echo 'same algorithm over the i8 `bytes` type. The C/C++/Rust i64 columns'
+echo 'are the same 8-byte representation; C char is the 1-byte mirror.'

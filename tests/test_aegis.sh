@@ -15,7 +15,7 @@ pass=0; fail=0
 trap() {
   name="$1"; want="$2"; src="$3"
   printf '%s\n' "$src" > "$TMPD/$name.fl"
-  if ! "$FLINTC" "$TMPD/$name.fl" -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
+  if ! "$FLINTC" "$TMPD/$name.fl" --no-run -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
     echo "FAIL $name: failed to compile: $(head -n1 "$TMPD/$name.err")"
     fail=$((fail+1)); return
   fi
@@ -175,7 +175,7 @@ accept ok_div \
 quarantine_traps() { # $1=name $2=src $3=expected-output-before-panic
   name="$1"; src="$2"; want="$3"
   printf '%s\n' "$src" > "$TMPD/$name.fl"
-  if ! "$FLINTC" "$TMPD/$name.fl" -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
+  if ! "$FLINTC" "$TMPD/$name.fl" --no-run -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
     echo "FAIL $name: failed to compile: $(head -n1 "$TMPD/$name.err")"
     fail=$((fail+1)); return
   fi
@@ -234,7 +234,7 @@ accept ok_after_free \
 optout_ok() { # $1=name $2=src
   name="$1"; src="$2"
   printf '%s\n' "$src" > "$TMPD/$name.fl"
-  if ! "$FLINTC" "$TMPD/$name.fl" -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
+  if ! "$FLINTC" "$TMPD/$name.fl" --no-run -o "$TMPD/$name.bin" > "$TMPD/$name.err" 2>&1; then
     echo "FAIL $name: failed to compile: $(head -n1 "$TMPD/$name.err")"
     fail=$((fail+1)); return
   fi
