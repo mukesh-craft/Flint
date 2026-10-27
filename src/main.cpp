@@ -846,7 +846,7 @@ static void runLLVMOptimizations(llvm::Module* mod, llvm::OptimizationLevel leve
     if (!triple.str().empty()) {
         std::string error;
         if (auto* target = TargetRegistry::lookupTarget(triple, error)) {
-            tm.reset(target->createTargetMachine(triple.str(), "generic", "", {},
+            tm.reset(target->createTargetMachine(llvm::Triple(triple), "generic", "", {},
                 Reloc::PIC_, std::nullopt));
         }
     }
@@ -7337,7 +7337,7 @@ public:
         auto arrTy = llvm::StructType::get(*ctx, {i8PtrTy, i64Ty});
         add("flint_array_alloc", arrTy, {i64Ty}, false);
         add("flint_array_len", i64Ty, {arrTy}, false);
-        auto arrPtrTy = llvm::PointerType::get(arrTy, 0);
+        auto arrPtrTy = llvm::PointerType::get(*ctx, 0);
         add("flint_array_len_ptr", i64Ty, {arrPtrTy}, false);
         add("flint_array_data_ptr", i8PtrTy, {arrPtrTy}, false);
         add("flint_array_free", voidTy, {arrTy}, false);
@@ -7706,7 +7706,7 @@ public:
         auto tPtr = llvm::PointerType::get(*ctx, 0);
 
         // Core tensor
-        add("flt_create",   tPtr, {i64Ty, llvm::PointerType::get(i64Ty, 0)}, false);
+        add("flt_create",   tPtr, {i64Ty, llvm::PointerType::get(*ctx, 0)}, false);
         add("flt_create_1d", tPtr, {i64Ty}, false);
         add("flt_create_2d", tPtr, {i64Ty, i64Ty}, false);
         add("flt_create_3d", tPtr, {i64Ty, i64Ty, i64Ty}, false);
@@ -7716,7 +7716,7 @@ public:
         // ---- f32 tensors: same API, half the memory and half the matmul
         // bandwidth. Measured against f64 at the same shapes: 3.0x at N=100,
         // ~1.9x from N=256 up, and exactly half the footprint.
-        add("flt_empty",         tPtr, {i64Ty, llvm::PointerType::get(i64Ty, 0), i32Ty}, false);
+        add("flt_empty",         tPtr, {i64Ty, llvm::PointerType::get(*ctx, 0), i32Ty}, false);
         add("flt_create_f32_1d", tPtr, {i64Ty}, false);
         add("flt_create_f32_2d", tPtr, {i64Ty, i64Ty}, false);
         add("flt_create_f32_3d", tPtr, {i64Ty, i64Ty, i64Ty}, false);
@@ -7761,7 +7761,7 @@ public:
         add("flt_weights_count", i64Ty, {i8PtrTy}, false);
         add("flt_sum",      f64Ty, {tPtr}, false);
         add("flt_mean",     f64Ty, {tPtr}, false);
-        add("flt_reshape",  tPtr, {tPtr, i64Ty, llvm::PointerType::get(i64Ty, 0)}, false);
+        add("flt_reshape",  tPtr, {tPtr, i64Ty, llvm::PointerType::get(*ctx, 0)}, false);
         add("flt_transpose", tPtr, {tPtr, i64Ty, i64Ty}, false);
 
         // In-place activations
@@ -7774,7 +7774,7 @@ public:
         add("ag_cleanup",     voidTy, {}, false);
         add("ag_track_tensor", i64Ty, {tPtr}, false);
         add("ag_backward",    voidTy, {i64Ty}, false);
-        add("ag_get_grad",    llvm::PointerType::get(f64Ty, 0), {i64Ty}, false);
+        add("ag_get_grad",    llvm::PointerType::get(*ctx, 0), {i64Ty}, false);
         add("ag_grad_id",     i64Ty, {tPtr}, false);
         add("ag_grad_at",     f64Ty, {i64Ty, i64Ty}, false);
         add("ag_grad_len",    i64Ty, {i64Ty}, false);
@@ -7839,7 +7839,7 @@ public:
         add("flint_signum", dbl, {dbl}, false);
         add("flint_sign_i64", i64Ty, {i64Ty}, false);
         add("flint_ldexp",  dbl, {dbl, i64Ty}, false);
-        add("flint_frexp",  dbl, {dbl, llvm::PointerType::get(dbl, 0)}, false);
+        add("flint_frexp",  dbl, {dbl, llvm::PointerType::get(*ctx, 0)}, false);
         add("flint_is_finite", i64Ty, {dbl}, false);
         add("flint_is_inf",    i64Ty, {dbl}, false);
         add("flint_is_nan",    i64Ty, {dbl}, false);
@@ -7874,7 +7874,7 @@ public:
         add("flint_stat_covariance", dbl, {coll, coll}, false);
         add("flint_stat_correlation", dbl, {coll, coll}, false);
         add("flint_stat_linear_regression", i64Ty,
-            {coll, coll, llvm::PointerType::get(dbl, 0), llvm::PointerType::get(dbl, 0)}, false);
+            {coll, coll, llvm::PointerType::get(*ctx, 0), llvm::PointerType::get(*ctx, 0)}, false);
 
         // Streaming accumulator
         add("flint_accum_new",     coll, {}, false);
@@ -7925,7 +7925,7 @@ public:
         add("flint_set_remove",  i64Ty, {coll, i64Ty}, false);
         add("flint_set_len",     i64Ty, {coll}, false);
         add("flint_set_clear",   voidTy, {coll}, false);
-        add("flint_set_values",  i64Ty, {coll, llvm::PointerType::get(i64Ty, 0), i64Ty}, false);
+        add("flint_set_values",  i64Ty, {coll, llvm::PointerType::get(*ctx, 0), i64Ty}, false);
 
         add("flint_heap_new",    coll, {}, false);
         add("flint_heap_free",   voidTy, {coll}, false);
@@ -7935,7 +7935,7 @@ public:
         add("flint_heap_len",    i64Ty, {coll}, false);
         add("flint_heap_empty",  i64Ty, {coll}, false);
         add("flint_heap_clear",  voidTy, {coll}, false);
-        add("flint_heap_sorted", i64Ty, {coll, llvm::PointerType::get(i64Ty, 0), i64Ty}, false);
+        add("flint_heap_sorted", i64Ty, {coll, llvm::PointerType::get(*ctx, 0), i64Ty}, false);
 
         add("flint_deque_new",       coll, {}, false);
         add("flint_deque_free",      voidTy, {coll}, false);
@@ -7948,7 +7948,7 @@ public:
         add("flint_deque_len",       i64Ty, {coll}, false);
         add("flint_deque_empty",     i64Ty, {coll}, false);
         add("flint_deque_clear",     voidTy, {coll}, false);
-        add("flint_deque_values",    i64Ty, {coll, llvm::PointerType::get(i64Ty, 0), i64Ty}, false);
+        add("flint_deque_values",    i64Ty, {coll, llvm::PointerType::get(*ctx, 0), i64Ty}, false);
 
         // ──────────────────────────────────────────────────────
         // NN LAYERS (flint_nn.o) -- convolution, pooling, normalisation,
@@ -7970,7 +7970,7 @@ public:
         add("flt_flatten",       tPtr, {tPtr}, false);
         add("flt_xavier_uniform", tPtr, {tPtr, dbl}, false);
         add("flt_he_uniform",    tPtr, {tPtr, dbl}, false);
-        add("flt_data",          llvm::PointerType::get(dbl, 0), {tPtr}, false);
+        add("flt_data",          llvm::PointerType::get(*ctx, 0), {tPtr}, false);
         add("flt_data_f32",      llvm::PointerType::get(*ctx, 0), {tPtr}, false);
         add("flt_set_at",       voidTy, {tPtr, i64Ty, dbl}, false);
         add("flt_get_at",       dbl,    {tPtr, i64Ty}, false);
@@ -8046,7 +8046,7 @@ public:
         add("flint_cli_flag",   voidTy, {tPtr, i8PtrTy, i64Ty, i64Ty}, false);
         add("flint_cli_opt",    voidTy, {tPtr, i8PtrTy, i64Ty, i64Ty}, false);
         add("flint_cli_short_for", i8Ty, {tPtr, i8PtrTy}, false);
-        add("flint_cli_parse",  i64Ty, {tPtr, i64Ty, llvm::PointerType::get(i8PtrTy, 0)}, false);
+        add("flint_cli_parse",  i64Ty, {tPtr, i64Ty, llvm::PointerType::get(*ctx, 0)}, false);
         add("flint_cli_ok",     i64Ty, {tPtr}, false);
         add("flint_cli_error",  i8PtrTy, {tPtr}, false);
         add("flint_cli_get_str", i8PtrTy, {tPtr, i8PtrTy}, false);
@@ -8119,7 +8119,7 @@ public:
         add("flint_tz_known",         i64Ty, {i8PtrTy}, false);
         add("flint_tzdata_loaded",    i64Ty, {}, false);
         add("flint_time_format",      i8PtrTy, {i8PtrTy, i64Ty, i8PtrTy}, false);
-        add("flint_time_parse",       i64Ty, {i8PtrTy, i8PtrTy, llvm::PointerType::get(i64Ty, 0)}, false);
+        add("flint_time_parse",       i64Ty, {i8PtrTy, i8PtrTy, llvm::PointerType::get(*ctx, 0)}, false);
         add("flint_time_diff",        i64Ty, {i64Ty, i64Ty}, false);
         add("flint_time_duration",    i8PtrTy, {i64Ty}, false);
         add("flint_time_free",        voidTy, {i8PtrTy}, false);
@@ -10253,7 +10253,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
         llvm::Value* cmp = r.strict
             ? (llvm::Value*)builder->CreateICmpSLT(iv, r.bound, "loop_range")
             : (llvm::Value*)builder->CreateICmpULE(iv, r.bound, "loop_range");
-        auto* assumeFn = llvm::Intrinsic::getDeclaration(mod.get(), llvm::Intrinsic::assume);
+        auto* assumeFn = llvm::Intrinsic::getOrInsertDeclaration(mod.get(), llvm::Intrinsic::assume);
         builder->CreateCall(assumeFn, {cmp});
     }
 
@@ -11334,7 +11334,7 @@ llvm::Value* coerceMainReturn(llvm::Value* v) {
             return cmp;
         }
         llvm::Value* result = nullptr;
-        unsigned n = cast<llvm::StructType>(t)->getNumElements();
+        unsigned n = llvm::cast<llvm::StructType>(t)->getNumElements();
         for (unsigned i = 0; i < n; i++) {
             llvm::Value* lf = builder->CreateExtractValue(l, {i}, "agg_l");
             llvm::Value* rf = builder->CreateExtractValue(r, {i}, "agg_r");

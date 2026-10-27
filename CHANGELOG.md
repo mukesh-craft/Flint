@@ -23,6 +23,18 @@ All notable changes to Flint are documented here. Format follows
   skipped when a size report is requested, the same rule `--check-bce` and
   `--type-audit` already follow. `tests/test_print_size.sh` is repeatable with
   a warm cache (11 checks).
+- **The compiler now builds warning-free against LLVM 21.** The 17 warnings
+  were all deprecated LLVM spellings, not Flint bugs, but they hid the next
+  real warning and pinned the build to one LLVM generation:
+  `createTargetMachine(StringRef, ...)` → the `Triple` overload;
+  `PointerType::get(Type*, 0)` → `PointerType::get(Context&, 0)` at 14 sites
+  (opaque pointers make the pointee irrelevant, so the emitted IR is
+  identical); `Intrinsic::getDeclaration` → `getOrInsertDeclaration`; and
+  one unqualified `cast<StructType>` that Clang accepted only as a C++20
+  extension is now `llvm::cast<...>`. `bash build.sh` emits 0 warnings.
+  Cross-target IR/object emission, the vectorizer, `--unsafe`, the CLI, the
+  driver, and the size report were re-run to prove the API swaps did not
+  change codegen.
 - **The self-host pipeline files are renamed to their stage roles**:
   `stage1/flint_lex.fl` → `stage1/lexer.fl`, `stage2/flint_parse.fl` →
   `stage2/parser.fl`, `stage3/flint_emit.fl` → `stage3/emitter.fl`. All
