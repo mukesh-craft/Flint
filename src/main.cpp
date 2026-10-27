@@ -16451,7 +16451,7 @@ int main(int argc, char* argv[]) {
         std::cerr << "       flintc --backend <llvm|qbe> <input.fl> <output> [--link ...]\n";
         std::cerr << "\n";
         std::cerr << "Default: flintc <input.fl> compiles and runs in one step (ORC JIT, no artifact)\n";
-        std::cerr << "Use -o <file> to build a binary/object/LLVM file instead (never runs it)\n";
+        std::cerr << "Use -o <file> to build and run a native executable (or emit .ll/.o; --no-run builds only)\n";
         return 1;
     }
 
@@ -16688,7 +16688,7 @@ int main(int argc, char* argv[]) {
             << "OUTPUT\n"
             << "  -o, --output <path>      Build and run a native executable (or emit .ll/.o)\n"
             << "  --no-run, --build-only   Build the -o artifact without running it\n"
-            << "  --no-warn-unused         Silence the unused-variable warning (W0001)\n"
+            << "  --no-warn-unused         Silence the unused-variable warnings (W0001/W0002)\n"
             << "  --link <flags>           Extra linker flags (with -o)\n"
             << "  --emit-interface         Emit a .flint.bc program interface\n"
             << "  --emit-signatures        Write resolved fn signatures (query mode)\n"
@@ -16726,6 +16726,22 @@ int main(int argc, char* argv[]) {
         std::cerr << "usage: flintc [options] <input.fl> [-o <output>]\n";
         std::cerr << "Default: compile and run in one step (ORC JIT, no output file)\n";
         return 1;
+    }
+
+    // Refuse to write an artifact over the source it was compiled from. With
+    // `-o` now running by default, `flintc bench.fl -o bench.fl` would link
+    // the executable on top of the source; that happened once to a benchmark.
+    // Compare device+inode so hard links and alternate spellings are caught
+    // too. A nonexistent output cannot be the (existing) input.
+    if (!outputPath.empty()) {
+        struct stat inStat, outStat;
+        if (::stat(inputPath.c_str(), &inStat) == 0 &&
+            ::stat(outputPath.c_str(), &outStat) == 0 &&
+            inStat.st_dev == outStat.st_dev && inStat.st_ino == outStat.st_ino) {
+            std::cerr << "error: output path '" << outputPath
+                      << "' is the input source; refusing to overwrite it\n";
+            return 1;
+        }
     }
 
     // Diagnostics live in artifacts (.ll text, .o/linked binaries) — real

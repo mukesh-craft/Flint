@@ -45,7 +45,7 @@ next action is. It is the first thing to read and the first thing to update.
 | field | value |
 |---|---|
 | current phase | **Phase 2, steps 2A -> 2E** (the compiler-unification work) — 2A, 2B, 2C, 2D, and 2E are landed; **Phase 3 / P1 performance is the active work** (§4.3) |
-| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical); **the corrected one-command CLI** (`-o` builds AND runs, `--no-run` is build-only, `tests/test_cli_run.sh` 48/48); **the scoped `bytes` type** (`tests/test_bytes.sh` 18/18); **native string methods** (`tests/test_string_methods.sh` 11/11); **Rust-style unused-variable warnings** (`W0001`/`W0002`, `tests/test_unused_warnings.sh` 20/20); **36 gates** |
+| last completed | 2A.0 the type audit (`b75e4c7`); 2A.1 the length fact (`42b3a04`, `2b45516`); 2A one inference engine + three bug fixes (`f0441df`); 2C the loop-range analysis (`a7c6e2b`); 2D capture-less escaping closures (`57db1a4`); 2B the safety policy (`37d9b8b`); 2E measured + specified (`66f85ae`); **2E.1 the pipeline rename** (`16adde0`); **2E.2 the monomorphizer** (`48c12d5`); **the optimizer / LSP surface review** (§4.7.1); **2E.3/2E.4 the trait form and its resolution**; **2A the type-checking phase + call facts**; **2E.5 the C++ query mode + the pipeline overlay** (`--emit-signatures`, `E0284`–`E0289`); **2D.2 escaping capturing closures** (heap promotion at return / global store / call argument, `tests/test_closure_escape.sh`); **2E.6 explicit `::<T>` call syntax** (`E0295`–`E0298`, `tests/test_explicit_targs.sh`, differential 14/14); **the secure line-input API** (`flint_input*`, 1 MiB cap + status codes, `tests/test_input.sh` 8/8); **the closed-world bounded-range analysis** (`BoundedRangeAnalysis`, `tests/test_range_facts.sh` 19/19, `fib(45)` at C speed); **the middle-end TargetMachine** (TTI, `tests/test_vectorize.sh` 3/3, `--unsafe` at C parity); **the pipeline `-O2` consumers** (driver + gates, self-hosted emitter 2.37× faster, fixed point byte-identical); **the corrected one-command CLI** (`-o` builds AND runs, `--no-run` is build-only, `tests/test_cli_run.sh` 52/52); **the scoped `bytes` type** (`tests/test_bytes.sh` 18/18); **native string methods** (`tests/test_string_methods.sh` 11/11); **Rust-style unused-variable warnings** (`W0001`/`W0002`, `tests/test_unused_warnings.sh` 20/20); **36 gates** |
 | in flight | **P1 performance**: the safe `sum_array` is 1.42× C (its accumulator check still blocks vectorization); `--unsafe` is at C parity; `fib` is at parity; the `bytes` sieve is 185.8 ms vs C char 195.5 ms (same session) and is 2.74× faster than the i64 sieve. The pipeline `-O2` consumers are done; its length fact is measured redundant for the supported subset (§4.3) |
 | next action | **Choose the next safe-performance feature**: the wrapping-operator opt-in (1.45× on reductions, opt-in only) or a native `split()` string method. The default safety model is unchanged either way. Phase 2's remaining gaps (typed HIR §4.2, NLL §4.4, capability types §4.5) come after |
 | build | `bash build.sh` — ~3 min warm on this device (measured 2026-10-25); 12–15 min is the worst case under load. Poll at 60–120 s, never with a long sleep |
@@ -80,7 +80,7 @@ compared by the differential gate (14/14), the query-mode gate is 14/14,
 the explicit-type-argument gate is 6/6, the closure-escape gate is 7/7, the
 input gate is 8/8, the bounds-safety gate is 5/5, the unsafe-flag gate is
 6/6, the range-facts gate is 19/19, the vectorize gate is 3/3, the cli-run
-gate is 48/48, the bytes gate is 18/18, the string-method gate is 11/11,
+gate is 52/52, the bytes gate is 18/18, the string-method gate is 11/11,
 the unused-warning gate is 20/20, and the bootstrap's fixed point is
 byte-identical.
 
@@ -113,11 +113,11 @@ and `/usr/bin/env` does not exist on Termux.
 T=/data/data/com.termux/files/usr/tmp/opencode
 bash tests/run.sh                  # smoke (60)
 bash tests/test_lexdiff.sh         # token contract
-bash tests/test_parse_gate.sh      # 149/149 — parser contract
-bash tests/test_fixpoint.sh        # 149/149 — self-host byte-identical
+bash tests/test_parse_gate.sh      # 153/153 — parser contract
+bash tests/test_fixpoint.sh        # 153/153 — self-host byte-identical
 bash tests/test_errors.sh          # 149/149 — stage3 emitter catalog
 bash tests/test_errors_cpp.sh      # 149/149 — C++ fixed-pattern catalog
-bash tests/test_cli_run.sh         # 48/48  — one-command CLI contract
+bash tests/test_cli_run.sh         # 52/52  — one-command CLI contract
 bash tests/test_bytes.sh           # 18/18  — scoped `bytes` type
 bash tests/test_string_methods.sh  # 11/11  — native string methods
 bash tests/test_unused_warnings.sh # 20/20  — W0001/W0002 lints
@@ -150,7 +150,7 @@ and the CLI/bytes/string/warning landing:
 
 | gate | measured |
 |---|---|
-| cli-run (corrected 2026-10-27) | 48/48 — bare compile+run, `-o` builds AND runs, `--no-run` build-only, flag order, args, stdin, exit codes, cache-hit runs, `.ll`/`.o` emit |
+| cli-run (corrected 2026-10-27) | 52/52 — bare compile+run, `-o` builds AND runs, `--no-run` build-only, flag order, args, stdin, exit codes, cache-hit runs, `.ll`/`.o` emit, no source overwrite |
 | bytes (new 2026-10-27) | 18/18 — i8 storage, zero-extend reads, truncating writes, bounds checks, distinct from `[i64]`, JIT/AOT agree |
 | string-methods (new 2026-10-27) | 11/11 — native case/search/slice/convert methods, chaining, E0126/E0097, JIT/AOT agree |
 | unused-warnings (new 2026-10-27) | 20/20 — W0001/W0002, parameters, `_` opt-out, imports, JSON form, `--no-warn-unused`, AOT still runs |
@@ -171,7 +171,7 @@ and the CLI/bytes/string/warning landing:
 | errors | 149/149 |
 | errors-cpp | 149/149 fixed patterns / 157 codes |
 | diagnostic-codes | 16/16 |
-| docs | 64 links, 17 indexed documents (16 live), 0 duplicate paragraphs |
+| docs | 66 links, 17 indexed documents (16 live), 0 duplicate paragraphs |
 
 The gates this work did not touch (smoke, generics, no-hang, the
 Rust/AI/LSP suites, …) keep the counts they print; the pass/fail line is the
@@ -768,15 +768,17 @@ requires; the JIT number includes its one execution. Both are cold builds.
 A warm AOT rebuild (module-cache hit) is 127–165 ms vs JIT 100–167 ms for
 hello, which is why a bare invocation still defaults to the JIT.
 
-**Gate**: `tests/test_cli_run.sh` — 48 checks: bare run and no artifact,
+**Gate**: `tests/test_cli_run.sh` — 52 checks: bare run and no artifact,
 `-o` builds **and runs** and keeps the file, `--no-run`/`--build-only`
 build without running, `--run`, flag order, args after `--`, stdin,
 compile-failure exit + no artifact + no stale run, runtime exit-code
 propagation (JIT and AOT), binary-cache and module-cache hits still run,
-`--no-run` without `-o` is a usage error, and `.ll`/`.o` stay emit-only. It
-is in the fast battery, which is now 36 gates.
+`--no-run` without `-o` is a usage error, `.ll`/`.o` stay emit-only, and
+`-o` refuses to overwrite the input source (device+inode check; a
+benchmark was once replaced by its own executable). It is in the fast
+battery, which is now 36 gates.
 
-**Verify**: `bash tests/test_cli_run.sh ./flintc` → 48/48;
+**Verify**: `bash tests/test_cli_run.sh ./flintc` → 52/52;
 `bash tools/bench_cli_run.sh ./flintc`.
 
 ---
