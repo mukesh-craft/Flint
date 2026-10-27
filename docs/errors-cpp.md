@@ -6,11 +6,12 @@ and the tools link to it), and the pattern is the literal text with
 `<...>` where a value is interpolated. A user searching for a message
 finds the pattern that starts like their message.
 
-This file lists the **137 diagnostics with a fixed pattern**. The compiler
-has **145 stable codes**: eight (E0137–E0144) build their message from a
+This file lists the **149 diagnostics with a fixed pattern**. The compiler
+has **157 stable codes**: eight (E0137–E0144) build their message from a
 variable and are listed in `docs/error-codes.csv` as `<variable message>`.
-Four codes retired by Phase 2 / 2D (E0041–E0044, the closure-escape
-refusals) are not reused.
+Two warning codes (W0001, W0002) share the catalogue and the renderer but
+never fail a build. Four codes retired by Phase 2 / 2D (E0041–E0044, the
+closure-escape refusals) are not reused.
 
 The codes live in the source, next to the diagnostic (`codegenError("E0001",
 "...")`) — the same shape as Clang's DiagnosticIDs.td. The table is

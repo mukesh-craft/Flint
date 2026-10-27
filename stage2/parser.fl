@@ -232,7 +232,9 @@ fn p_declare(name: str, top: i64) -> i64 {
     }
     0
 }
-# Type codes: 1 i64, 2 f64, 3 str, 4 array, 5 map, 6 chan, 7 vec, 8 bool.
+# Type codes: 1 i64, 2 f64, 3 str, 4 array, 5 map, 6 chan, 7 vec, 8 bool,
+# 9 bytes. `bytes` shares the array slice layout but is a distinct type, so
+# the idx-set gate below accepts 4 or 9 and nothing else.
 fn p_ann_code(ty: str) -> i64 {
     if ty == "i64" {
         1
@@ -246,7 +248,11 @@ fn p_ann_code(ty: str) -> i64 {
                 if ty == "bool" {
                     8
                 } else {
-                    0
+                    if ty == "bytes" {
+                        9
+                    } else {
+                        0
+                    }
                 }
             }
         }
@@ -260,22 +266,26 @@ fn p_call_code(name: str) -> i64 {
         if name == "flint_array_concat" {
             4
         } else {
-            if name == "flint_map_new" {
-                5
+            if name == "flint_bytes_alloc" {
+                9
             } else {
-                if name == "flint_chan_new" {
-                    6
+                if name == "flint_map_new" {
+                    5
                 } else {
-                    if name == "flint_vec_new" {
-                        7
+                    if name == "flint_chan_new" {
+                        6
                     } else {
-                        if name == "flint_i64_to_string" {
-                            3
+                        if name == "flint_vec_new" {
+                            7
                         } else {
-                            if name == "flint_f64_to_string" {
+                            if name == "flint_i64_to_string" {
                                 3
                             } else {
-                                0
+                                if name == "flint_f64_to_string" {
+                                    3
+                                } else {
+                                    0
+                                }
                             }
                         }
                     }
@@ -805,7 +815,7 @@ fn p_array_lit() -> str {
 # consumed so parsing always makes progress (no hangs).
 fn p_compound_index() -> str {
     p_next()
-    rhs = p_expr()
+    _rhs = p_expr()
     p_note_err()
     ""
 }
@@ -1082,11 +1092,16 @@ fn p_postfix(base: str) -> str {
                                         p_note_err()
                                         go = 0
                                     } else {
-                                        if p_type_of(bn) == 4 {
+                                        tc = p_type_of(bn)
+                                        if tc == 4 {
                                             b = "(idx-set " + b + " " + idx + " " + rhs + ")"
                                         } else {
-                                            p_note_err()
-                                            go = 0
+                                            if tc == 9 {
+                                                b = "(idx-set " + b + " " + idx + " " + rhs + ")"
+                                            } else {
+                                                p_note_err()
+                                                go = 0
+                                            }
                                         }
                                     }
                                 }
@@ -2074,7 +2089,7 @@ fn p_fn_kw() -> str {
             return ""
         }
         PSCOPE = PSCOPE + 1
-        saved = PSCOPE
+        _saved = PSCOPE
         params = p_params()
         if p_accept(51) == 0 {
             p_note_err()
@@ -2103,7 +2118,7 @@ fn p_fn_kw() -> str {
 fn p_fn_nokey(name: str) -> str {
     p_next()
     PSCOPE = PSCOPE + 1
-    saved = PSCOPE
+    _saved = PSCOPE
     params = p_params()
     if p_accept(51) == 0 {
         p_note_err()
@@ -2123,7 +2138,7 @@ fn p_fn_nokey(name: str) -> str {
 # Bare name p1 p2 ... [-> T] { body } (caller saw IDENT IDENT).
 fn p_fn_bare(name: str) -> str {
     PSCOPE = PSCOPE + 1
-    saved = PSCOPE
+    _saved = PSCOPE
     mut params: str = ""
     mut go: i64 = 1
     while go == 1 {

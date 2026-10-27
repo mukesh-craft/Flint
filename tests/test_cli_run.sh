@@ -185,5 +185,17 @@ rc=$?
 check "--no-run without -o exits nonzero" "yes" "$(test "$rc" -ne 0 && echo yes || echo no)"
 check "--no-run without -o explains itself" "yes" "$(printf '%s' "$out" | grep -q 'requires -o' && echo yes || echo no)"
 
+# 14. -o cannot overwrite the input source. With -o running by default, a
+#     typo like `flintc bench.fl -o bench.fl` must not replace the source
+#     with the linked executable (that happened once to a benchmark).
+cp "$T/ok.fl" "$T/self.fl"
+before="$(cat "$T/self.fl")"
+out="$(timeout -s KILL 300 "$FLINTC" "$T/self.fl" -o "$T/self.fl" 2>&1)"
+rc=$?
+check "-o at the input path is rejected" "yes" "$(test "$rc" -ne 0 && echo yes || echo no)"
+check "-o at the input path explains itself" "yes" "$(printf '%s' "$out" | grep -q 'refusing to overwrite' && echo yes || echo no)"
+check "-o at the input path leaves the source intact" "$before" "$(cat "$T/self.fl")"
+check "-o at the input path does not run" "no" "$(printf '%s' "$out" | grep -q 'cli-ran' && echo yes || echo no)"
+
 echo "cli-run: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

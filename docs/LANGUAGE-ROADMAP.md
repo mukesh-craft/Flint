@@ -78,7 +78,7 @@ libc + libm + libdl + libsqlite3 + libcurl + libopenblas, and 72 MB of
    runtime backstop [M: `memory.md` §AEGIS, audited 2026-09-05].
 2. **A safety story that is broader than "no UB"**: compile-time
    use-after-free detection, bounds checks, overflow checks, div-by-zero
-   traps, and a catalogued diagnostic set (145 stable C++ codes, 137 fixed
+   traps, and a catalogued diagnostic set (157 stable C++ codes, 149 fixed
    patterns, two-way sync gate) [M: `docs/errors-cpp.md`,
    `tests/test_errors_cpp.sh`].
 3. **Toolchain surface**: one compiler binary that compiles, JIT-runs, emits
@@ -339,7 +339,7 @@ ergonomics and concurrency, and against Python on developer experience.
 ### 2.2 Where Flint is ahead of every language in the set
 
 - **One artifact, one tool, and a documented machine interface**: a stable
-  token dump (`--dump-tokens`), a 145-code diagnostic catalog (137 fixed
+  token dump (`--dump-tokens`), a 157-code diagnostic catalog (149 fixed
   patterns) with a two-way sync gate, and an agent benchmark (`agent-bench/`)
   [M]. The LSP
   ecosystem data shows that agents benefit from semantic navigation, not grep
@@ -1695,10 +1695,10 @@ improving at every step.
 |---|---|---|---|---|
 | **Runtime performance** | 70 | [M] sum_array 10M is now **12.0 ms vs C's 8.3 ms (1.44×)** — down from 1.89× after the length fact reached the array builtins (2b45516), and the final IR has **0 bounds-check calls**; f64 parity; 4–45× faster than Python. The checks that remain are the ones needing **range analysis** (primes: `i*i <= limit` does not give LLVM `i <= limit+1`) | no range analysis yet, so the checks that block vectorization still survive | P1 |
 | **Binary size** | 92 | [M] 4,160 B stripped hello (C: 4,064 B; Rust: 339,120 B) after the link fix; `.bss` 24 B; one dependency | 72 MB of arenas in library-heavy programs; one monolithic `flint_std.o` | P2 |
-| **Memory safety** | 78 | [M] compile-time use-after-free, bounds/overflow/div-zero checks, leases + runtime backstop, deterministic free, 145-code diagnostic catalog | no full NLL regions; an escaped closure box is never freed; FFI contracts unchecked | P1 |
+| **Memory safety** | 78 | [M] compile-time use-after-free, bounds/overflow/div-zero checks, leases + runtime backstop, deterministic free, 157-code diagnostic catalog | no full NLL regions; an escaped closure box is never freed; FFI contracts unchecked | P1 |
 | **Concurrency safety** | 42 | [M] threads + channels exist; no static race freedom; `parallel for` removed | no capability model | P1 |
 | **Type system** | 55 | [M] inference, generics (monomorphization), traits (M3), lambdas/closures (M4), enums, structs, maps, explicit type args (M2b) | no async, no associated types, no `dyn`, no operator overloading, no nullable types | P2 |
-| **Compiler maturity** | 70 | [M] 28-gate battery, differential + fixed point + no-hang gates, self-hosting ladder, 145-code catalog | two frontends that can drift (D5); the link regression shipped for months | P0 (D5) |
+| **Compiler maturity** | 70 | [M] 36-gate battery, differential + fixed point + no-hang gates, self-hosting ladder, 157-code catalog | two frontends that can drift (D5); the link regression shipped for months | P0 (D5) |
 | **LSP/tooling** | 42 | [M] separate Rust LSP (5/5 tests), formatter, token dump, agent benchmark, agent-bench tasks | no compiler-backed semantics, no rename/refactor, no incremental analysis | P2 |
 | **Ecosystem** | 12 | [M] zero third-party packages; strong stdlib; binary registry exists | no package manager, registry, resolver, lockfile, signing, audit | P1 |
 | **Developer experience** | 66 | [M] one binary for compile/JIT/IR/interface/test; 8-lesson tutorial; one-error-per-input contract; agent-friendly contracts | young tooling, no package story, `flt_` naming inconsistencies, limited docs | P2 |

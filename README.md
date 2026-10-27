@@ -216,6 +216,34 @@ there is no match. Returned strings are heap-allocated by the runtime, as
 the existing `flint_str_*` functions are. The gate is
 `tests/test_string_methods.sh` (11 checks, JIT + AOT).
 
+### Bytes: the scoped i8 buffer
+
+`bytes` is a checked buffer of bytes, distinct from `[i64]` even though
+both use the runtime's `{ptr, i64}` slice. Allocate it with
+`flint_bytes_alloc(n)` (zero-initialised), index it with `b[i]` (reads
+zero-extend to 0–255), assign with `b[i] = v` (stores the low 8 bits),
+and release it with `flint_bytes_free(b)`. `len(b)`, `flint_bytes_len`,
+`flint_bytes_data`, `flint_bytes_get`, and `flint_bytes_set` are also
+available.
+
+```flint
+fn main() -> i64 {
+    b: bytes = flint_bytes_alloc(4)
+    b[0] = 300          # stores 44 (the low 8 bits)
+    print(b[0])         # 44
+    print(len(b))       # 4
+    flint_bytes_free(b)
+    0
+}
+```
+
+Reads and writes are bounds-checked by default; the check disappears only
+under `--unsafe`, exactly as for `[i64]`. The checker rejects mixing the
+two types (`E0290`), because an i64 GEP would read eight bytes per
+element. `bytes` is not a generic array and does not support
+`for x in b`; use an indexed loop. The gate is `tests/test_bytes.sh`
+(18 checks, JIT + AOT).
+
 ## Syntax
 
 The program below was executed verbatim (`rc=0`) to verify this section:
@@ -462,7 +490,9 @@ memory; it never reuses a stale executable.
 `-o` compiles, links, and then executes the native executable it just
 produced. The child inherits stdin/stdout/stderr, receives arguments after
 `--`, and its exit status becomes `flintc`'s exit status. If compilation or
-linking fails, nothing is executed.
+linking fails, nothing is executed. The output path is checked against the
+input source (device+inode), so `flintc bench.fl -o bench.fl` is rejected
+instead of replacing the program with the linked binary.
 
 The extension selects an emit-only form instead: `.ll` = LLVM IR text,
 `.o` = object file. Those are never run. `--no-run` (or `--build-only`)
