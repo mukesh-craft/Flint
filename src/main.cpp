@@ -6434,7 +6434,7 @@ private:
         if (match(TokenType::IDENTIFIER)) {
             std::string name = previous().lexeme;
             SourceLocation loc = previous().loc;
-            // Boolean literals (v0.9 AEGIS session; re-added after 2026-09-14 wipe)
+            // Boolean literals (v0.0.9 AEGIS session; re-added after 2026-09-14 wipe)
             if (name == "true" || name == "false") {
                 auto n = std::make_unique<NumberExprAST>(name == "true" ? 1 : 0);
                 n->loc = loc; return n;
@@ -12966,7 +12966,7 @@ llvm::Value* Parser::parseNudEmit() {
 
 llvm::Value* Parser::parseIdentEmit() {
     std::string name = previous().lexeme;
-    // Boolean literals (v0.9 AEGIS session; re-added after 2026-09-14 wipe)
+    // Boolean literals (v0.0.9 AEGIS session; re-added after 2026-09-14 wipe)
     if (name == "true") return llvm::ConstantInt::get(cg->i64Ty, 1);
     if (name == "false") return llvm::ConstantInt::get(cg->i64Ty, 0);
     if (enumRegistry.count(name) && check(TokenType::DOT)) {

@@ -1,6 +1,6 @@
 [package]
 name = "flint-lsp"
-version = "0.22.0"
+version = "0.0.23"
 edition = "2021"
 description = "Language server for the Flint programming language (LSP 3.17 over stdio)"
 license = "Apache-2.0"

@@ -274,22 +274,22 @@ See `REQUIREMENTS.md` in this repo for the full list. Summary:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 0.22.0 | 2026-09-06 | CONCURRENCY+INTEROP: channels, parallel-for fix, --emit-header, WASM objects |
-| 0.21.0 | 2026-09-06 | TUTORIAL track (8 runnable lessons) + match values + print(f64) fixes |
-| 0.20.0 | 2026-09-06 | WINDOWS PORT: Winsock, MinGW-verified runtime+OS layer, real hello.exe cross-link |
-| 0.19.0 | 2026-09-06 | TOOLING: flintc run/build/test/fmt/doc/lsp/new/version/help, --filter, lsp log fix |
-| 0.18.0 | 2026-09-06 | REGISTRY: flint.toml/lock, `flint fetch`, manifest imports + auto-fetch |
-| 0.17.0 | 2026-09-06 | ANY-DEVICE P1: host triple, --target, portable build, CI, smoke tests |
-| 0.16.0 | 2026-09-06 | ZERO-BUG SWEEP: exact literals, brace escapes, warnings, sanitizers, differential |
-| 0.15.0 | 2026-09-06 | P2: map{...} literals + typed methods (str/map), error-recovery hardening |
-| 0.14.0 | 2026-09-06 | P1 UX: no-main message, undef exit, \u escapes, modulo doc + `continue` everywhere |
-| 0.13.0 | 2026-09-05 | P0 SOUNDNESS: all 6 gap items fixed (div-zero, annotations, error exits, match, array bounds, lambdas) |
-| 0.12.0 | 2026-09-05 | WRITE LESS: &&/!/and/or/not, += etc., range() — zero-cost sugars |
-| 0.11.0 | 2026-09-05 | DIET binaries (−77..−96%: sections + linker GC + strip) |
-| 0.10.0 | 2026-09-05 | SLIPSTREAM (tiered + partitioned compiler speed), ModuleCache exec-bit + fingerprint fixes |
-| 0.9.0 | 2026-09-05 | AEGIS LEASES (hybrid static+runtime memory safety), true/false literals, runtime hardening batch #2 |
-| 0.8.0 | 2026-07-08 | If-expression codegen fix, float type inference fix, mixed i64/f64 arithmetic, Python tools rewrite, benchmarking, security hardening |
-| 0.7.0 | 2026-07-06 | Phase F: Flux Compilation — extreme performance |
+| 0.0.22 | 2026-09-06 | CONCURRENCY+INTEROP: channels, parallel-for fix, --emit-header, WASM objects |
+| 0.0.21 | 2026-09-06 | TUTORIAL track (8 runnable lessons) + match values + print(f64) fixes |
+| 0.0.20 | 2026-09-06 | WINDOWS PORT: Winsock, MinGW-verified runtime+OS layer, real hello.exe cross-link |
+| 0.0.19 | 2026-09-06 | TOOLING: flintc run/build/test/fmt/doc/lsp/new/version/help, --filter, lsp log fix |
+| 0.0.18 | 2026-09-06 | REGISTRY: flint.toml/lock, `flint fetch`, manifest imports + auto-fetch |
+| 0.0.17 | 2026-09-06 | ANY-DEVICE P1: host triple, --target, portable build, CI, smoke tests |
+| 0.0.16 | 2026-09-06 | ZERO-BUG SWEEP: exact literals, brace escapes, warnings, sanitizers, differential |
+| 0.0.15 | 2026-09-06 | P2: map{...} literals + typed methods (str/map), error-recovery hardening |
+| 0.0.14 | 2026-09-06 | P1 UX: no-main message, undef exit, \u escapes, modulo doc + `continue` everywhere |
+| 0.0.13 | 2026-09-05 | P0 SOUNDNESS: all 6 gap items fixed (div-zero, annotations, error exits, match, array bounds, lambdas) |
+| 0.0.12 | 2026-09-05 | WRITE LESS: &&/!/and/or/not, += etc., range() — zero-cost sugars |
+| 0.0.11 | 2026-09-05 | DIET binaries (−77..−96%: sections + linker GC + strip) |
+| 0.0.10 | 2026-09-05 | SLIPSTREAM (tiered + partitioned compiler speed), ModuleCache exec-bit + fingerprint fixes |
+| 0.0.9 | 2026-09-05 | AEGIS LEASES (hybrid static+runtime memory safety), true/false literals, runtime hardening batch #2 |
+| 0.0.8 | 2026-07-08 | If-expression codegen fix, float type inference fix, mixed i64/f64 arithmetic, Python tools rewrite, benchmarking, security hardening |
+| 0.0.7 | 2026-07-06 | Phase F: Flux Compilation — extreme performance |
 
 ---
 
@@ -370,7 +370,7 @@ profiling). Slipstream = TIERS + PARTITIONS + link garnish + cache correctness:
 
 **Compile-time results (cold cache, wall, medians; LLVM 21.1.8, phone 8-core):**
 
-| Task | Last update (0.9.0) | Slipstream (0.10.0) | Delta |
+| Task | Last update (0.0.9) | Slipstream (0.0.10) | Delta |
 |------|---------------------|---------------------|-------|
 | large AOT binary (152 fns) | 2.62 s serial | **1.56 s auto-CGU** | **−40%** |
 | medium AOT binary (41 fns) | 0.97 s serial | **0.77 s auto-CGU** | **−21%** |
@@ -661,7 +661,7 @@ resolved by intervening refactors; keeping the notes above for history.
 
 ---
 
-## ANY-DEVICE + ALL-ASPECTS PLAN (2026-09-06 — research-backed, v0.17→v0.22)
+## ANY-DEVICE + ALL-ASPECTS PLAN (2026-09-06 — research-backed, v0.0.17→v0.0.22)
 
 **Course correction:** Flint targets EVERY device (phone → laptop → server),
 not Android only. Research (Go GOOS/GOARCH, Zig tier table + CI-per-target,
@@ -675,7 +675,7 @@ regex`) in 4 runtime files (Linux/macOS-OK, Windows needs MinGW-then-shims).
 Good news: SIMD already guards `__ARM_NEON`/`__AVX__`; LLVM backend is
 arch-neutral by construction; binaries are static-friendly already.
 
-**v0.17 — Decouple the platform (any-device phase 1).**
+**v0.0.17 — Decouple the platform (any-device phase 1).**
 - Host triple via `llvm::sys::getDefaultTargetTriple()` (replaces hardcoded
   triple); data layout from the created `TargetMachine` (replaces hardcoded
   ARM string; keeps JIT/struct agreement by construction).
@@ -691,29 +691,29 @@ arch-neutral by construction; binaries are static-friendly already.
   Tier 3: Windows-mingw) in README/REQUIREMENTS.
 - Accept: same test matrix green on ubuntu-x64 and arm64.
 
-**v0.18 — Registry + manifest (expectation #2, the adoption unlock).**
+**v0.0.18 — Registry + manifest (expectation #2, the adoption unlock).**
 - `flint.toml` (name/version/description), `flint fetch <git-url>` into
   module cache, `import "pkg"` resolution via manifest, lockfile with hashes.
 - Start with git URLs only (no central server); quality signals later
   (stars/activity/version discipline = trust).
 
-**v0.19 — Tooling productized (#4).**
+**v0.0.19 — Tooling productized (#4).**
 - `flint fmt/test/doc/run/build` subcommands (wrap existing scripts, one
   entry point, `--help` that never needs docs re-read — Go-survey lesson).
 - Editor setup docs (VS Code + Zed/Helix tasks); `flint-lsp` capability pass.
 
-**v0.20 — Windows + macOS to Tier 1/2.**
+**v0.0.20 — Windows + macOS to Tier 1/2.**
 - MinGW path first (POSIX headers mostly work); then shims:
   threads (pthread→Win32), dirent→FindFirstFile, regex→bundled fallback,
   wait→process API; `dlopen`→LoadLibrary audit. CI entries (windows-2025,
   macos-15). Static Linux via musl where feasible (glibc-version immunity).
 
-**v0.21 — Learning + AI proof (#7, #8).**
+**v0.0.21 — Learning + AI proof (#7, #8).**
 - 5-minute quickstart, language tour, `try/` playground design (wraps JIT).
 - Agent benchmark: scripted AI-agent task battery on Flint (build/test loop),
   published results; `llms.txt`-style API surface doc.
 
-**v0.22 — Concurrency narrative (#9) + interop-out (#6).**
+**v0.0.22 — Concurrency narrative (#9) + interop-out (#6).**
 - Document the model (parallel-for/workers, ownership across threads,
   Aegis borrow rules); channels proposal only if cheap.
 - Flint-as-library (C header emit) experiment; WASM (wasi) spike.
@@ -724,7 +724,7 @@ iOS signing/MSVC-native stay explicitly out of scope until v1.x.
 
 ---
 
-## v0.17 ANY-DEVICE P1 (2026-09-06 session — done, verified on-device)
+## v0.0.17 ANY-DEVICE P1 (2026-09-06 session — done, verified on-device)
 
 **Unblocked:** hardcoded `aarch64-unknown-linux-android24` triple + ARM data
 layout are gone. Target resolves as `--target` > host default
@@ -744,7 +744,7 @@ load; cache salt bumped (`flintc-v017`) so pre-triple artifacts never reuse.
   names the files) — ship the `.o`, link on-target (documented).
 - Portable `build.sh` (`env` shebang, OS/arch probe, PREFIX-optional stdlib,
   `CC`/`CXX` overridable, ELF-only linker flags gated on Linux); tool
-  shebangs → `/usr/bin/env python3`; runtime + fork/exec `PORT(v0.20)` notes.
+  shebangs → `/usr/bin/env python3`; runtime + fork/exec `PORT(v0.0.20)` notes.
 - In-repo `tests/` (5 smoke programs, own authorship) + `tests/run.sh`;
   `.github/workflows/flint.yml` (ubuntu x64+arm64, macOS-15) — written, runs
   on push (could not execute Actions from this device).
@@ -752,7 +752,7 @@ load; cache salt bumped (`flintc-v017`) so pre-triple artifacts never reuse.
 
 ---
 
-## v0.18 REGISTRY (2026-09-06 session — done, verified end-to-end)
+## v0.0.18 REGISTRY (2026-09-06 session — done, verified end-to-end)
 
 **Format** (strict subset, no TOML dep by design): `[section]` headers,
 `key = "value"` (escapes `\" \\ \n \t`), dotted keys, `#` comments outside
@@ -766,7 +766,7 @@ into `~/.cache/flint_pkgs/<name>`, entry convention `<name>.fl` → `lib.fl` →
 `main.fl` (missing = clear error), upserts manifest + lock in CWD.
 **Builds:** `import "name"` resolves relative → manifest (+ auto-fetch with a
 loud message, `--offline` refuses) → lib paths → CWD; single-level deps only
-(transitive manifests NOT followed — documented v0.19 item); lock rev drift
+(transitive manifests NOT followed — documented v0.0.19 item); lock rev drift
 warns; upsert preserves file bytes elsewhere.
 **Verified (local git, no network):** auto-fetch prints 42; lock written with
 rev; cached rebuild silent; offline-cached works; offline-missing + bad URL +
@@ -775,7 +775,7 @@ smoke 10/10 + all fixtures/P0/P1/P2/Aegis suites unchanged.
 
 ---
 
-## v0.19 TOOLING (2026-09-06 session — done, every subcommand tested)
+## v0.0.19 TOOLING (2026-09-06 session — done, every subcommand tested)
 
 **Subcommands** (fixed names win over filenames, cargo-style): `run`/`build`
 shift argv and reuse the full compiler flow (`build` enforces `-o`);
@@ -799,7 +799,7 @@ flag threads into the `--test` runner. **Bugs found by testing:**
 
 ---
 
-## v0.20 WINDOWS PORT (2026-09-06 session — MinGW-verified, real .exe linked)
+## v0.0.20 WINDOWS PORT (2026-09-06 session — MinGW-verified, real .exe linked)
 
 **Method:** `llvm-mingw-w64` (`x86_64-w64-mingw32-clang`) as ground truth —
 every claim below was compiled, not hand-waved. Baseline had 3 failures.
@@ -828,7 +828,7 @@ fixtures, math/libm link, P0 spot).
 
 ---
 
-## v0.21 TUTORIAL TRACK + two tutorial-found bugs (2026-09-06, in progress)
+## v0.0.21 TUTORIAL TRACK + two tutorial-found bugs (2026-09-06, in progress)
 
 **Track:** `tutorial/01..08` (hello → arith → flow → funcs → collections →
 types → files → wrap), each with an `EXPECT` block; `tests/run_tutorial.sh`
@@ -865,7 +865,7 @@ files are agent-supplied (never committed); `reference.fl` proves solvability.
 
 ---
 
-## v0.22 CONCURRENCY + INTEROP (2026-09-06 session — done, verified)
+## v0.0.22 CONCURRENCY + INTEROP (2026-09-06 session — done, verified)
 
 **Narrative** (README): share-by-communicating — data-parallel loops,
 threads + bounded MPMC channels, copy-or-handle crossing, join-before-free,
@@ -890,7 +890,7 @@ WASI execution (libc + _start) is the documented next step.
 
 ---
 
-## Post-v0.22 Fix (uncommitted): Top-Level Reassignment No-Hang
+## Post-v0.0.22 Fix (uncommitted): Top-Level Reassignment No-Hang
 
 **Top-level `x = ...` reassignment** (`parseProgram` IDENT+ASSIGN branch,
 `src/main.cpp` ~line 1970): now routes to `parseExprStmt()` when the name is
@@ -908,7 +908,7 @@ a repro.
 
 ---
 
-## Post-v0.22 Fix #2 (uncommitted): Top-Level Call Misparse + Decl Hardening
+## Post-v0.0.22 Fix #2 (uncommitted): Top-Level Call Misparse + Decl Hardening
 
 **Root cause found while verifying README snippets**: the lexer NEVER emits
 `NEWLINE` tokens (`ensure()`: `if (c == '\n') { ... continue; }`), so every
@@ -1001,7 +1001,7 @@ Gates: smoke 13/13, tutorial 8/8, registry 0 fail, agent-bench refs 5/5,
 
 Goal: `stage1/flint_lex.fl` tokenizes any `.fl` file byte-identically to the
 C++ lexer, using ONLY Stage-0 primitives (no language changes).
-Design (fits v0.22 limits — no struct returns, no composite maps):
+Design (fits v0.0.22 limits — no struct returns, no composite maps):
 - Token stream = 5 parallel i64 vecs: `kinds, starts, lens, lines, cols`
   (lexemes are `flint_str_substring(src, start, start+len)` slices on demand).
 - Entry: `lex_into(src, kinds, starts, lens, lines, cols) -> i64`
@@ -1173,7 +1173,7 @@ outline __pfor_N + flint_parallel_for call (captures rejected); and/or/not
 already tokens (`!e`→`e==0`, `&&`→CreateAnd on truthy, no short-circuit —
 matches C++); try/unwrap→null/err check + panicBB; struct→LLVM struct type +
 alloca/GEP; enum→{i64 tag, payload} + switch + default-panic backstop
-(never mergeBB — the v0.21 PHI class); lambda→closure-convert by-value
+(never mergeBB — the v0.0.21 PHI class); lambda→closure-convert by-value
 (__lam_F_N, direct calls only); destruct→field/index decls; slice→ptr+len.
 IR templates: str=i8*, array={i8*,i64}, bool=i1 (zext at calls), f64=double;
 i64 `+` via llvm.sadd.with.overflow + extract + condbr + panicBB; div/mod via
@@ -1544,7 +1544,7 @@ ordered by leverage (maturity gates everything else).
 Repo facts: REQUIREMENTS.md already carries a tier table (T1 Android ARM64
 + Linux x86_64/ARM64; T2 macOS; T3 MinGW/MSVC). CI (.github/workflows/
 flint.yml) runs full suite on T1 (ubuntu-24.04 + -arm), builds on T2
-(macos-15), tests-on-MinGW on T3 (windows-2025). v0.20 proved MinGW
+(macos-15), tests-on-MinGW on T3 (windows-2025). v0.0.20 proved MinGW
 hello.exe cross-linked; MSVC still needs the thread shim (PORT notes in
 code). WASM emits objects only — no `_start`/libc, nothing executes.
 bench/compile_time/bench.sh + SELF_DIR hardcode /data/data/... paths
@@ -1609,7 +1609,7 @@ either backend. Differential harness + corpus exist
 (tests/test_differential.sh 5/5); fuzz/ has generate.py/run.sh but is NOT
 wired to CI; P4 ship-list (signed tags, SBOM, semver freeze,
 v1_gate_check.sh, error-code docs) is planned, not done; CHANGELOG
-(Keep a Changelog + semver) started at 0.22.0 — keep the discipline.
+(Keep a Changelog + semver) started at 0.0.22 — keep the discipline.
 
 Industry precedent — Csmith (PLDI'13, Utah) + libFuzzer (LLVM docs):
 generate UB-free random programs; compile each at -O0..-O3; crash bugs
@@ -2720,7 +2720,7 @@ mocking, coverage, a linter.
 ## 2026-10-10 — Documentation accuracy, and a JIT performance gap
 
 **Docs said things that were false.** REQUIREMENTS.md documented
-`./flintc --target <triple> program.fl`; CHANGELOG.md 0.22.0 listed
+`./flintc --target <triple> program.fl`; CHANGELOG.md 0.0.22 listed
 `--emit-header` and a WASM target. Verified none of the four appears in
 src/main.cpp, and README already said so correctly -- so the docs contradicted
 each other. Both corrected. This had been flagged in a review two sessions
@@ -2825,7 +2825,7 @@ Casablanca fixed +0 w/ Ramadan note (:244-248); pre-1970 unmodelled
 (header :24); races admitted (README:401); `_unchecked` gated on
 `releaseMode` (:4381-4383, CLI default safe :9975/:10011-10012);
 gradcheck.c:83-87 covers exactly mul/add/sub/sum; no ONNX hits; no
-DIBuilder hits; no `.vscode/`; no `--target` (v0.17 feature lost —
+DIBuilder hits; no `.vscode/`; no `--target` (v0.0.17 feature lost —
 suspected wipe-class loss like AegisChecker); no i8-quant path;
 COMPATIBILITY.md:13 gate + D1-D4 all OPEN verified verbatim;
 stage3/ladder 45 files, test_selfhost.sh + docs_check.sh present;
@@ -2974,12 +2974,12 @@ one Flint frame to source via gdb/lldb — no gdb/lldb exists on the Termux
 dev phone, so this gate never runs on-device), extension deferred to
 adoption phase (gate when taken: bundled LSP + per-editor docs). Suggested
 "extension third" OVERRIDDEN with reason. Axis: Tooling.
-- **`--target` restoration.** Steelman: v0.17 shipped it, docs corrected
+- **`--target` restoration.** Steelman: v0.0.17 shipped it, docs corrected
 2026-10-10; cross-compilation is a §1 non-goal exception worth re-adding
 boundedly (flag + validation + triple flow). Attack: suspected wipe-loss
 means re-implementation against current backend (M, serious — CGU/link
 flow). Verdict KEEP, effort M. Gate: x86_64 object on ARM host
-(readobj-confirmed, v0.17 precedent). Axis: Portability.
+(readobj-confirmed, v0.0.17 precedent). Axis: Portability.
 - **ONNX export: DEFER, and the deferral is CORRECT.** Niche claim is
 no-artifact-compiler training (§2.3); ONNX is interop-out, not readiness;
 costs a spec-conformance surface for no readiness movement before native
@@ -3117,7 +3117,7 @@ Claim-by-claim verdicts:
 7. "Rust async runtime / work-stealing pool" — flint_chan.c (CSP) +
    async G7 already exist in C; parallel-for works (benchmarks). Rust
    tokio dep on Android compiles huge; races remain a documented DEFER.
-8. "Target-lowering engine in Rust" — MISDIRECTED: --target was a v0.17
+8. "Target-lowering engine in Rust" — MISDIRECTED: --target was a v0.0.17
    flintc feature that got lost (ledger item 20); it is plain C++ work in
    main.cpp, no Rust involved.
 9. "cxx crate bridge" — NOT NEEDED at our boundary: the entire runtime
@@ -3164,7 +3164,7 @@ Per-aspect /10 (Flint, evidence):
   serialization; no HTTP/image/audio.
 - Ecosystem 2.5 — no packages, no registry, C-ABI FFI both directions
   (works: flt_*/libBLAS dlopen), nothing else.
-- Tooling 4.5 — no DWARF (planned first), no --target (lost v0.17),
+- Tooling 4.5 — no DWARF (planned first), no --target (lost v0.0.17),
   JIT can't run util-linked (compiler-rt atomics gap), no analyzers;
   differential-as-infrastructure is the offsetting strength.
 - Docs 7.5 — truth-gated (docs_check hard counts), honest limitations
@@ -5623,12 +5623,12 @@ defect (the pipeline fixture deliberately does not print the result). It is
 
 ### The documentation-authenticity pass
 
-`REQUIREMENTS.md` still said v0.17, "Cross-compilation is not implemented.
+`REQUIREMENTS.md` still said v0.0.17, "Cross-compilation is not implemented.
 There is no `--target` flag", and "~7600 lines". All three were false:
 `--target` exists and is **emit-only** (it produces a target-specific `.ll`
 or `.o`; linking/running a cross-target executable and JIT are host-only and
 refused loudly), `src/main.cpp` is ~16.2K lines, and the compiler is ~1.2 MB
-on this device. The document now says v0.22.0 and links the self-host
+on this device. The document now says v0.0.22 and links the self-host
 limitation to `COMPATIBILITY.md` D5.
 
 The README's memory-safety bullet now says "Memory safety mechanisms" and

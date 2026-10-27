@@ -1,6 +1,6 @@
 # Flint Compiler — Requirements & Setup
 
-## Platform Support (v0.22.0: any device)
+## Platform Support (v0.0.23: any device)
 
 | Tier | Platform | Status |
 |------|----------|--------|
@@ -8,7 +8,7 @@
 | 1 | Linux x86_64 | ✅ CI-tested |
 | 1 | Linux ARM64 | ✅ CI-tested |
 | 2 | macOS (Apple silicon + Intel) | 🟡 builds via Xcode CLT + brew LLVM (CI) |
-| 3 | Windows (MinGW/LLVM-MinGW) | 🟡 v0.20: all runtime + OS layer compile for x86_64; real `hello.exe` cross-linked from ARM; native CI runs tests |
+| 3 | Windows (MinGW/LLVM-MinGW) | 🟡 v0.0.20: all runtime + OS layer compile for x86_64; real `hello.exe` cross-linked from ARM; native CI runs tests |
 | 3 | Windows (MSVC) | 📋 needs native threads + full-toolchain CI run |
 
 Windows notes: link programs with `-lws2_32 -lpthread` (added automatically by

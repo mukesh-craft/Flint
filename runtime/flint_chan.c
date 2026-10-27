@@ -1,4 +1,4 @@
-// flint_chan.c — v0.22: bounded MPMC channels for i64 messages.
+// flint_chan.c — v0.0.22: bounded MPMC channels for i64 messages.
 //
 // The safe handoff primitive behind Flint's concurrency story: share by
 // communicating instead of sharing memory. Blocking send/recv with close

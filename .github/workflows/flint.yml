@@ -121,7 +121,7 @@ jobs:
           name: sbom
           path: sbom.json
 
-  # Tier 3: Windows via MinGW (MSYS2). v0.20 verifies the POSIX/MinGW path;
+  # Tier 3: Windows via MinGW (MSYS2). v0.0.20 verifies the POSIX/MinGW path;
   # MSVC-native remains a later work item (see memory.md PORT notes).
   windows-mingw:
     timeout-minutes: 60

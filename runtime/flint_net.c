@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdbool.h>
-// v0.20 PORT: POSIX sockets vs Winsock2. MinGW provides the BSD headers, so
+// v0.0.20 PORT: POSIX sockets vs Winsock2. MinGW provides the BSD headers, so
 // this branch only triggers for MSVC-style toolchains (_WIN32 without the
 // POSIX socket headers). Link Windows programs with -lws2_32.
 #ifdef _WIN32
@@ -520,7 +520,7 @@ static char* flint_https_request(const char* url, const char* content_type,
     curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(h, CURLOPT_SSL_VERIFYHOST, 2L);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(h, CURLOPT_USERAGENT, "flint/0.22");
+    curl_easy_setopt(h, CURLOPT_USERAGENT, "flint/0.0.23");
     if (body) {
         curl_easy_setopt(h, CURLOPT_POSTFIELDS, body);
         curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, (long)strlen(body));

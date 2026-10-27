@@ -582,7 +582,7 @@ flags plus standalone Python scripts:
 
 ```bash
 ./flintc --help                       # every flag, grouped
-./flintc --version                    # flintc 0.22.0
+./flintc --version                    # flintc 0.0.23
 ./flintc main.fl -o myapp            # native binary (AOT); builds and runs
 ./flintc main.fl -o myapp --no-run   # native binary (AOT); build only
 ./flintc main.fl out.ll              # LLVM IR text (by output extension)
