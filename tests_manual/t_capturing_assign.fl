@@ -1,0 +1,18 @@
+# Phase 2 / 2D: `h = |...|` stores a fresh closure into an existing binding.
+#
+# The literal does NOT escape at the assignment (h is local), so it keeps a
+# frame box; the assignment copies the box metadata onto h, and the RETURN of
+# h promotes it like any other closure binding.
+
+fn base(x: i64) -> i64 { x }
+
+fn make(k: i64) -> fn(i64) -> i64 {
+    mut h: fn(i64) -> i64 = base
+    h = |x: i64| x + k
+    return h
+}
+
+fn main() {
+    f = make(35)
+    print(f(7))
+}

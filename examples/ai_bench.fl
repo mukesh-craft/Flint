@@ -1,5 +1,6 @@
 extern "C" {
     fn flt_create(ndim: i64, shape: str) -> str
+    fn flt_create_2d(r: i64, c: i64) -> str
     fn flt_destroy(t: str)
     fn flt_fill(t: str, v: f64)
     fn flt_get(t: str, i: i64) -> f64
@@ -18,14 +19,6 @@ extern "C" {
     fn flint_time_ns() -> i64
 }
 
-fn make_shape(ndim: i64, d0: i64, d1: i64) -> str {
-    s = flint_array_alloc(ndim)
-    sd = flint_array_data(s)
-    if ndim >= 1 { flint_array_write_i64(sd, 0, d0) }
-    if ndim >= 2 { flint_array_write_i64(sd, 1, d1) }
-    return sd
-}
-
 fn bench_matmul() -> i64 {
     flint_print("=== Matrix Multiply Benchmark ===\n")
     sizes = flint_array_alloc(3)
@@ -37,9 +30,8 @@ fn bench_matmul() -> i64 {
     mut si: i64 = 0
     while si < 3 {
         N: i64 = flint_array_read_i64(sd, si)
-        s = make_shape(2, N, N)
-        a: str = flt_create(2, s)
-        b: str = flt_create(2, s)
+        a: str = flt_create_2d(N, N)
+        b: str = flt_create_2d(N, N)
         flt_randn(a); flt_randn(b)
 
         # warmup
@@ -60,7 +52,7 @@ fn bench_matmul() -> i64 {
         flint_println_f64(avg)
 
         flt_destroy(a); flt_destroy(b)
-        flint_array_free(s)
+
         si = si + 1
     }
     flint_array_free(sizes)
@@ -70,15 +62,15 @@ fn bench_matmul() -> i64 {
 fn bench_forward() -> i64 {
     flint_print("\n=== Forward Pass (512->256->128->10) ===\n")
     batch: i64 = 64
-    s_x = make_shape(2, batch, 512)
-    s_w1 = make_shape(2, 512, 256); s_b1 = make_shape(2, 1, 256)
-    s_w2 = make_shape(2, 256, 128); s_b2 = make_shape(2, 1, 128)
-    s_w3 = make_shape(2, 128, 10);  s_b3 = make_shape(2, 1, 10)
+    
+    
+    
+    
 
-    x: str = flt_create(2, s_x)
-    w1: str = flt_create(2, s_w1); b1: str = flt_create(2, s_b1)
-    w2: str = flt_create(2, s_w2); b2: str = flt_create(2, s_b2)
-    w3: str = flt_create(2, s_w3); b3: str = flt_create(2, s_b3)
+    x: str = flt_create_2d(batch, 512)
+    w1: str = flt_create_2d(512, 256); b1: str = flt_create_2d(1, 256)
+    w2: str = flt_create_2d(256, 128); b2: str = flt_create_2d(1, 128)
+    w3: str = flt_create_2d(128, 10); b3: str = flt_create_2d(1, 10)
     flt_randn(x); flt_randn(w1); flt_randn(w2); flt_randn(w3)
     flt_fill(b1, 0.0); flt_fill(b2, 0.0); flt_fill(b3, 0.0)
 
@@ -108,18 +100,17 @@ fn bench_forward() -> i64 {
 
     flt_destroy(x); flt_destroy(w1); flt_destroy(b1)
     flt_destroy(w2); flt_destroy(b2); flt_destroy(w3); flt_destroy(b3)
-    flint_array_free(s_x); flint_array_free(s_w1); flint_array_free(s_b1)
-    flint_array_free(s_w2); flint_array_free(s_b2)
-    flint_array_free(s_w3); flint_array_free(s_b3)
+
+
+
     return 0
 }
 
 fn bench_training() -> i64 {
     flint_print("\n=== Training Loop (N=1000, 500 epochs) ===\n")
     n: i64 = 1000
-    sd = make_shape(2, n, 1)
-    x: str = flt_create(2, sd)
-    y: str = flt_create(2, sd)
+    x: str = flt_create_2d(n, 1)
+    y: str = flt_create_2d(n, 1)
     flt_uniform(x, -1.0, 1.0)
     mut i: i64 = 0
     while i < n {
@@ -128,11 +119,10 @@ fn bench_training() -> i64 {
         i = i + 1
     }
 
-    sd1 = make_shape(2, 1, 1)
-    w: str = flt_create(2, sd1)
-    b: str = flt_create(2, sd1)
+    w: str = flt_create_2d(1, 1)
+    b: str = flt_create_2d(1, 1)
     flt_fill(w, 0.0); flt_fill(b, 0.0)
-    pred: str = flt_create(2, sd)
+    pred: str = flt_create_2d(n, 1)
 
     t0: i64 = flint_time_ns()
     mut epoch: i64 = 0
@@ -164,7 +154,7 @@ fn bench_training() -> i64 {
     flint_print("b = "); flt_print_tensor(b, 5)
     flt_destroy(x); flt_destroy(y); flt_destroy(w)
     flt_destroy(b); flt_destroy(pred)
-    flint_array_free(sd); flint_array_free(sd1)
+
     return 0
 }
 

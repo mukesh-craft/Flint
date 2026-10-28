@@ -1,4 +1,4 @@
-// flint_os.h — v0.20: portable OS services for flintc (no LLVM dependency,
+// flint_os.h — v0.0.20: portable OS services for flintc (no LLVM dependency,
 // so this TU compiles for every target, including Windows via MinGW/MSVC).
 // POSIX Bourne: fork+exec, dlopen, utimes. Windows: CreateProcess, LoadLibrary.
 #pragma once

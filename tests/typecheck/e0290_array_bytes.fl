@@ -1,0 +1,6 @@
+# The other direction: an i64 array cannot be initialised from a byte
+# buffer. Reading it through an i64 GEP would read eight bytes per element.
+fn main() -> i64 {
+    a: [i64] = flint_bytes_alloc(4)
+    return 0
+}

@@ -1,0 +1,54 @@
+# The encoders, password hashing and system information, called from Flint.
+
+fn main() {
+    # --- encoders -----------------------------------------------------------
+    print(flint_crc32c("123456789", 9))
+    # flint_hex_encode comes from the C serial module (the Rust module does not
+    # duplicate it -- two definitions of one name is a link error).
+    print(flint_hex_encode("123456789", 9))
+    print(flint_crc32c_hex("123456789", 9))
+    print(flint_enc_last())
+
+    print(flint_base32_encode("foobar", 6))
+    print(flint_enc_last())
+
+    print(flint_url_encode("hello world", 11))
+    print(flint_enc_last())
+
+    # UUIDs are random, so assert the SHAPE (36 chars) rather than a value:
+    # a gate that expects a specific random output can never pass.
+    print(flint_uuid_v4())
+    print(flint_str_length(flint_enc_last()) == 36)
+
+    # --- password hashing --------------------------------------------------
+    # OWASP's Argon2id minimum is slow on purpose, so the gate uses the small
+    # parameters; the default the module actually ships is asserted below.
+    n = flint_argon2_hash_params("correct horse", 64, 1, 1)
+    print(n > 0)
+    stored = flint_str_concat(flint_argon2_last(), "")
+    print(flint_str_substring(stored, 0, 10))
+
+    # Right password verifies (1), wrong password does not (0).
+    print(flint_argon2_verify("correct horse", stored))
+    print(flint_argon2_verify("wrong horse", stored))
+    # A malformed stored hash is -1, not 0: a login path must tell them apart.
+    print(flint_argon2_verify("correct horse", "not-a-phc-string"))
+    print(flint_argon2_error())
+
+    # Production defaults meet the OWASP minimum.
+    print(flint_argon2_default_memory_kib() >= 19456)
+
+    # --- system information -------------------------------------------------
+    print(flint_system_supported())
+    print(flint_system_platform())
+    print(flint_system_last())
+
+    # Whichever way this platform answers, the contract is: a value, or -1 with
+    # a reason. Never a plausible wrong number.
+    cpus = flint_system_cpu_count()
+    print(cpus > 0 or cpus == -1)
+    mem = flint_system_memory_total()
+    print(mem > 0 or mem == -1)
+
+    print("stdlib-ok")
+}

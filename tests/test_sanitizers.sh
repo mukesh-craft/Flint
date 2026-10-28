@@ -8,7 +8,9 @@
 # Usage: bash tests/test_sanitizers.sh [path/to/flintc]   (default: ./flintc)
 set -u
 FLINTC="${1:-./flintc}"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/sanitizers"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TMPD="$_TMPBASE/slipstream/sanitizers"
 mkdir -p "$TMPD"
 export ASAN_OPTIONS=detect_leaks=0
 export UBSAN_OPTIONS=print_stacktrace=1
@@ -18,8 +20,12 @@ build_run() { # $1=label $2=fl $3=want_exit $4=want_grep(optional)
   if ! timeout -s KILL 300 "$FLINTC" "$src" --emit-llvm -o "$TMPD/t.ll" > /dev/null 2>&1; then
     echo "FAIL $label (emit)"; fail=$((fail+1)); return
   fi
+  # flint_std.o carries the array primitives (runtime/rust/src/array.rs),
+  # so an emit that calls flint_array_* cannot link against runtime.c
+  # alone -- the same link line the differential gate uses.
   if ! clang -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
-      "$TMPD/t.ll" runtime/runtime.c -lm -o "$TMPD/t.bin" 2> "$TMPD/build.err"; then
+      "$TMPD/t.ll" runtime/runtime.c runtime/flint_aegis.c flint_std.o \
+      -lsqlite3 -lcurl -lm -o "$TMPD/t.bin" 2> "$TMPD/build.err"; then
     echo "FAIL $label (sanitizer build)"; head -n 3 "$TMPD/build.err"; fail=$((fail+1)); return
   fi
   out="$("$TMPD/t.bin" 2> "$TMPD/run.err")"; rc=$?
@@ -49,8 +55,12 @@ panic_run() { # $1=label $2=fl $3=message
   if ! timeout -s KILL 300 "$FLINTC" "$src" --emit-llvm -o "$TMPD/t.ll" > /dev/null 2>&1; then
     echo "FAIL $label (emit)"; fail=$((fail+1)); return
   fi
+  # flint_std.o carries the array primitives (runtime/rust/src/array.rs),
+  # so an emit that calls flint_array_* cannot link against runtime.c
+  # alone -- the same link line the differential gate uses.
   if ! clang -O1 -fsanitize=address,undefined -fno-sanitize-recover=all \
-      "$TMPD/t.ll" runtime/runtime.c -lm -o "$TMPD/t.bin" 2> "$TMPD/build.err"; then
+      "$TMPD/t.ll" runtime/runtime.c runtime/flint_aegis.c flint_std.o \
+      -lsqlite3 -lcurl -lm -o "$TMPD/t.bin" 2> "$TMPD/build.err"; then
     echo "FAIL $label (sanitizer build)"; head -n 3 "$TMPD/build.err"; fail=$((fail+1)); return
   fi
   "$TMPD/t.bin" > /dev/null 2> "$TMPD/run.err"; rc=$?

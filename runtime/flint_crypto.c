@@ -131,7 +131,8 @@ static void md5_hash(const uint8_t* input, uint64_t len, uint8_t digest[16]) {
         memset(tail + remaining + 1, 0, padlen);
         padlen = remaining + 1 + padlen;
     } else {
-        padlen = 64 - remaining - 1 + 56;
+        // This branch pads to a full block then a second one; the value is
+        // fixed at 56 below, so no intermediate padlen is needed here.
         memset(tail + remaining + 1, 0, 64 - remaining - 1);
         md5_transform(state, tail);
         memset(tail, 0, 56);
@@ -283,7 +284,8 @@ static void sha256_hash(const uint8_t* input, uint64_t len, uint8_t digest[32]) 
         memset(tail + remaining + 1, 0, padlen);
         padlen = remaining + 1 + padlen;
     } else {
-        padlen = 64 - remaining - 1 + 56;
+        // This branch pads to a full block then a second one; the value is
+        // fixed at 56 below, so no intermediate padlen is needed here.
         memset(tail + remaining + 1, 0, 64 - remaining - 1);
         sha256_transform(state, tail);
         memset(tail, 0, 56);

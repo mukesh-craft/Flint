@@ -1,0 +1,11 @@
+# M2b: explicit type arguments — the error cases.
+#
+# New syntax, so tests_manual/ (not in the self-host parse corpus).
+# Each malformed form must produce exactly ONE error (the M6 contract).
+
+fn idc<T>(x: T) -> T { return x }
+
+fn main() {
+    # Too many type arguments.
+    print(idc::<i64, i64>(5))
+}

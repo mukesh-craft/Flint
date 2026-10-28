@@ -7,7 +7,7 @@
 #include <math.h>
 #include <time.h>
 #include <sys/stat.h>
-// PORT(v0.20): POSIX-only headers below (dirent/unistd/sys-wait/regex/pthread).
+// PORT(v0.0.20): POSIX-only headers below (dirent/unistd/sys-wait/regex/pthread).
 // Linux + macOS + Android: fine as-is. Windows/MinGW: mostly provided by the
 // toolchain; MSVC needs shims (FindFirstFile, threads, bundled regex).
 #include <dirent.h>
@@ -29,6 +29,7 @@
 // gap; use string find/replace builtins instead).
 #ifndef _WIN32
 #include <regex.h>
+#include "flint_aegis.h"
 #else
 #define FLINT_NO_POSIX_REGEX 1
 #endif
@@ -39,7 +40,11 @@ char** flint_g_argv = NULL;
 
 // Forward declarations (used by early array/string helpers before definition).
 void flint_set_err(int64_t err);
-void flint_panic(const char* msg);
+// B1: panic paths are cold and never return; bounds failures are cold but
+// return on the hot (in-bounds) path. Attributes keep optimizers honest
+// around checks without removing any check.
+void flint_panic(const char* msg) __attribute__((cold, noreturn));
+void flint_bounds_check(int64_t index, int64_t length) __attribute__((cold));
 
 void flint_print_i64(int64_t val) {
     printf("%ld", (long)val);
@@ -79,7 +84,7 @@ void flint_print_fmt(const char* fmt, ...) {
     va_end(args);
 }
 
-void flint_panic(const char* msg) {
+void __attribute__((cold, noreturn)) flint_panic(const char* msg) {
     // Flush user output first: otherwise prints before the panic are lost
     // (stdio buffers are discarded by abort). All PANIC paths funnel here.
     fflush(stdout);
@@ -89,8 +94,8 @@ void flint_panic(const char* msg) {
     abort();
 }
 
-void flint_bounds_check(int64_t index, int64_t length) {
-    if (index < 0 || index >= length) {
+void __attribute__((cold)) flint_bounds_check(int64_t index, int64_t length) {
+    if (__builtin_expect(index < 0 || index >= length, 0)) {
         char msg[128];
         snprintf(msg, sizeof(msg), "index %lld out of bounds for length %lld",
                  (long long)index, (long long)length);
@@ -101,7 +106,9 @@ void flint_bounds_check(int64_t index, int64_t length) {
 // Free a heap string returned by any flint_str_* / flint_i64_to_string /
 // flint_file_read function. Callers own the returned memory.
 void flint_str_free(char* s) {
-    free(s);
+    // Quarantined rather than freed outright when tracking is on, so a stale
+    // pointer read traps instead of returning another allocation's bytes.
+    flint_aegis_quarantine_free(s, s ? strlen(s) + 1 : 0);
 }
 
 // ---- Self-hosting runtime ----
@@ -115,7 +122,15 @@ char* flint_get_arg(int64_t i) {
     return flint_g_argv[i];
 }
 
+// The whole argv as a char**, so a declarative CLI parser can consume it.
+// Without this, flint_cli_parse could not be called from Flint at all: the
+// program could see one argument at a time but never the array the parser
+// needs, which is why every CLI program hand-rolled index arithmetic.
+char** flint_get_argv(void) { return flint_g_argv; }
+
 char* flint_str_concat(const char* a, const char* b) {
+    flint_aegis_check_live((void*)a, "str_concat");
+    flint_aegis_check_live((void*)b, "str_concat");
     if (!a) a = "";
     if (!b) b = "";
     // Fast paths: empty side avoids malloc+memcpy (also cuts the constant
@@ -175,11 +190,13 @@ static int64_t flint_cached_strlen(const char* s) {
 }
 
 int64_t flint_str_length(const char* s) {
+    flint_aegis_check_live((void*)s, "str_length");
     return flint_cached_strlen(s);
 }
 
 int64_t flint_str_char_at(const char* s, int64_t i) {
     if (!s) flint_panic("str_char_at: null string");
+    flint_aegis_check_live((void*)s, "str_char_at");
     int64_t len = flint_cached_strlen(s);
     flint_bounds_check(i, len);
     return (unsigned char)s[i];
@@ -187,6 +204,7 @@ int64_t flint_str_char_at(const char* s, int64_t i) {
 
 char* flint_str_substring(const char* s, int64_t start, int64_t end) {
     if (!s) return NULL;
+    flint_aegis_check_live((void*)s, "str_substring");
     int64_t slen = flint_cached_strlen(s);
     // Validate ordering and bounds — reject inverted/out-of-range slices.
     if (start < 0 || end < start || end > slen) {
@@ -280,10 +298,18 @@ int64_t flint_time_ns(void) {
     LARGE_INTEGER now;
     if (freq.QuadPart == 0) QueryPerformanceFrequency(&freq);
     QueryPerformanceCounter(&now);
-    return (int64_t)(now.QuadPart * 1000000000LL / (freq.QuadPart ? freq.QuadPart : 1));
+    // B1 UB audit: QuadPart*1e9 overflows signed after ~15 min at 10 MHz.
+    // Divide first (quotient + remainder) so no intermediate overflows.
+    {
+        int64_t f = freq.QuadPart ? freq.QuadPart : 1;
+        int64_t q = now.QuadPart / f, r = now.QuadPart % f;
+        return q * 1000000000LL + r * 1000000000LL / f;
+    }
 #else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
+    // B1 UB audit: tv_sec*1e9 overflows only after ~292 years of uptime;
+    // unreachable in practice, so the direct multiply is kept.
     return (int64_t)ts.tv_sec * 1000000000 + (int64_t)ts.tv_nsec;
 #endif
 }
@@ -292,6 +318,131 @@ int64_t flint_time_ns(void) {
 void* flint_stdin(void) { return stdin; }
 void* flint_stdout(void) { return stdout; }
 void* flint_stderr(void) { return stderr; }
+
+// ---- Secure line input (flint_input_*) ---------------------------------
+//
+// A small, bounded replacement for scanf("%s")/fgets: it always consumes one
+// whole line, never over-reads, never allocates without a cap, and reports
+// what happened through flint_input_status() instead of guessing.
+//
+// Status codes (reset by every flint_input* call):
+//   0  ok
+//   1  end of input (EOF before any byte)
+//   2  line too long: kept the first FLINT_INPUT_MAX bytes, drained the rest
+//   3  read error (ferror)
+//   4  out of memory
+//   5  not a number (or trailing junk)
+//   6  number out of range (ERANGE)
+//   7  embedded NUL byte(s) were skipped (Flint strings are NUL-terminated)
+#define FLINT_INPUT_MAX (1024 * 1024)
+static int64_t g_flint_input_status = 0;
+
+int64_t flint_input_status(void) { return g_flint_input_status; }
+
+// Read exactly one line from stdin into a heap string. The returned buffer is
+// always NUL-terminated when non-NULL; the caller owns it (flint_str_free).
+static char* flint_input_read_line(int64_t* status) {
+    size_t cap = 256, len = 0;
+    char* out = (char*)malloc(cap);
+    if (!out) { *status = 4; return NULL; }
+    int too_long = 0, bad_nul = 0, read_error = 0, saw_any = 0;
+
+    for (;;) {
+        int c = fgetc(stdin);
+        if (c == EOF) {
+            if (ferror(stdin)) read_error = 1;
+            break;
+        }
+        saw_any = 1;
+        if (c == '\n') break;
+        if (c == '\0') { bad_nul = 1; continue; }
+        if (too_long) continue;              // drain the rest of the line
+        if (len >= FLINT_INPUT_MAX) { too_long = 1; continue; }
+        if (len + 1 >= cap) {
+            size_t ncap = cap * 2;
+            if (ncap > (size_t)FLINT_INPUT_MAX + 1) ncap = (size_t)FLINT_INPUT_MAX + 1;
+            if (ncap <= cap) { too_long = 1; continue; }
+            char* grown = (char*)realloc(out, ncap);
+            if (!grown) { free(out); *status = 4; return NULL; }
+            out = grown;
+            cap = ncap;
+        }
+        out[len++] = (char)c;
+    }
+
+    // CRLF input (Windows pipes, telnet) reads as "...\r"; a lone trailing CR
+    // is stripped too, because that is what every line-input API means.
+    if (len > 0 && out[len - 1] == '\r') len--;
+    out[len] = '\0';
+
+    if (read_error) *status = 3;
+    else if (too_long) *status = 2;
+    else if (bad_nul) *status = 7;
+    else if (!saw_any) *status = 1;
+    else *status = 0;
+    return out;
+}
+
+char* flint_input(const char* prompt) {
+    if (prompt) {
+        fputs(prompt, stdout);
+        fflush(stdout);
+    }
+    int64_t st = 0;
+    char* line = flint_input_read_line(&st);
+    g_flint_input_status = st;
+    if (!line) {
+        // Keep the return type total: callers that ignore the status can
+        // still print/free the result instead of dereferencing NULL.
+        char* empty = (char*)malloc(1);
+        if (empty) empty[0] = '\0';
+        else g_flint_input_status = 4;
+        return empty;
+    }
+    return line;
+}
+
+static int flint_input_ws(int c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' || c == '\f';
+}
+
+int64_t flint_input_i64(const char* prompt) {
+    char* line = flint_input(prompt);
+    if (!line) return 0;
+    if (g_flint_input_status != 0) { free(line); return 0; }
+
+    char* p = line;
+    while (flint_input_ws((unsigned char)*p)) p++;
+    errno = 0;
+    char* end = NULL;
+    long long value = strtoll(p, &end, 10);
+    while (end && flint_input_ws((unsigned char)*end)) end++;
+    if (end == p || !end || *end != '\0') g_flint_input_status = 5;
+    else if (errno == ERANGE) g_flint_input_status = 6;
+    free(line);
+    if (g_flint_input_status != 0) return 0;
+    return (int64_t)value;
+}
+
+double flint_input_f64(const char* prompt) {
+    char* line = flint_input(prompt);
+    if (!line) return 0.0;
+    if (g_flint_input_status != 0) { free(line); return 0.0; }
+
+    char* p = line;
+    while (flint_input_ws((unsigned char)*p)) p++;
+    errno = 0;
+    char* end = NULL;
+    double value = strtod(p, &end);
+    while (end && flint_input_ws((unsigned char)*end)) end++;
+    if (end == p || !end || *end != '\0') g_flint_input_status = 5;
+    else if (errno == ERANGE) g_flint_input_status = 6;
+    else if (!isfinite(value)) g_flint_input_status = 5;
+    free(line);
+    if (g_flint_input_status != 0) return 0.0;
+    return value;
+}
+
 
 // Safe print using write() with file descriptors (avoids FILE* pointer issues)
 void flint_print(const char* s) {
@@ -302,9 +453,13 @@ void flint_print(const char* s) {
 
 void flint_println(const char* s) {
     if (!s) return;
-    size_t len = strlen(s);
-    write(STDOUT_FILENO, s, len);
-    write(STDOUT_FILENO, "\n", 1);
+    // Was two raw write(2) calls, which bypasses stdio's buffer entirely.
+    // Every other print goes through printf, so a program mixing the two got
+    // its output reordered -- a test asserting on values could see the labels
+    // first and the numbers afterwards, which looked like a compiler bug.
+    // One stream, one buffer, one order.
+    printf("%s\n", s ? s : "(null)");
+    fflush(stdout);
 }
 
 void* flint_malloc(int64_t size) {
@@ -313,7 +468,7 @@ void* flint_malloc(int64_t size) {
 }
 
 void flint_free(void* ptr) {
-    free(ptr);
+    flint_aegis_quarantine_free(ptr, 0);
 }
 
 int64_t flint_ptr_to_int(void* p) {
@@ -324,66 +479,18 @@ void* flint_int_to_ptr(int64_t i) {
     return (void*)(intptr_t)i;
 }
 
-int64_t flint_array_read_i64(void* ptr, int64_t index) {
-    // UNCHECKED raw-pointer API (no length available — cannot validate).
-    // Prefer flint_array_get (bounds-checked, panics). Only use when the
-    // caller has hoisted the check, same contract as aegis _unchecked fns.
-    return ((int64_t*)ptr)[index];
-}
 
-void flint_array_write_i64(void* ptr, int64_t index, int64_t value) {
-    // UNCHECKED: see flint_array_read_i64. Prefer flint_array_set.
-    ((int64_t*)ptr)[index] = value;
-}
 
+// The array primitives (alloc/len/data_ptr/free/get/set and the unchecked
+// read_i64/write_i64 pair) are implemented in Rust: runtime/rust/src/array.rs.
+// They are re-implemented there rather than merely wrapped so that the length
+// travels with the pointer, which is what makes a bounds check possible at all;
+// the C versions indexed a bare void* and could not validate anything.
 typedef struct { void* data; int64_t len; } FlintArray;
 
-FlintArray flint_array_alloc(int64_t n) {
-    FlintArray a;
-    // Overflow guard: n * 8 must not wrap; also cap at 128M elems (~1GiB).
-    if (n < 0 || n > ((int64_t)1 << 27) || (uint64_t)n > SIZE_MAX / sizeof(int64_t)) {
-        a.data = NULL; a.len = 0; flint_set_err(1); return a;
-    }
-    // Zeroed (calloc): fresh arrays read as 0. malloc without memset works
-    // only by OS-page luck and breaks under ASan (0xbe fill) or heap reuse
-    // — the primes sieve returned wrong counts deterministically there.
-    a.data = (n > 0) ? calloc((size_t)n, sizeof(int64_t)) : NULL;
-    a.len = n;
-    return a;
-}
 
-int64_t flint_array_len(FlintArray a) { return a.len; }
-int64_t flint_array_len_ptr(FlintArray *a) { return a ? a->len : 0; }
-void* flint_array_data_ptr(FlintArray *a) { return a ? a->data : NULL; }
 
-void flint_array_free(FlintArray a) {
-    free(a.data);
-}
 
-int64_t flint_array_get(FlintArray a, int64_t index) {
-    // P0-5: OOB reads returned heap garbage silently. Panic like `a[i]`
-    // syntax (flint_bounds_check) instead — one memory-safety rule.
-    if (!a.data || index < 0 || index >= a.len) {
-        char msg[128];
-        snprintf(msg, sizeof(msg),
-                 "flint_array_get index %lld out of bounds for length %lld",
-                 (long long)index, (long long)a.len);
-        flint_panic(msg);
-    }
-    return ((int64_t*)a.data)[index];
-}
-
-void flint_array_set(FlintArray a, int64_t index, int64_t value) {
-    // P0-5: OOB writes were silently dropped. Panic instead.
-    if (!a.data || index < 0 || index >= a.len) {
-        char msg[128];
-        snprintf(msg, sizeof(msg),
-                 "flint_array_set index %lld out of bounds for length %lld",
-                 (long long)index, (long long)a.len);
-        flint_panic(msg);
-    }
-    ((int64_t*)a.data)[index] = value;
-}
 
 void flint_null_check(void* ptr, const char* msg) {
     if (!ptr) {
@@ -408,6 +515,47 @@ FlintArray flint_array_concat(FlintArray a, FlintArray b) {
     if (b.len > 0 && b.data) memcpy((int64_t*)result.data + a.len, b.data, (size_t)b.len * sizeof(int64_t));
     else if (b.len > 0) memset((int64_t*)result.data + a.len, 0, (size_t)b.len * sizeof(int64_t));
     return result;
+}
+
+// ---- Byte buffers ----
+//
+// A `bytes` value has the same {data, len} slice layout as an array, but one
+// byte per element. The compiler lowers b[i] and b[i] = v inline (i8 load /
+// trunc store, checked); these functions are the runtime ABI and the safe
+// fallback when a call reaches them directly. Zero-filled on purpose, for
+// the same reason flint_array_alloc is: a sieve must start at 0, and heap
+// reuse must not leak another allocation's bytes.
+#define FLINT_MAX_BYTES ((int64_t)(1u << 30)) // 1 GiB
+
+typedef struct { void* data; int64_t len; } FlintBytes;
+
+FlintBytes flint_bytes_alloc(int64_t n) {
+    FlintBytes b = { NULL, 0 };
+    if (n < 0 || n > FLINT_MAX_BYTES) { flint_set_err(1); return b; }
+    if (n == 0) return b;
+    void* p = calloc((size_t)n, 1);
+    if (!p) { flint_set_err(1); return b; }
+    b.data = p;
+    b.len = n;
+    return b;
+}
+
+int64_t flint_bytes_len(FlintBytes b) { return b.len; }
+
+void* flint_bytes_data(FlintBytes b) { return b.data; }
+
+int64_t flint_bytes_get(FlintBytes b, int64_t i) {
+    flint_bounds_check(i, b.len);
+    return (int64_t)((const unsigned char*)b.data)[i];
+}
+
+void flint_bytes_set(FlintBytes b, int64_t i, int64_t v) {
+    flint_bounds_check(i, b.len);
+    ((unsigned char*)b.data)[i] = (unsigned char)(v & 0xff);
+}
+
+void flint_bytes_free(FlintBytes b) {
+    if (b.data) free(b.data);
 }
 
 // ---- Threading ----
@@ -504,7 +652,12 @@ void flint_set_err(int64_t err) { flint_g_err = err; }
 double flint_sqrt(double x) { return sqrt(x); }
 double flint_pow(double x, double y) { return pow(x, y); }
 double flint_abs_f64(double x) { return fabs(x); }
-int64_t flint_abs_i64(int64_t x) { return x < 0 ? -x : x; }
+int64_t flint_abs_i64(int64_t x) {
+    // B1 UB audit: -INT64_MIN overflows signed (UB). Saturate at INT64_MAX
+    // would change magnitude; return INT64_MIN (wrap value) as defined behavior.
+    if (x == INT64_MIN) return INT64_MIN;
+    return x < 0 ? -x : x;
+}
 double flint_min_f64(double a, double b) { return a < b ? a : b; }
 int64_t flint_min_i64(int64_t a, int64_t b) { return a < b ? a : b; }
 double flint_max_f64(double a, double b) { return a > b ? a : b; }
@@ -545,7 +698,9 @@ double flint_rand_f64(void) {
 
 int64_t flint_rand_i64_range(int64_t lo, int64_t hi) {
     if (hi <= lo) return lo;
-    uint64_t range = (uint64_t)(hi - lo);
+    // B1 UB audit: (hi - lo) overflows signed when lo==INT64_MIN and
+    // hi==INT64_MAX. Compute the distance in unsigned instead.
+    uint64_t range = (uint64_t)hi - (uint64_t)lo;
     return lo + (int64_t)(flint_rand_u64() % range);
 }
 
@@ -584,7 +739,15 @@ int64_t flint_str_to_bool(const char* s) {
 
 double flint_i64_to_f64(int64_t v) { return (double)v; }
 
-int64_t flint_f64_to_i64(double v) { return (int64_t)v; }
+int64_t flint_f64_to_i64(double v) {
+    // B1 UB audit: float->int outside [INT64_MIN,INT64_MAX] or NaN/inf is UB.
+    // Define it: NaN -> 0, +inf/huge -> INT64_MAX, -inf/huge -> INT64_MIN.
+    // In-range values convert exactly as before.
+    if (!isfinite(v)) return v > 0 ? INT64_MAX : (v < 0 ? INT64_MIN : 0);
+    if (v >= 9223372036854775807.0) return INT64_MAX;
+    if (v < -9223372036854775808.0) return INT64_MIN;
+    return (int64_t)v;
+}
 
 // ==================== ADDITIONAL STRING OPERATIONS ====================
 
@@ -592,8 +755,9 @@ char* flint_str_repeat(const char* s, int64_t n) {
     if (!s || n < 0) return NULL;
     int64_t slen = (int64_t)strlen(s);
     if (slen == 0 || n == 0) return strdup("");
-    int64_t total = slen * n;
-    if (total / n != slen) return NULL;
+    // B1 UB audit: slen*n can overflow signed (UB) before the check.
+    int64_t total = 0;
+    if (__builtin_mul_overflow(slen, n, &total)) return NULL;
     char* r = (char*)malloc((size_t)total + 1);
     if (!r) flint_panic("out of memory");
     for (int64_t i = 0; i < n; i++)
@@ -631,6 +795,74 @@ char* flint_str_trim(const char* s) {
     memcpy(r, start, (size_t)len);
     r[len] = '\0';
     return r;
+}
+
+// ASCII case helpers. Like upper/lower, these operate on bytes; a UTF-8
+// multi-byte sequence is copied unchanged rather than case-mapped.
+char* flint_str_capitalize(const char* s) {
+    if (!s) return NULL;
+    char* r = strdup(s);
+    if (!r) flint_panic("out of memory");
+    for (char* p = r; *p; p++) *p = (char)tolower((unsigned char)*p);
+    if (r[0]) r[0] = (char)toupper((unsigned char)r[0]);
+    return r;
+}
+
+char* flint_str_title(const char* s) {
+    if (!s) return NULL;
+    char* r = strdup(s);
+    if (!r) flint_panic("out of memory");
+    int wordStart = 1;
+    for (char* p = r; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (isspace(c)) {
+            wordStart = 1;
+        } else if (wordStart) {
+            *p = (char)toupper(c);
+            wordStart = 0;
+        } else {
+            *p = (char)tolower(c);
+        }
+    }
+    return r;
+}
+
+char* flint_str_lstrip(const char* s) {
+    if (!s) return strdup("");
+    while (*s && isspace((unsigned char)*s)) s++;
+    return strdup(s);
+}
+
+char* flint_str_rstrip(const char* s) {
+    if (!s) return strdup("");
+    const char* end = s + strlen(s);
+    while (end > s && isspace((unsigned char)end[-1])) end--;
+    int64_t len = end - s;
+    char* r = (char*)malloc((size_t)len + 1);
+    if (!r) return NULL;
+    memcpy(r, s, (size_t)len);
+    r[len] = '\0';
+    return r;
+}
+
+int64_t flint_str_contains(const char* s, const char* sub) {
+    if (!s || !sub) return 0;
+    return strstr(s, sub) != NULL ? 1 : 0;
+}
+
+// Non-overlapping occurrences, like Python's str.count. An empty needle
+// counts the gaps around every character (len + 1), as Python does.
+int64_t flint_str_count(const char* s, const char* sub) {
+    if (!s || !sub) return 0;
+    if (!*sub) return (int64_t)strlen(s) + 1;
+    int64_t count = 0;
+    size_t n = strlen(sub);
+    for (const char* p = s; (p = strstr(p, sub)) != NULL; p += n) count++;
+    return count;
+}
+
+int64_t flint_str_is_empty(const char* s) {
+    return (!s || *s == '\0') ? 1 : 0;
 }
 
 int64_t flint_str_index_of(const char* s, const char* sub) {
@@ -672,7 +904,10 @@ char* flint_str_replace(const char* s, const char* old, const char* newstr) {
     int64_t count = 0;
     const char* p = s;
     while ((p = strstr(p, old)) != NULL) { count++; p += olen; }
-    int64_t reslen = slen + count * (nlen - olen);
+    // B1 UB audit: count*(nlen-olen) and slen+delta can overflow signed (UB).
+    int64_t delta = 0, reslen = 0;
+    if (__builtin_mul_overflow(count, nlen - olen, &delta)) return NULL;
+    if (__builtin_add_overflow(slen, delta, &reslen)) return NULL;
     if (reslen < 0) return NULL;
     char* result = (char*)malloc((size_t)reslen + 1);
     if (!result) flint_panic("out of memory");
@@ -830,7 +1065,9 @@ char* flint_sb_build(FlintStrBuilder* sb) {
     if (!sb) return strdup("");
     char* r = (char*)malloc((size_t)sb->len + 1);
     if (!r) return NULL;
-    memcpy(r, sb->data, (size_t)sb->len);
+    // sb->data is NULL for an empty builder; memcpy with a NULL source is
+    // undefined even when the length is zero.
+    if (sb->len) memcpy(r, sb->data, (size_t)sb->len);
     r[sb->len] = '\0';
     return r;
 }
@@ -915,9 +1152,11 @@ FlintMap* flint_map_new(void) {
 void flint_map_free(FlintMap* m) {
     if (!m) return;
     for (int64_t i = 0; i < m->cap; i++) {
-        if (m->keys[i]) { free(m->keys[i]); m->keys[i] = NULL; }
+        if (m->keys[i]) { flint_aegis_quarantine_free(m->keys[i], strlen(m->keys[i]) + 1); m->keys[i] = NULL; }
     }
-    free(m->keys); free(m->values); free(m);
+    flint_aegis_quarantine_free(m->keys, (size_t)m->cap * sizeof(char*));
+    flint_aegis_quarantine_free(m->values, (size_t)m->cap * sizeof(int64_t));
+    flint_aegis_quarantine_free(m, sizeof(FlintMap));
 }
 
 static int64_t map_probe(FlintMap* m, const char* key, int64_t* slot) {
@@ -941,6 +1180,7 @@ int64_t flint_map_has(FlintMap* m, const char* key) {
 }
 
 int64_t flint_map_get(FlintMap* m, const char* key) {
+    flint_aegis_check_live(m, "map_get");
     if (!m || !key) { flint_set_err(1); return 0; }
     int64_t slot;
     if (map_probe(m, key, &slot)) return m->values[slot];
@@ -984,7 +1224,10 @@ void flint_map_set(FlintMap* m, const char* key, int64_t val) {
     }
 }
 
-int64_t flint_map_len(FlintMap* m) { return m ? m->len : 0; }
+int64_t flint_map_len(FlintMap* m) {
+    flint_aegis_check_live(m, "map_len");
+    return m ? m->len : 0;
+}
 
 char* flint_map_keys(FlintMap* m) {
     if (!m) return strdup("");
@@ -1367,20 +1610,8 @@ int64_t flint_time_ns_monotonic(void) {
     return flint_time_ns();
 }
 
-char* flint_time_format(const char* fmt) {
-    if (!fmt) return NULL;
-    time_t now = time(NULL);
-    struct tm result;
-#ifdef _WIN32
-    // localtime_s takes (out, in) — reversed vs localtime_r.
-    if (localtime_s(&result, &now) != 0) return NULL;
-#else
-    localtime_r(&now, &result);
-#endif
-    char buf[256];
-    if (strftime(buf, sizeof(buf), fmt, &result) == 0) return NULL;
-    return strdup(buf);
-}
+// (Retired 1-arg flint_time_format: the civil-time 3-arg version in
+// flint_time.c owns the name now; strftime-now had no callers.)
 
 // ==================== TESTING ====================
 

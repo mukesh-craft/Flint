@@ -1,0 +1,10 @@
+// B6 regression: 'parallel for' was REMOVED (no captures, no result
+// channel; a by-value snapshot across pthread workers is a cross-thread
+// use-after-free for non-copyable captures). This file must NOT
+// compile — tests/run.sh check_fail asserts the migration message.
+fn main() -> i64 {
+    parallel for i in 0..5 {
+        print(i)
+    }
+    return 0
+}

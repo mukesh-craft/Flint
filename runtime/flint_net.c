@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <inttypes.h>
 #include <stdbool.h>
-// v0.20 PORT: POSIX sockets vs Winsock2. MinGW provides the BSD headers, so
+// v0.0.20 PORT: POSIX sockets vs Winsock2. MinGW provides the BSD headers, so
 // this branch only triggers for MSVC-style toolchains (_WIN32 without the
 // POSIX socket headers). Link Windows programs with -lws2_32.
 #ifdef _WIN32
@@ -59,7 +59,10 @@ static int flint_sock_init(void) { return 0; }
 #endif
 #endif
 
-extern void flint_panic(const char* msg);
+// noreturn must be visible here too: without it the compiler (and static
+// analyzers) assume control continues after a panic, which turns every
+// "free-then-panic" cleanup path into a phantom double free.
+extern void flint_panic(const char* msg) __attribute__((cold, noreturn));
 extern int64_t flint_g_err;
 extern void flint_set_err(int64_t err);
 
@@ -411,7 +414,160 @@ typedef struct {
     char host[256];
     int64_t port;
     char path[1024];
+    int tls; /* https:// was requested; the transfer goes through libcurl */
 } ParsedURL;
+
+/* --- HTTPS through libcurl -------------------------------------------------
+ *
+ * Plain HTTP still uses the socket path above. For TLS we hand the whole
+ * transfer to the platform's libcurl, which already links the system TLS stack.
+ * Two deliberate choices:
+ *
+ *   * Weak symbols. flint_blas.c uses the same trick for OpenBLAS: if libcurl is
+ *     absent the object still links and https reports a clear error instead of
+ *     the compiler failing to build.
+ *   * No way to disable certificate verification. A runtime that offers an
+ *     "insecure" switch teaches every user to turn it off.
+ */
+typedef void CURL;
+extern CURL* curl_easy_init(void) __attribute__((weak));
+extern int curl_easy_setopt(CURL*, int, ...) __attribute__((weak));
+extern int curl_easy_perform(CURL*) __attribute__((weak));
+extern int curl_easy_getinfo(CURL*, int, ...) __attribute__((weak));
+extern void curl_easy_cleanup(CURL*) __attribute__((weak));
+extern const char* curl_easy_strerror(int) __attribute__((weak));
+extern void* curl_slist_append(void*, const char*) __attribute__((weak));
+extern void curl_slist_free_all(void*) __attribute__((weak));
+
+#define CURLOPT_HTTPHEADER 10023
+
+/* The HTTP status of the last successful request, so a caller can tell 404
+ * from 200 without parsing anything. */
+static long g_last_http_status = 0;
+long flint_http_status(void) { return g_last_http_status; }
+
+#define CURLOPT_URL 10002
+#define CURLOPT_WRITEFUNCTION 20011
+#define CURLOPT_WRITEDATA 10001
+#define CURLOPT_FOLLOWLOCATION 52
+#define CURLOPT_MAXREDIRS 68
+#define CURLOPT_TIMEOUT_MS 155
+#define CURLOPT_CONNECTTIMEOUT_MS 156
+#define CURLOPT_SSL_VERIFYPEER 64
+#define CURLOPT_SSL_VERIFYHOST 81
+#define CURLOPT_NOSIGNAL 99
+#define CURLOPT_USERAGENT 10018
+#define CURLOPT_POSTFIELDS 10015
+#define CURLOPT_POSTFIELDSIZE 60
+#define CURLINFO_RESPONSE_CODE 0x200002
+
+/* Response bodies are bounded: a runtime that can be made to allocate without
+ * limit is a footgun on a phone. */
+#define FLINT_CURL_MAX_BODY (8u * 1024u * 1024u)
+
+typedef struct {
+    char* data;
+    size_t len;
+    size_t cap;
+    int overflow;
+} CurlSink;
+
+static size_t flint_curl_write(void* chunk, size_t size, size_t count, void* user)
+{
+    CurlSink* sink = (CurlSink*)user;
+    size_t total = size * count;
+    if (sink->overflow) return 0;
+    if (sink->len + total + 1 > sink->cap) {
+        sink->overflow = 1;
+        return 0; /* aborts the transfer */
+    }
+    memcpy(sink->data + sink->len, chunk, total);
+    sink->len += total;
+    sink->data[sink->len] = 0;
+    return total;
+}
+
+/* Returns the response body (caller frees with flint_str_free) or NULL, with
+ * the reason in flint_get_error(). */
+static char* flint_https_request(const char* url, const char* content_type,
+                                 const char* body, int64_t timeout_ms)
+{
+    if (!curl_easy_init || !curl_easy_setopt || !curl_easy_perform ||
+        !curl_easy_getinfo || !curl_easy_cleanup) {
+        flint_set_err(ENOSYS);
+        return NULL; /* libcurl not present on this device */
+    }
+    if (timeout_ms < 100) timeout_ms = 100;
+
+    CurlSink sink;
+    sink.cap = 65536;
+    sink.len = 0;
+    sink.overflow = 0;
+    sink.data = (char*)malloc(sink.cap);
+    if (!sink.data) { flint_set_err(ENOMEM); return NULL; }
+    sink.data[0] = 0;
+
+    CURL* h = curl_easy_init();
+    if (!h) { free(sink.data); flint_set_err(ENOMEM); return NULL; }
+
+    curl_easy_setopt(h, CURLOPT_URL, url);
+    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, flint_curl_write);
+    curl_easy_setopt(h, CURLOPT_WRITEDATA, &sink);
+    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(h, CURLOPT_MAXREDIRS, 5L);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT_MS, (long)timeout_ms);
+    curl_easy_setopt(h, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(h, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(h, CURLOPT_USERAGENT, "flint/0.0.23");
+    if (body) {
+        curl_easy_setopt(h, CURLOPT_POSTFIELDS, body);
+        curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, (long)strlen(body));
+        if (content_type && curl_slist_append) {
+            /* A real header list, not a placeholder: curl needs slist entries
+             * for headers, and inventing one silently drops the header. */
+            char header[256];
+            int n = snprintf(header, sizeof header, "Content-Type: %s", content_type);
+            if (n > 0 && n < (int)sizeof header) {
+                void* list = NULL;
+                if (curl_slist_append) {
+                    list = curl_slist_append(list, header);
+                    if (list) {
+                        curl_easy_setopt(h, CURLOPT_HTTPHEADER, list);
+                    }
+                }
+            }
+        }
+    }
+
+    long status = 0;
+    int rc = curl_easy_perform(h);
+    if (rc != 0) {
+        const char* msg = curl_easy_strerror ? curl_easy_strerror(rc) : "libcurl error";
+        flint_set_err(EIO);
+        if (msg) fprintf(stderr, "flint: https error: %s\n", msg);
+        curl_easy_cleanup(h);
+        free(sink.data);
+        return NULL;
+    }
+    curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(h);
+
+    if (sink.overflow) {
+        /* Refuse rather than hand back a silently shortened document. */
+        free(sink.data);
+        flint_set_err(EFBIG);
+        return NULL;
+    }
+    g_last_http_status = status;
+    if (status < 200 || status >= 300) {
+        free(sink.data);
+        flint_set_err(EIO);
+        return NULL;
+    }
+    return sink.data;
+}
 
 static bool parse_http_url(const char* url, ParsedURL* out)
 {
@@ -427,6 +583,10 @@ static bool parse_http_url(const char* url, ParsedURL* out)
     if (strncmp(p, "http://", 7) == 0) {
         p += 7;
     } else if (strncmp(p, "https://", 8) == 0) {
+        // TLS is handled by libcurl below; the socket path stays plain HTTP.
+        p += 8;
+        out->tls = 1;
+    } else {
         return false;
     }
 
@@ -553,6 +713,9 @@ char* flint_http_get(const char* url, int64_t timeout_ms)
         return NULL;
     }
 
+    /* TLS goes to libcurl; the socket path below is plain HTTP only. */
+    if (purl.tls) return flint_https_request(url, NULL, NULL, timeout_ms);
+
     int64_t fd = flint_tcp_connect(purl.host, purl.port);
     if (fd < 0) return NULL;
 
@@ -593,6 +756,9 @@ char* flint_http_post(const char* url, const char* content_type, const char* bod
         flint_set_err(EINVAL);
         return NULL;
     }
+
+    /* TLS goes to libcurl; the socket path below is plain HTTP only. */
+    if (purl.tls) return flint_https_request(url, NULL, NULL, timeout_ms);
 
     int64_t fd = flint_tcp_connect(purl.host, purl.port);
     if (fd < 0) return NULL;

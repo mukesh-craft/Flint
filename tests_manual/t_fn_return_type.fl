@@ -1,0 +1,22 @@
+# A function whose return type is a FUNCTION TYPE, falling off the end.
+#
+# The default terminator built its return value with
+# ConstantInt::get(returnType, 0) -- an integer constant with a POINTER
+# type, because an fn(...) return type is a pointer (M4). That is invalid IR,
+# so a valid program failed with an internal LLVM message:
+#
+#   Function return type does not match operand type of return inst!
+#     ret i0 0
+#   function body emission failed
+#
+# The terminator must use the null value OF THE RETURN TYPE.
+
+fn inc(x: i64) -> i64 { return x + 1 }
+
+fn get() -> fn(i64) -> i64 { }
+
+fn main() -> i64 {
+    h = get()
+    print(1)
+    return 0
+}

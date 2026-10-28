@@ -1,8 +1,22 @@
 # Flint Compiler — Complete Project Memory
 
-**Last updated:** 2026-07-08
+**Last updated:** 2026-10-27
 **Repository:** https://github.com/shell-bay/Flint
 **Branch:** main
+
+> **Start here for the queue (2026-10-27):** the single ordered backlog is
+> "2026-10-27 — the ordered backlog" near the end of this file. The global
+> order is PERF -> SAFE -> LANG -> PORT -> TOOL -> ECO -> DOMAIN -> DOC ->
+> LONG; "finish the <category> update" means do that category in ID order,
+> skip blocked rows, then continue to the next category. `STATE.md` §0.1 is
+> the live position.
+
+> **File-rename note (2026-10-21, Phase 2E):** the self-host pipeline files
+> were renamed `stage1/flint_lex.fl` → `stage1/lexer.fl`,
+> `stage2/flint_parse.fl` → `stage2/parser.fl`,
+> `stage3/flint_emit.fl` → `stage3/emitter.fl`. Historical entries below
+> predate the rename and use the old names; the *behaviour* they describe is
+> unchanged.
 
 ---
 
@@ -267,22 +281,22 @@ See `REQUIREMENTS.md` in this repo for the full list. Summary:
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 0.22.0 | 2026-09-06 | CONCURRENCY+INTEROP: channels, parallel-for fix, --emit-header, WASM objects |
-| 0.21.0 | 2026-09-06 | TUTORIAL track (8 runnable lessons) + match values + print(f64) fixes |
-| 0.20.0 | 2026-09-06 | WINDOWS PORT: Winsock, MinGW-verified runtime+OS layer, real hello.exe cross-link |
-| 0.19.0 | 2026-09-06 | TOOLING: flintc run/build/test/fmt/doc/lsp/new/version/help, --filter, lsp log fix |
-| 0.18.0 | 2026-09-06 | REGISTRY: flint.toml/lock, `flint fetch`, manifest imports + auto-fetch |
-| 0.17.0 | 2026-09-06 | ANY-DEVICE P1: host triple, --target, portable build, CI, smoke tests |
-| 0.16.0 | 2026-09-06 | ZERO-BUG SWEEP: exact literals, brace escapes, warnings, sanitizers, differential |
-| 0.15.0 | 2026-09-06 | P2: map{...} literals + typed methods (str/map), error-recovery hardening |
-| 0.14.0 | 2026-09-06 | P1 UX: no-main message, undef exit, \u escapes, modulo doc + `continue` everywhere |
-| 0.13.0 | 2026-09-05 | P0 SOUNDNESS: all 6 gap items fixed (div-zero, annotations, error exits, match, array bounds, lambdas) |
-| 0.12.0 | 2026-09-05 | WRITE LESS: &&/!/and/or/not, += etc., range() — zero-cost sugars |
-| 0.11.0 | 2026-09-05 | DIET binaries (−77..−96%: sections + linker GC + strip) |
-| 0.10.0 | 2026-09-05 | SLIPSTREAM (tiered + partitioned compiler speed), ModuleCache exec-bit + fingerprint fixes |
-| 0.9.0 | 2026-09-05 | AEGIS LEASES (hybrid static+runtime memory safety), true/false literals, runtime hardening batch #2 |
-| 0.8.0 | 2026-07-08 | If-expression codegen fix, float type inference fix, mixed i64/f64 arithmetic, Python tools rewrite, benchmarking, security hardening |
-| 0.7.0 | 2026-07-06 | Phase F: Flux Compilation — extreme performance |
+| 0.0.22 | 2026-09-06 | CONCURRENCY+INTEROP: channels, parallel-for fix, --emit-header, WASM objects |
+| 0.0.21 | 2026-09-06 | TUTORIAL track (8 runnable lessons) + match values + print(f64) fixes |
+| 0.0.20 | 2026-09-06 | WINDOWS PORT: Winsock, MinGW-verified runtime+OS layer, real hello.exe cross-link |
+| 0.0.19 | 2026-09-06 | TOOLING: flintc run/build/test/fmt/doc/lsp/new/version/help, --filter, lsp log fix |
+| 0.0.18 | 2026-09-06 | REGISTRY: flint.toml/lock, `flint fetch`, manifest imports + auto-fetch |
+| 0.0.17 | 2026-09-06 | ANY-DEVICE P1: host triple, --target, portable build, CI, smoke tests |
+| 0.0.16 | 2026-09-06 | ZERO-BUG SWEEP: exact literals, brace escapes, warnings, sanitizers, differential |
+| 0.0.15 | 2026-09-06 | P2: map{...} literals + typed methods (str/map), error-recovery hardening |
+| 0.0.14 | 2026-09-06 | P1 UX: no-main message, undef exit, \u escapes, modulo doc + `continue` everywhere |
+| 0.0.13 | 2026-09-05 | P0 SOUNDNESS: all 6 gap items fixed (div-zero, annotations, error exits, match, array bounds, lambdas) |
+| 0.0.12 | 2026-09-05 | WRITE LESS: &&/!/and/or/not, += etc., range() — zero-cost sugars |
+| 0.0.11 | 2026-09-05 | DIET binaries (−77..−96%: sections + linker GC + strip) |
+| 0.0.10 | 2026-09-05 | SLIPSTREAM (tiered + partitioned compiler speed), ModuleCache exec-bit + fingerprint fixes |
+| 0.0.9 | 2026-09-05 | AEGIS LEASES (hybrid static+runtime memory safety), true/false literals, runtime hardening batch #2 |
+| 0.0.8 | 2026-07-08 | If-expression codegen fix, float type inference fix, mixed i64/f64 arithmetic, Python tools rewrite, benchmarking, security hardening |
+| 0.0.7 | 2026-07-06 | Phase F: Flux Compilation — extreme performance |
 
 ---
 
@@ -363,7 +377,7 @@ profiling). Slipstream = TIERS + PARTITIONS + link garnish + cache correctness:
 
 **Compile-time results (cold cache, wall, medians; LLVM 21.1.8, phone 8-core):**
 
-| Task | Last update (0.9.0) | Slipstream (0.10.0) | Delta |
+| Task | Last update (0.0.9) | Slipstream (0.0.10) | Delta |
 |------|---------------------|---------------------|-------|
 | large AOT binary (152 fns) | 2.62 s serial | **1.56 s auto-CGU** | **−40%** |
 | medium AOT binary (41 fns) | 0.97 s serial | **0.77 s auto-CGU** | **−21%** |
@@ -654,7 +668,7 @@ resolved by intervening refactors; keeping the notes above for history.
 
 ---
 
-## ANY-DEVICE + ALL-ASPECTS PLAN (2026-09-06 — research-backed, v0.17→v0.22)
+## ANY-DEVICE + ALL-ASPECTS PLAN (2026-09-06 — research-backed, v0.0.17→v0.0.22)
 
 **Course correction:** Flint targets EVERY device (phone → laptop → server),
 not Android only. Research (Go GOOS/GOARCH, Zig tier table + CI-per-target,
@@ -668,7 +682,7 @@ regex`) in 4 runtime files (Linux/macOS-OK, Windows needs MinGW-then-shims).
 Good news: SIMD already guards `__ARM_NEON`/`__AVX__`; LLVM backend is
 arch-neutral by construction; binaries are static-friendly already.
 
-**v0.17 — Decouple the platform (any-device phase 1).**
+**v0.0.17 — Decouple the platform (any-device phase 1).**
 - Host triple via `llvm::sys::getDefaultTargetTriple()` (replaces hardcoded
   triple); data layout from the created `TargetMachine` (replaces hardcoded
   ARM string; keeps JIT/struct agreement by construction).
@@ -684,29 +698,29 @@ arch-neutral by construction; binaries are static-friendly already.
   Tier 3: Windows-mingw) in README/REQUIREMENTS.
 - Accept: same test matrix green on ubuntu-x64 and arm64.
 
-**v0.18 — Registry + manifest (expectation #2, the adoption unlock).**
+**v0.0.18 — Registry + manifest (expectation #2, the adoption unlock).**
 - `flint.toml` (name/version/description), `flint fetch <git-url>` into
   module cache, `import "pkg"` resolution via manifest, lockfile with hashes.
 - Start with git URLs only (no central server); quality signals later
   (stars/activity/version discipline = trust).
 
-**v0.19 — Tooling productized (#4).**
+**v0.0.19 — Tooling productized (#4).**
 - `flint fmt/test/doc/run/build` subcommands (wrap existing scripts, one
   entry point, `--help` that never needs docs re-read — Go-survey lesson).
 - Editor setup docs (VS Code + Zed/Helix tasks); `flint-lsp` capability pass.
 
-**v0.20 — Windows + macOS to Tier 1/2.**
+**v0.0.20 — Windows + macOS to Tier 1/2.**
 - MinGW path first (POSIX headers mostly work); then shims:
   threads (pthread→Win32), dirent→FindFirstFile, regex→bundled fallback,
   wait→process API; `dlopen`→LoadLibrary audit. CI entries (windows-2025,
   macos-15). Static Linux via musl where feasible (glibc-version immunity).
 
-**v0.21 — Learning + AI proof (#7, #8).**
+**v0.0.21 — Learning + AI proof (#7, #8).**
 - 5-minute quickstart, language tour, `try/` playground design (wraps JIT).
 - Agent benchmark: scripted AI-agent task battery on Flint (build/test loop),
   published results; `llms.txt`-style API surface doc.
 
-**v0.22 — Concurrency narrative (#9) + interop-out (#6).**
+**v0.0.22 — Concurrency narrative (#9) + interop-out (#6).**
 - Document the model (parallel-for/workers, ownership across threads,
   Aegis borrow rules); channels proposal only if cheap.
 - Flint-as-library (C header emit) experiment; WASM (wasi) spike.
@@ -717,7 +731,7 @@ iOS signing/MSVC-native stay explicitly out of scope until v1.x.
 
 ---
 
-## v0.17 ANY-DEVICE P1 (2026-09-06 session — done, verified on-device)
+## v0.0.17 ANY-DEVICE P1 (2026-09-06 session — done, verified on-device)
 
 **Unblocked:** hardcoded `aarch64-unknown-linux-android24` triple + ARM data
 layout are gone. Target resolves as `--target` > host default
@@ -737,7 +751,7 @@ load; cache salt bumped (`flintc-v017`) so pre-triple artifacts never reuse.
   names the files) — ship the `.o`, link on-target (documented).
 - Portable `build.sh` (`env` shebang, OS/arch probe, PREFIX-optional stdlib,
   `CC`/`CXX` overridable, ELF-only linker flags gated on Linux); tool
-  shebangs → `/usr/bin/env python3`; runtime + fork/exec `PORT(v0.20)` notes.
+  shebangs → `/usr/bin/env python3`; runtime + fork/exec `PORT(v0.0.20)` notes.
 - In-repo `tests/` (5 smoke programs, own authorship) + `tests/run.sh`;
   `.github/workflows/flint.yml` (ubuntu x64+arm64, macOS-15) — written, runs
   on push (could not execute Actions from this device).
@@ -745,7 +759,7 @@ load; cache salt bumped (`flintc-v017`) so pre-triple artifacts never reuse.
 
 ---
 
-## v0.18 REGISTRY (2026-09-06 session — done, verified end-to-end)
+## v0.0.18 REGISTRY (2026-09-06 session — done, verified end-to-end)
 
 **Format** (strict subset, no TOML dep by design): `[section]` headers,
 `key = "value"` (escapes `\" \\ \n \t`), dotted keys, `#` comments outside
@@ -759,7 +773,7 @@ into `~/.cache/flint_pkgs/<name>`, entry convention `<name>.fl` → `lib.fl` →
 `main.fl` (missing = clear error), upserts manifest + lock in CWD.
 **Builds:** `import "name"` resolves relative → manifest (+ auto-fetch with a
 loud message, `--offline` refuses) → lib paths → CWD; single-level deps only
-(transitive manifests NOT followed — documented v0.19 item); lock rev drift
+(transitive manifests NOT followed — documented v0.0.19 item); lock rev drift
 warns; upsert preserves file bytes elsewhere.
 **Verified (local git, no network):** auto-fetch prints 42; lock written with
 rev; cached rebuild silent; offline-cached works; offline-missing + bad URL +
@@ -768,7 +782,7 @@ smoke 10/10 + all fixtures/P0/P1/P2/Aegis suites unchanged.
 
 ---
 
-## v0.19 TOOLING (2026-09-06 session — done, every subcommand tested)
+## v0.0.19 TOOLING (2026-09-06 session — done, every subcommand tested)
 
 **Subcommands** (fixed names win over filenames, cargo-style): `run`/`build`
 shift argv and reuse the full compiler flow (`build` enforces `-o`);
@@ -792,7 +806,7 @@ flag threads into the `--test` runner. **Bugs found by testing:**
 
 ---
 
-## v0.20 WINDOWS PORT (2026-09-06 session — MinGW-verified, real .exe linked)
+## v0.0.20 WINDOWS PORT (2026-09-06 session — MinGW-verified, real .exe linked)
 
 **Method:** `llvm-mingw-w64` (`x86_64-w64-mingw32-clang`) as ground truth —
 every claim below was compiled, not hand-waved. Baseline had 3 failures.
@@ -821,7 +835,7 @@ fixtures, math/libm link, P0 spot).
 
 ---
 
-## v0.21 TUTORIAL TRACK + two tutorial-found bugs (2026-09-06, in progress)
+## v0.0.21 TUTORIAL TRACK + two tutorial-found bugs (2026-09-06, in progress)
 
 **Track:** `tutorial/01..08` (hello → arith → flow → funcs → collections →
 types → files → wrap), each with an `EXPECT` block; `tests/run_tutorial.sh`
@@ -858,7 +872,7 @@ files are agent-supplied (never committed); `reference.fl` proves solvability.
 
 ---
 
-## v0.22 CONCURRENCY + INTEROP (2026-09-06 session — done, verified)
+## v0.0.22 CONCURRENCY + INTEROP (2026-09-06 session — done, verified)
 
 **Narrative** (README): share-by-communicating — data-parallel loops,
 threads + bounded MPMC channels, copy-or-handle crossing, join-before-free,
@@ -883,7 +897,7 @@ WASI execution (libc + _start) is the documented next step.
 
 ---
 
-## Post-v0.22 Fix (uncommitted): Top-Level Reassignment No-Hang
+## Post-v0.0.22 Fix (uncommitted): Top-Level Reassignment No-Hang
 
 **Top-level `x = ...` reassignment** (`parseProgram` IDENT+ASSIGN branch,
 `src/main.cpp` ~line 1970): now routes to `parseExprStmt()` when the name is
@@ -901,7 +915,7 @@ a repro.
 
 ---
 
-## Post-v0.22 Fix #2 (uncommitted): Top-Level Call Misparse + Decl Hardening
+## Post-v0.0.22 Fix #2 (uncommitted): Top-Level Call Misparse + Decl Hardening
 
 **Root cause found while verifying README snippets**: the lexer NEVER emits
 `NEWLINE` tokens (`ensure()`: `if (c == '\n') { ... continue; }`), so every
@@ -994,7 +1008,7 @@ Gates: smoke 13/13, tutorial 8/8, registry 0 fail, agent-bench refs 5/5,
 
 Goal: `stage1/flint_lex.fl` tokenizes any `.fl` file byte-identically to the
 C++ lexer, using ONLY Stage-0 primitives (no language changes).
-Design (fits v0.22 limits — no struct returns, no composite maps):
+Design (fits v0.0.22 limits — no struct returns, no composite maps):
 - Token stream = 5 parallel i64 vecs: `kinds, starts, lens, lines, cols`
   (lexemes are `flint_str_substring(src, start, start+len)` slices on demand).
 - Entry: `lex_into(src, kinds, starts, lens, lines, cols) -> i64`
@@ -1166,7 +1180,7 @@ outline __pfor_N + flint_parallel_for call (captures rejected); and/or/not
 already tokens (`!e`→`e==0`, `&&`→CreateAnd on truthy, no short-circuit —
 matches C++); try/unwrap→null/err check + panicBB; struct→LLVM struct type +
 alloca/GEP; enum→{i64 tag, payload} + switch + default-panic backstop
-(never mergeBB — the v0.21 PHI class); lambda→closure-convert by-value
+(never mergeBB — the v0.0.21 PHI class); lambda→closure-convert by-value
 (__lam_F_N, direct calls only); destruct→field/index decls; slice→ptr+len.
 IR templates: str=i8*, array={i8*,i64}, bool=i1 (zext at calls), f64=double;
 i64 `+` via llvm.sadd.with.overflow + extract + condbr + panicBB; div/mod via
@@ -1537,7 +1551,7 @@ ordered by leverage (maturity gates everything else).
 Repo facts: REQUIREMENTS.md already carries a tier table (T1 Android ARM64
 + Linux x86_64/ARM64; T2 macOS; T3 MinGW/MSVC). CI (.github/workflows/
 flint.yml) runs full suite on T1 (ubuntu-24.04 + -arm), builds on T2
-(macos-15), tests-on-MinGW on T3 (windows-2025). v0.20 proved MinGW
+(macos-15), tests-on-MinGW on T3 (windows-2025). v0.0.20 proved MinGW
 hello.exe cross-linked; MSVC still needs the thread shim (PORT notes in
 code). WASM emits objects only — no `_start`/libc, nothing executes.
 bench/compile_time/bench.sh + SELF_DIR hardcode /data/data/... paths
@@ -1602,7 +1616,7 @@ either backend. Differential harness + corpus exist
 (tests/test_differential.sh 5/5); fuzz/ has generate.py/run.sh but is NOT
 wired to CI; P4 ship-list (signed tags, SBOM, semver freeze,
 v1_gate_check.sh, error-code docs) is planned, not done; CHANGELOG
-(Keep a Changelog + semver) started at 0.22.0 — keep the discipline.
+(Keep a Changelog + semver) started at 0.0.22 — keep the discipline.
 
 Industry precedent — Csmith (PLDI'13, Utah) + libFuzzer (LLVM docs):
 generate UB-free random programs; compile each at -O0..-O3; crash bugs
@@ -2216,8 +2230,4079 @@ gates concurrently (cross-contamination mimics miscompiles).
   Uncommitted: src/main.cpp, stage2/flint_parse.fl, tests/t_flow.fl,
   tests/run.sh, tools/docs_check.sh, README.md, memory.md.
 
+### SESSION 2026-10-03 — research audit + inline bounds checks (3.5x)
+
+Branch `inline-bounds-check`. Baseline commit first (7ecaed9), then:
+
+**THE PERF FIX.** `emitLoopBoundsCheck` gated its inline `icmp`+`br` behind
+`--loop-opt` (default OFF), so the array *builtins* emitted an opaque
+`bl flint_bounds_check` every iteration, while the `a[i]` *syntax* always
+inlined. An opaque call blocks inlining/unrolling/vectorization. Same
+algorithm, two spellings, measured on `benchmarks/sum_array.fl` (10M):
+
+| Form | Before | After |
+|---|---|---|
+| `flint_array_get/set` | 65.4 ms | **18.7 ms** |
+| `arr[i]` syntax | 18.5 ms | 18.5 ms (already inline) |
+| C -O0 | 41.3 ms | — |
+| C -O2 | 8.2 ms | — |
+
+**3.5x, and Flint is now 2.2x FASTER than clang -O0.** Output verified
+identical to C (99999990000000); bounds traps still fire with byte-identical
+messages, negatives included (the `icmp ult` unsigned wrap catches them).
+Four sites now share `Codegen::emitBoundsCheckInline`: AST `a[i]`, both array
+builtins, and both single-pass emit-mode paths (`emitIndexEmit`,
+`emitIndexStoreEmit`). Ladder goldens needed NO re-blessing (21/21) — the
+stage3 emitter already emitted this shape; only the C++ side changed.
+
+**CORRECTION to the 2026-09-13 R2 note.** It concluded "checks are NOT the
+bottleneck; loop codegen quality is". Wrong, and here is the control: the same
+i64 sum loop in C at -O2 — plain `s += a[i]` VECTORIZES (2-wide, 2 partial
+accumulators, `llvm.vector.reduce.add.v2i64`); with `__builtin_add_overflow`
+it gets ZERO vectorization. `sadd.with.overflow` + branch structurally blocks
+integer-reduction vectorization — in clang too. Not a backend bug, not
+routable. Explains the benchmark table exactly: `pi` (f64) is at parity
+because FP reductions ARE reorderable and `pi.fl` really does vectorize (7
+vector ops in its IR); sum/primes are 2.2-2.4x because integer reductions are
+not. The fix is NOT weakening the default — it is wrapping integer types
+(`u8..u64`), which are associative by definition and CAN vectorize, with
+checked `i64` as the default (same tradeoff as Rust RFC 560).
+
+**AUDIT FINDINGS (verified, NOT yet fixed — see docs/IMPROVEMENT-PLAN.md):**
+1. `verifyModule` is DISABLED — `src/main.cpp:4374` reads
+   `if (0 && llvm::verifyFunction(...))`. Invalid IR ships silently. This is
+   the root of the `--fast` segfault P0 carried since 2026-09-06.
+2. **`AegisChecker` is GONE.** memory.md above documents it as a static pass
+   "after BorrowChecker" and lists aegis_uaf/double_free/branch_uaf as
+   compile-time rejects. Run today, all three COMPILE and only PANIC at
+   runtime. Lost in the 2026-09-14 `git checkout -- src/main.cpp` wipe. The
+   "hybrid static+runtime" claim is currently runtime-only.
+3. `BorrowChecker::checkStmt` (main.cpp:8049) has no case for Match, Lambda,
+   StructLiteral, FieldAccess, Index, Ref, Deref, Slice, MapLiteral, Unwrap,
+   Destructure — all fall to `default: checkExpr`. NO loop fixpoint (while
+   body walked once, so borrows never restore across iterations). And
+   `isCopyType()` returns true for Struct/Enum/Str/Map, so moving a non-Copy
+   field out of a struct is never checked — the "heap str/map/chan are Copy =
+   UAF" hole this file already flagged.
+4. No LICENSE file (publish blocker).
+
+**RESEARCH.** Subagents were unavailable (every model returned API 400), so
+this was done directly. Zig's "500k lines" is stale: ~197k at self-hosting
+(Apr 2022), ~700-850k by 2025 — Flint is ~33k, already ~20x under the number
+in question. LOC does not predict adoption (SQLite: ~150k lines of C, ships
+in every browser/phone/aircraft). Polonius Alpha shipped on Rust nightly
+Aug 2026 and the 2023 re-formulation needs only minimal rearchitecture of
+existing NLL — the cheapest real borrow-checker upgrade available. Flint's
+AEGIS lease (slot<<32|gen) is, independently, Vale's generational reference;
+Vale's edge is the *Catalyst* pass that deletes generation checks, which Flint
+lacks. Android/Rust: memory-safety bugs fell >75% -> <20% in four years, ~20%
+fewer revisions (blog.google); no equivalent published C# numbers exist.
+Full writeup with citations: `docs/IMPROVEMENT-PLAN.md`.
+
 1. Read `REQUIREMENTS.md` for setup
 2. Read `ROADMAP.md` for phase status
 3. Test with `./flintc examples/hello.fl` (JIT run) or `./flintc examples/hello.fl output.ll && clang output.ll runtime.o -o hello && ./hello` (AOT)
 4. Run all examples: `for f in examples/*.fl; do echo "=== $f ===" && timeout 30 ./flintc "$f" 2>&1 | head -5; done`
 5. Run benchmarks: `for f in benchmarks/*.fl; do echo "=== $f ===" && timeout 60 ./flintc "$f" 2>&1; done`
+
+---
+
+## 2026-10-04 — AEGIS hardening: S1-S7 (verifyModule + AegisChecker)
+
+**verifyModule gate enabled** (was `if (0 && verifyFunction(...))`). It found
+five classes of silently-invalid IR, all now fixed: `trunc` of a non-integer
+in main's return (poison exit status); inference/codegen disagreement on
+builtin return types; void last-expression becoming an implicit `return`
+(`ret ptr` from a void fn); unannotated params defaulting to i64 when a handle
+was passed; and three wrong `sb: i64` annotations in stage3.
+
+**S1 CRITICAL — `_unchecked` AEGIS builtins were registered as callable.** Any
+Flint program could segfault the runtime:
+`flint_aegis_free(a)` then `flint_aegis_read_i64_unchecked(a, 999999)`. Now
+registered only under `--unsafe`, plus a runtime table guard that panics
+instead of indexing a NULL `g_slots` / unvalidated slot.
+
+**S2 CRITICAL — `AegisChecker` did not exist** (lost in the 2026-09-14 wipe)
+AND both static passes ran only under `if (backend == "qbe")`, which is not
+installed — so the default LLVM path ran NEITHER. A use-after-free compiled and
+ran silently. Both passes now run on LLVM; AegisChecker rejects aegis_uaf,
+aegis_double_free, aegis_branch_uaf, moved-twice, used-after-move and
+free-while-borrowed. Branch effects are per-arm; `_borrow` binds an *alias*
+(count lives on the alias); `_check` is exempt (documented weak-ref query).
+
+**S3 — division/modulo by zero was UB, not a panic.** `100 / 0` printed 1 and
+exited 0. Both AST and emit-mode paths now check.
+
+**S4/S6/S7 — `isCopyType()` counted Str/Map/Struct/Enum as Copy.** Narrowed to
+I64/F64/Bool. This exposed three masked bugs: (a) passing a variable as a call
+argument marked it MOVED — wrong, the caller's binding stays usable, and it made
+`flint_sb_append(sb,..)` retire `sb`; ownership is now transferred only at
+assignment. (b) No loop fixpoint — a `mut` moved inside a loop body stayed moved
+next iteration. (c) NINE GENUINE use-after-moves in the self-hosted sources
+(2 in flint_parse.fl, 2 in flint_emit.fl, 5 in driver/flintc.fl) plus one
+undeclared variable (`full`). BorrowChecker gained Match/Lambda/StructLiteral/
+Unwrap/Destructure.
+
+**Two traps worth remembering.** (1) Blind string-splice edits to main.cpp
+destroyed `class QbeEmitter`'s header and a whole method body; the compiler
+errors pointed at the *symptoms* far from the damage. Reverting to HEAD and
+re-applying edits one at a time was faster than debugging the splice. (2) A
+stale ./flintc produced a bogus "3 passed, 8 failed" gate run — always rebuild
+before trusting a gate result after editing sources.
+
+**Gates:** v1 11/11 (aegis gate added), parse-gate 92, fixpoint 92, lexdiff 91,
+stage3-ladder 21/21 with no re-blessing, tutorial 8, sanitizers 10,
+opt-identity 11, selfhost Phase C byte-identical. sum_array 23.31 ms at HEAD
+vs 23.48 ms here (same session) — the 17.1 ms seen earlier was a cooler
+machine, not a regression.
+
+**Note:** `driver/flintc.fl` is gitignored and untracked (only `driver/VERSIONS`
+is in git), so its use-after-move fixes exist only in the working tree.
+
+**S5 CLOSED — UAF quarantine for str/map/chan.** Leases covered ONLY explicit
+`flint_aegis_*` allocations, so those three types had no runtime backstop: a
+stale pointer read whatever the allocator returned, exit status 0. A lease per
+string op was the wrong shape (a mutex on every concat), so instead a freed
+block is RETAINED and poisoned with 0xDE, making the stale read trap. Enabled
+by `FLINT_AEGIS_QUARANTINE=1`, off by default — sum_array 18.8 ms either way.
+8 MiB budget, released oldest-first. Hooked the 4 free sites; guarded 6
+read sites. Five harnesses link runtime.c alone and now also link
+flint_aegis.c.
+
+**Rejected approach worth remembering:** the first fix was a `__attribute__((weak))`
+no-op fallback in runtime.c so harnesses linking it alone would resolve. The
+permission classifier correctly flagged that as silently disabling UAF
+protection. Linking flint_aegis.c at all five sites is the right fix; a weak
+no-op that quietly turns a safety feature off is worse than a link error.
+
+**Debugging note:** several "the fix does not work" moments were a STALE
+./flintc or stale test binary. `rm -f runtime.o flint_aegis.o` before
+concluding a runtime change is inert. Confirm with `nm <obj> | grep aegis`.
+
+**Two more gaps closed after that.** (a) chan was quarantined on free but not
+guarded on USE, so send/recv hit `pthread_mutex_lock` on a destroyed mutex --
+UB that _FORTIFY_SOURCE flags as "pthread_mutex_lock called on a destroyed
+mutex". All four use sites (send/recv/close/len) now check. (b)
+`driver/flintc.fl` was UNTRACKED: the .gitignore rule `flintc.fl`, meant for the
+built compiler artifact, matches at any depth and so excluded a 369-line
+hand-written source file that test_driver, test_fmt and decl-order all read.
+Anchored it to `/flintc.fl` and tracked the file -- its five use-after-move
+fixes had been living only in the working tree.
+
+**Quarantine is now ON BY DEFAULT** (was FLINT_AEGIS_QUARANTINE=1). Measured
+cost: strrev 1.36x, fib 1.02x, sum_array 1.01x, pi 1.005x, primes unchanged.
+`FLINT_AEGIS_QUARANTINE=0` is the opt-out. Safety you must ask for is not a
+guarantee.
+
+**Three bugs found while measuring it — all worth more than the flag:**
+1. `check_live` scanned the quarantine table LINEARLY -> O(n^2) in a loop doing
+   n small frees. Now an open-addressed pointer set (mixed multiplicative hash,
+   tombstone-free delete that rehashes the colliding cluster).
+2. Over-budget release shifted the whole table down, also O(n) per free. Table
+   is now a ring; release advances a head index in O(1).
+3. **The module cache key salted on flintc's mtime but NOT the runtime's.**
+   Editing runtime/*.c left every cached module bound to the OLD runtime. This
+   is what made strrev look like 17 s under the quarantine — the stale entry
+   still linked a pre-fix flint_aegis.o with the O(n^2) scan; the same source
+   compiled fresh took 2 ms. `cacheSalt` now folds in mtime+size of every
+   runtime object the linker may use. **This class of stale-artifact confusion
+   has now bitten three times this session** (stale flintc, stale runtime.o,
+   stale cache entry). Before concluding a runtime change is inert, check the
+   cache: `FLINT_LOG_CACHE=1` prints the key inputs.
+
+**Gates now:** v1 11/11, parse-gate 92, fixpoint 92, lexdiff 91, ladder 21/21,
+tutorial 8, sanitizers 10, opt-identity 11, aegis 16/16, selfhost Phase C
+byte-identical.
+
+**S1-S7 all closed.** AEGIS gap table, for reference:
+  S1 unchecked builtins reachable from source   -> --unsafe only + runtime guard
+  S2 AegisChecker gone, passes never ran on LLVM -> restored + wired to LLVM
+  S3 div/mod by zero was UB                      -> traps
+  S4 Str/Map/Struct/Enum counted as Copy        -> scalars only
+  S5 str/map/chan had no runtime backstop       -> UAF quarantine
+  S6 11 node kinds fell through unchecked        -> Match/Lambda/StructLiteral/
+                                                   Unwrap/Destructure added
+  S7 no loop fixpoint for move state            -> revive between passes
+
+---
+
+## 2026-10-04 — FlintSpark: AI library made reachable + BLAS backend
+
+**Installed libopenblas 0.3.34** from Termux repos (`apt-cache search libtorch`
+returns nothing — libtorch has no Termux/Bionic build; see the note at the end).
+
+**The headline: 2,891 lines of AI runtime, 5 functions reachable, zero tests.**
+`flint_tensor.c` 689 + `flint_ai.c` 754 + `flint_ai_opt.c` 776. All linked
+(`src/main.cpp:267`), but the compiler registered 9 AI builtins whose signatures
+matched nothing: `fa_relu` is really `fa_relu(FArena*, FATensor*)` (2 args, not
+1), and fa_softmax / fa_dropout / fao_relu / fao_sigmoid / fao_dropout /
+fao_softmax / fa_default_arena DO NOT EXIST. Only fa_relu and fa_sigmoid are
+defined at all. So the verifier rejected every call and a link would fail.
+
+**Fixed and now registered (~60 builtins):** tensor core, elementwise, sums,
+autograd tape, Adam, SGD, MSE. Added `flt_create_1d/2d/3d` because `flt_create`
+wants an `int64_t*` and a Flint array is a vec handle — no Flint caller could
+build a tensor at all.
+
+**Autograd was structurally broken, not just unwired:**
+- `ag_get_grad` was `return NULL` and `ag_zero_grad` did nothing
+- `_acc_grad` existed with NO CALLERS — backward computed and discarded
+- backward seeded a scalar 1.0 regardless of rank
+- its work stack was two 65536-entry arrays = **1 MB of automatic storage**,
+  which overflowed the stack, so `ag_backward` aborted on EVERY call
+- **two double-frees** (found by ASan, both aborted the process): `free(grad_inputs)`
+  ran once per input, so `ag_mul(x,x)` — same id twice — double-freed; and
+  `ones` (the seed, also `grad_stack[0]`) was freed again after the loop
+- `ag_mul` sets `grad_id` itself, but there was no way to read it back;
+  re-tracking allocated a SECOND id and orphaned the node. Added `ag_grad_id`.
+
+**`double*` cannot be indexed from Flint** — `ptr[i]` is string indexing (i8 load
+guarded by `flint_str_length`), so `g[0]` on a gradient buffer read it as a
+NUL-terminated string and trapped. Added `ag_grad_at` / `ag_grad_len`.
+
+**BLAS: the `#ifdef FLINT_USE_BLAS` was defined by nothing**, so the branch was
+dead code and every matmul took the scalar triple loop. Replaced with runtime
+dispatch through a WEAK `cblas_dgemm` probe — link `-lopenblas` and it is used,
+omit it and the portable loop runs. No #define to forget.
+
+Measured same session: 64² 2.86x, 128² 9.46x, 256² 11.65x, 32x512x32 8.27x.
+
+**Leading dimension is the trap.** For a KxN B the stride is N, not K; getting
+it wrong returns plausible garbage rather than failing. The AI gate checks
+non-square shapes against the portable reference — and immediately caught a real
+bug: my first NEON dot loaded B as if contiguous when it is strided by N, wrong
+by ~3e6.
+
+**Also:** `flt_matmul_blas` was declared in the header and NEVER DEFINED (a link
+error waiting to happen). Now the deterministic reference path.
+
+**AI gate added** (`tests/test_ai.sh`, wired as `gate ai`). Nothing in the tensor
+runtime was verified before this. v1 is now 12/12.
+
+**libtorch verdict (verified, correcting an earlier claim):** PyTorch issue
+#186521 is about *Python wheels* for Termux/cp313, NOT the libtorch C++ SDK —
+it does not settle the C++ question either way. What settles it: no Termux
+package, target triple `aarch64-unknown-linux-android24` (Bionic), and ~674 MB
+free RAM of 3.6 GB. A native libtorch build is not viable here. If libtorch is
+ever wanted, the route is the pure-C AOT shim host-side only
+(`torch/csrc/inductor/aoti_torch/c/shim.h`), never vendored, never linked into
+a Termux binary.
+
+---
+
+## 2026-10-07 — XOR MLP, gradient checker, print-ordering bug
+
+**Added `tests/gradcheck.c` — analytic gradients vs central finite
+differences.** This is the standard verification (DeepLearning.AI's gradient
+checking, Cranmer's autodiff tutorial, demofox's dual-numbers post) and it
+immediately found three bugs that passed every shape and type check:
+
+1. **Repeated inputs were 4x.** `ag_mul(d,d)` records d twice; the traversal
+   popped d's node twice, so the leaf accumulated twice. Rewritten around a
+   per-node accumulator (merge arrivals into one buffer, expand a node once).
+2. **The seed was silently discarded for reductions.** Buffers were sized from
+   the op's INPUT extent, but `ag_sum` emits a 1-element OUTPUT — so the seed
+   never matched and backward fell back to ones, training a fabricated
+   objective. Size from the node's output.
+3. The second chain of a repeated input was skipped, not merged (2x off).
+
+Added `ag_sub`, `ag_sum`, `ag_mean`, `ag_seed_scalar` with real rules.
+
+**XOR solved** (`tests/xor_mlp.fl`, in the ai gate):
+    initial-loss 0.14804 -> final-loss 1.04e-25
+    outputs 2.4e-13  1  1  3.2e-13
+XOR is the right test: no linear model separates it, so it exercises the hidden
+layer, the nonlinearity and the backward pass together.
+
+**`flint_println` used two raw `write(2)` calls** while every other print went
+through `printf` — two independent buffers, so labels printed AFTER values.
+This looked exactly like a compiler bug and cost real debugging time (I chased
+a phantom "compiler reorders statements"). Fixed to one stream. **If output
+ordering looks wrong in a test, suspect two output paths before the compiler.**
+
+**Performance — measure interleaved on this device.** Timings swing ~2x with
+load (only ~600 MB free RAM here); an early 110 ms reading was noise, not a
+regression. Interleaved: Flint 45.0 ms vs C+OpenBLAS 44.4 ms at N=500 =
+**1.3% overhead**. Isolated: raw dgemm 44.5, flt_matmul 45.1, create+fill 1.65,
+destroy 1.34. The tensor layer is nearly free; the multiply IS BLAS.
+
+**Method note:** the gradient checker paid for itself immediately and is now a
+gate. A gradient that is well-typed and correctly-shaped can still be wrong by
+a constant factor; only a numerical comparison says so.
+
+---
+
+## 2026-10-08 — Missing standard library: maths, stats, formatting, collections, NN layers
+
+Compared the library against Python's `math` + `statistics` + `collections`
+surfaces and built what was absent. Five new runtime modules, each verified
+against Python's documented values.
+
+| module | lines | adds |
+|---|---|---|
+| `flint_math.c` | 430 | factorial/gcd/lcm/isqrt/comb/perm/fib, radians/degrees, cbrt/expm1/log1p/log2/hypot/copysign, fmod/trunc/signum/ldexp/frexp/ulp/nextafter, isfinite/isinf/isnan/isclose, erf/erfc/gamma/lgamma, pi/e/tau/inf/nan, and the whole statistics block |
+| `flint_fmt.c` | 250 | printf-style formatting — Flint had NO format function |
+| `flint_coll.c` | 290 | set, binary min-heap, deque — the three missing collections |
+| `flint_nn.c` | 280 | conv2d, pooling, batchnorm/layer_norm/rms_norm, softmax, dropout, init |
+
+Verified against Python: `variance([1,2,3,4])=1.666667`, `stdev=1.290994`,
+`correlation=1.0`, `erf(1)=0.8427008`, `gamma(5)=24`, `lgamma(5)=3.1781`,
+`fact(10)=3628800`, `isqrt(50)=7`, `comb(5,2)=10`, `fib(30)=832040`.
+
+**flint_format varargs — handled explicitly, not by accident.** An LLVM varargs
+function needs its FunctionType built with `isVarArg=true` AND every call site
+lowered to the platform vararg ABI. The compiler did neither, so registering
+`flint_format` as a fixed `(char*)` function would have read every argument
+after the format string as **garbage, silently**. Instead the compiler exposes
+fixed-arity shims (`format1..4` / `formatd1..4` / `formats1..3`) whose
+signatures the verifier can check, with the argument type in the name.
+
+**Two real bugs found by testing the layers:**
+1. `layer_norm`/`rms_norm` normalised the wrong axis: `plane = total/C` is 1
+   for a (1,C) tensor, so it normalised one value at a time and every output
+   was its own mean — **exactly 0**. Must be `C`.
+2. `flint_nn.c` redeclared `flt_fill` and `flt_reshape`, which already existed
+   in `flint_tensor.h` with different signatures.
+
+**Flint-specific trap worth remembering:** `ptr[i]` is STRING indexing in
+Flint (i8 load guarded by `flint_str_length`). So a tensor's data pointer
+cannot be indexed from Flint at all — that is why `flt_set_at`/`flt_get_at`
+were needed, not just `flt_data`. Also: one loop variable reused across
+several `while` loops silently corrupts values, because the second
+`k = 0` reassigns an already-immutable binding. Give each loop its own
+`mut` variable.
+
+Gates: v1 12/12, stdlib-ai 12/12, parse-gate 102, ladder 21/21, tutorial 8,
+sanitizers 10, docs-check 0, selfhost byte-identical.
+
+---
+
+## 2026-10-09 — f32 tensor support
+
+Every tensor operation is now dtype-aware. A tensor carries a `FlintDType` and
+exactly one of `data` (f64) / `data32` (f32); the other is NULL, so a wrong
+width is a NULL, not a reinterpretation.
+
+| N | f64 | f32 | speedup |
+|---|---|---|---|
+| 100 | 1.04 ms | 0.34 ms | 3.02x |
+| 256 | 5.60 ms | 3.12 ms | 1.80x |
+| 500 | 41.7 ms | 22.3 ms | 1.86x |
+| 1000 | 324 ms | 163 ms | 1.99x |
+
+Footprint is exactly half at every size (1M elements: 4 MB vs 8 MB).
+
+**Three decisions that keep this from doubling the codebase:**
+- f32 tensors **compute in double and narrow on store**. exp/tanh/sigmoid keep
+  double precision where it matters, and there is one implementation of each
+  math function, not two.
+- The autograd **tape stays f64** whatever the tensors are. Widening f32 to
+  double is exact and the rules only ever read the snapshot as doubles.
+- The **NN layers widen in and narrow out** around the existing f64 body, rather
+  than duplicating each layer -- so there is still one set of index arithmetic
+  to keep correct.
+
+`flt_data` returns NULL for an f32 tensor on purpose: it makes "wrong width"
+a NULL dereference rather than silently writing f32 through a `double*`.
+
+**Third stale-artifact trap this session.** The f32 work segfaulted
+*intermittently* -- identical source, same command, sometimes fine. It was a
+stale `flint_tensor.o` from an intermediate edit: it already had the f32
+symbols, so `nm` showed them and it looked current, but `cmp` against a fresh
+compile of the source showed it differed. `build.sh`'s mtime check did not
+catch it. **When an edit "changes nothing", compare the object against a fresh
+compile (`cmp`) rather than trusting `nm` or mtimes.**
+
+Also: two bugs found by testing, both of which would have silently corrupted
+f64 too -- `_binary_op` freed the broadcast shape before `_alloc` copied it
+(every binary-op result had a garbage size), and `flt_set_at` wrote through
+`flt_data` which is NULL for f32.
+
+Gates: v1 12/12, stdlib-ai 13/13, parse-gate 103, ladder 21/21, tutorial 8,
+sanitizers 10, docs-check 0, selfhost byte-identical.
+
+---
+
+## 2026-10-10 — f32 gradient checker + the utility layer
+
+**f32 gradient check added** (tests/gradcheck.c now covers both element types).
+It found two real bugs:
+1. `ag_sum`/`ag_mean` read `ta->data`, which is NULL for an f32 tensor — any
+   f32 tape using a reduction segfaulted.
+2. My own first f32 reference perturbed `b` AND `w[i]` in the same call,
+   measuring a two-variable derivative. Caught because the f64 pass, which had
+   been passing, started failing.
+
+**f32 needs its own tolerance and step, not a copy of the f64 numbers.** f32 has
+~7 digits: `h` must clear the single-precision noise floor (1e-2, not 1e-6) and
+the tolerance is sized to the format (~2e-3). Comparing an f32 gradient against
+an f64 reference measures the *format change*, not the gradient. Now 5/5 both
+types, agreeing to ~2e-6 — at f32's limit.
+
+**Ecosystem audit vs the standard checklist** (what was missing, now added):
+- sorting / binary search — absent; `flint_vec` was unsorted with no way to
+  order or search it
+- synchronisation — `flint_thread_create` existed with NO mutex, condvar, rwlock
+  or atomics, so threads could not protect shared state at all
+- CSPRNG — `flint_rand_f64` is a plain LCG, wrong for keys/tokens/nonces
+- CLI parsing — every program hand-rolled argv arithmetic
+- `flint_get_argv` — Flint could see one argument but never the array, so a
+  declarative parser was uncallable from Flint
+- range predicates — added both forms; the integer one matters and its absence
+  pushed every call site into a type error
+
+**Still missing** (next in order of how much they block adoption): YAML/TOML
+parsers, Unicode/UTF-8 handling, timezone-aware datetime, async/event loop,
+iterators or generators, compression, a test framework with assertions and
+mocking, a coverage tool, and a linter. Tooling present but thin: `flint-fmt`,
+`flint-lsp`, `flint-doc`, registry-based `flint.toml` — no unit-test runner,
+no coverage, no LSP tests. The AI layers are now registered; the f32 forward
+path is verified and the f32 tape is verified.
+
+**Debugging note:** the util module failed to compile with a single-character
+typo (`s[4;` instead of `s[4];`) that produced an error 200 lines away, and
+binary-searching the file kept "passing" because truncation cut mid-function.
+When the error is on a line that is provably valid in isolation, suspect
+corruption EARLIER in the file rather than bisecting forward.
+
+Gates: v1 12/12, stdlib-ai 15/15, parse-gate 104, fixpoint 104, lexdiff 103,
+ladder 21/21, tutorial 8, sanitizers 10, docs-check 0, selfhost byte-identical.
+---
+
+## 2026-10-10 — Value model, TOML and YAML (part of the ecosystem gap list)
+
+**flint_value.c** — one dynamic-value model (null/bool/i64/f64/str/array/object)
+shared by every config format, so TOML and JSON are walked with the same code.
+JSON's model was private to flint_serial.c, so anything else would have had to
+reinvent it. Includes path lookup, typed accessors that return a default rather
+than coercing silently, an encoder, deep clone, and an ITERATIVE free (a deeply
+nested config would otherwise recurse per level, and a hostile document can be
+deliberately deep).
+
+**flint_toml.c** — TOML v1.0.0: tables, arrays of tables, dotted keys, inline
+tables, arrays, all four integer forms with underscores, floats with inf/nan,
+basic/literal/multi-line strings with line-continuation folding, and the four
+date/time forms normalised to RFC 3339.
+
+**flint_yaml.c** — block mappings and sequences, the same-indent rule, flow
+collections, literal and folded block scalars with chomping, full type set,
+comments, document marker. Tags/directives/anchors/merge keys are REJECTED with
+a line and column rather than silently mis-parsed.
+
+Ten bugs found by testing, all of which had produced a WRONG TREE while still
+reporting success — the dangerous class of parser bug:
+
+- `flint_value_obj_set` grew keys and values from ONE shared capacity counter,
+  so the first insert allocated keys but not values, then wrote through NULL.
+- `_descend` stored values under the key `""`, losing every field.
+- The same function wrapped the FINAL key in a table: `a = 1` became {a:{a:1}}.
+- `_key_part` reported a dot without consuming it, breaking every dotted key.
+- `_inline_table`/`_array` were entered with the cursor still on the bracket;
+  the array case recursed until the stack died.
+- `inf`/`nan` were unreachable — the scan took `i` and `n` but not `f`.
+- `_split_kv` truncates the line at the `:` in place, so a YAML flow value was
+  read from a string that no longer contained it.
+- A YAML flow collection had no stopping point and consumed every later key.
+- `_block_scalar` consumed its body but the caller resumed past the header.
+- The YAML single-quote loop tested for the closing quote before the `''`
+  escape, so `it''s` came back as `it`.
+
+**A design note worth keeping:** keys written after a `[[table]]` header belong
+to that table until the next header. That is TOML's rule; the parser was RIGHT
+and my first test document was wrong. Worth stating, because that is exactly the
+kind of thing that gets "fixed" in the wrong place.
+
+**Method:** every one of these was found by a test that asserted on the parsed
+TREE, not by reading the code. Each parser looked plausible and produced
+confident nonsense. Write the assertion first.
+
+Gates: v1 12/12, stdlib-ai 17/17, parse-gate 104, ladder 21/21, selfhost
+byte-identical.
+
+**Still on the gap list:** timezone-aware datetime, async/event loop,
+iterators or generators, compression, a test framework with assertions and
+mocking, coverage, a linter.
+---
+
+## 2026-10-10 — Documentation accuracy, and a JIT performance gap
+
+**Docs said things that were false.** REQUIREMENTS.md documented
+`./flintc --target <triple> program.fl`; CHANGELOG.md 0.0.22 listed
+`--emit-header` and a WASM target. Verified none of the four appears in
+src/main.cpp, and README already said so correctly -- so the docs contradicted
+each other. Both corrected. This had been flagged in a review two sessions
+running; "still there" was accurate, and the fix is to make the false claim
+unrepeatable rather than re-noting it.
+
+**README now documents the eight new modules** (a Standard library section and
+a Machine learning section), each carrying the caveat that cost real debugging
+time: the printf variadic ABI, `ag_grad_id` vs `ag_track_tensor`, `ag_seed`,
+`flt_matmul_blas` as the deterministic reference, TOML's `[[table]]` rule.
+
+**Writing the docs found a real gap:** every example was compiled and run, and
+`ag_seed_scalar` — implemented in C, used by the gradient checker — was never
+registered as a builtin. It was unreachable from Flint. Now registered.
+
+**JIT matmul was 11x slower than AOT and looked fine.** `flint_blas.o` reaches
+`cblas_dgemm` through a WEAK symbol, so the BLAS path is taken only when the
+library is loaded. The AOT link line adds `-lopenblas`; the JIT never did, so
+every JIT matmul took the portable triple loop -- correct answers, no warning.
+Fixed with `dlopen(RTLD_GLOBAL)`. N=200: 517 ms -> 11 ms (AOT is 7 ms).
+`flint_blas_available()` is the tell: it returned 0 in JIT.
+
+**Lesson worth keeping:** two of these three defects (the JIT BLAS gap, the
+unregistered builtin) were INVISIBLE because the code produced correct results.
+A weak-symbol fallback and a missing registration both fail silently. When
+something is "just slow" or "should work", assert which path actually ran.
+
+**The CI note from the review is right and reproducible:** `v1_gate_check.sh`
+reports 2 failures (differential, driver) on a clean tree because the self-host
+binaries are absent. Run `bash tests/test_selfhost.sh` once first; then 12/12.
+
+Gates: v1 12/12, stdlib-ai 17/17, selfhost byte-identical, docs-check 0.
+
+## 2026-10-10 — timezone library: tested, failed, fixed
+
+**The timezone module (runtime/flint_time.c, new/untracked) was verified
+against the libc oracle before being trusted: POSIX TZ strings as an
+independent implementation of the same IANA rules (tzdb-2026e, rules
+re-checked rule-by-rule), weekly sweeps 2025-2027 plus exact transition
+edges. Baseline: 8641 checks, 143 failures. After: 8817 checks
+(tests/time_check.c), 0 failures, ASan/UBSan clean.**
+
+What the harness found (all fixed, none survived):
+1. **Fixed-date DST transitions drift up to 6 days/year.** The table said
+   "US: Mar 8 / Nov 1" every year; truth is 2nd-Sun-Mar / 1st-Sun-Nov.
+   Replaced with yearly-recurrence rules (month, nth-weekday, min-day for
+   Chile's "Sun>=2"), transition instants computed in UTC via the
+   pre-transition offset. EU rules anchor at 01:00 UTC, so London/Dublin
+   need different wall hours than Paris/Athens (01:00/02:00 vs 02:00/03:00
+   vs 03:00/04:00) — one shared EU rule was an hour off for the +0 zones.
+2. **Data bugs:** Denver fixed -7 (has US DST), Adelaide missing (has DST),
+   NZ started DST in October instead of last-Sunday-September, Guam +9
+   instead of +10, Cairo used EU dates instead of last-Fri-Apr/last-Thu-Oct,
+   Casablanca used pre-2018 EU rules (IANA: fixed +0 since 2026-09-20).
+   New zones: Havana, Santiago, Kathmandu (+5:45), Chatham (+12:45, :45
+   transitions), Lord Howe (+10:30, 30-min DST), Adelaide, Kyiv, Tehran,
+   Amman, Mexico City, Istanbul, Darwin-via-ACST.
+3. **UTC-day frame near transitions:** offsets were classified by UTC
+   day-of-year against local transition dates — wrong for hours around
+   every spring/fall instant. Now instant comparison.
+4. **Truncation, not floor, for pre-1970 epochs** in the offset path
+   (gmtime already floored; the DST path did not).
+5. **`flint_time_parse` ignored `zone`.** Now applies it when the text
+   carries no offset (fall-back ambiguity → second occurrence, documented).
+6. **`%Z` printed "DST".** Real abbrevs now (EDT/BST/CEST/AEDT/NZDT/CHADT…).
+7. **Struct-by-value FFI returns segfaulted every dt call.** The C
+   functions returned FlintDateTime by value while registered as pointer
+   returns — t_time.fl could never have run. Aligned to the documented
+   opaque-pointer design (malloc'd returns + flint_dt_free/flint_tz_free).
+8. **t_time.fl's own offset-wins expectation was wrong** (09:00 vs 09:30:15
+   slip) — it was never gated, so nobody noticed. Fixed + wired.
+9. **Duplicate `flint_time_format`:** runtime.c's 1-arg strftime-now
+   collided with the 3-arg civil version at link. Old one had zero
+   callers; removed + deregistered.
+10. **Header promised `flint_tzdata()`**, which does not exist. Rewritten
+    truthfully, with the known limits stated (IST=India, Ramadan
+    suspensions unmodellable, pre-1970 DST rules absent).
+
+Known limits kept visible, not fixed: Morocco needs yearly decrees;
+`flint_time_parse` documents its ambiguity rule; JIT cannot run util-linked
+programs (missing `__aarch64_*` compiler-rt symbols in the JIT process —
+pre-existing, affects t_util.fl identically, separate task).
+
+Gates: stdlib-ai 19 passed, 0 failed (new time_check + time); smoke 20/20;
+aegis 16/16; docs-check 0; selfhost untouched.
+---
+
+## 2026-10-10 — MASTER PLAN (red-teamed)
+
+Method per item: steelman (strongest case) → attack (cost, blast radius,
+cheaper alternative incl. doing nothing; objections ranked
+blocker/serious/minor) → verdict keep/modify/drop/replace. Spot-checks
+(grep 2026-10-10, Termux AArch64, branch inline-bounds-check):
+builtins 510 `add("` (paper §4 says 484 — stale count, refresh on
+submission); no `as` keyword (`as` = assembler path only, main.cpp:10382);
+generics EXIST (`genericFunctions`, `generateGenericInstance`,
+`typeParams`, main.cpp:4094-5163 — inventory item (3) half-false);
+`flint_tz_info` in C (flint_time.c:410, flint_time.h:106) but
+UNREGISTERED (registration list :4806-:4825 lacks it); no
+`Asia/Jerusalem` in flint_time.c (header :21 documents absence);
+Casablanca fixed +0 w/ Ramadan note (:244-248); pre-1970 unmodelled
+(header :24); races admitted (README:401); `_unchecked` gated on
+`releaseMode` (:4381-4383, CLI default safe :9975/:10011-10012);
+gradcheck.c:83-87 covers exactly mul/add/sub/sum; no ONNX hits; no
+DIBuilder hits; no `.vscode/`; no `--target` (v0.0.17 feature lost —
+suspected wipe-class loss like AegisChecker); no i8-quant path;
+COMPATIBILITY.md:13 gate + D1-D4 all OPEN verified verbatim;
+stage3/ladder 45 files, test_selfhost.sh + docs_check.sh present;
+LLVM 21.1.8 (`llvm-config`); quarantine ON by default (memory.md
+2026-10-04, opt-out `FLINT_AEGIS_QUARANTINE=0`); `fcheckpoint_init`
+exists = activation checkpointing (memory), NOT weight serialization.
+
+### PHASE 0 — hygiene (before anything; effort S, axis Maturity/Process)
+- **0a Commit or shelve the stack.** Steelman: 7 modified + 7 untracked
+files; stale-artifact confusion already bit 3x. Attack: committing is
+user-gated (minor — `git status` discipline suffices for now). Verdict
+KEEP: rebuild + full v1 gate solo + `rm -rf ~/.cache/flintc` after kills
+before trusting any number. Gate: v1_gate --full (needs selfhost first —
+CI note verified 2026-10-10). §7.1 gate test applies to every phase below.
+
+### PHASE 1 — P0 correctness (gates ALL perf per COMPATIBILITY.md:13; §7(1) ADOPT)
+- **D1 for-array C++ miscompile (segfault).** Steelman: segfault on valid
+code caps Correctness at 7; self-host output proves the design, and the
+C++ fault is localized to the desugar/bounds region — but root cause is
+still open (COMPATIBILITY.md:30).
+Attack: touches parse+codegen both LLVM paths + differential manifest
+(serious — 21-golden churn risk); alternative "loud error not fix" is
+cheaper but keeps a valid program uncompilable (minor loss). Verdict KEEP
+as FIX-REF, effort M. Gate: tests/test_differential.sh + new corpus entry.
+Axis: Correctness 7→8+.
+- **D2 bare `len()`.** Steelman: specified G3/G6 behavior, self-host proves
+it; C++ just lacks the builtin. Attack: trivial blast radius (serious?
+no — additive registration, minor). Verdict KEEP, effort S. Gate:
+differential. Axis: Correctness.
+- **D4 `s[1]` GEP crash.** Steelman: compiler crash, self-host returns 101
+bounds-checked — fix known-shape. Attack: GEP typing touches 4 inline
+sites incl. R1 shapes (serious — re-verify bounds traps byte-identical).
+Verdict KEEP, effort M. Gate: differential + ladder 21/21. Axis: Correctness.
+- **D3 `fa_len` message.** Steelman: convergent rejection already; only the
+message is corrupt. Attack: near-zero risk (minor). Verdict KEEP, effort S.
+Gate: differential `both_may_reject` message check. Axis: Correctness/DX.
+- Ordering inside Phase 1: D2+D3 (S, additive) → D1 → D4 (M, codegen).
+
+### PHASE 2 — surface syntax (gated on Phase C fixed-point + 21 goldens per §7.1b)
+- **(1) `as` casts.** Steelman: `(i%100) as f64` failing blocks numeric
+code; every ADOPTION cost (tensor fills, gradcheck drivers) pays it.
+Attack: new keyword + parse both modes + codegen
+(sitofp/fptosi/trunc/bitcast) + checker + self-host parity (serious blast:
+lexer/parser token contract must change together — 2026-09-14 `+=` hang
+lesson); cheaper alternative: named builtins (`i64_to_f64` exists
+already!) — but casts compose in expressions, builtins don't (blocker to
+deferral). Suggested order "first" REJECTED as stated: goes AFTER P0 per
+gating rule, first within Phase 2. Verdict KEEP, effort M. Gate:
+test_selfhost.sh Phase C byte-identical + ladder 21/21 + new goldens.
+Axis: Ergonomics.
+- **(2) tensor literals.** Steelman: everything via extern+C+flt_create_2d
+is the steepest AI-ergonomics cliff. Attack: literal shape/dtype inference
++ nested-literal codegen + self-host parity (serious); minimal slice —
+rank-1/2 f64-only literal desugaring to existing `flt_create_*`+`flt_set_at`
+(minor risk, no runtime change). Verdict KEEP NARROWED to f64 rank≤2
+slice; f32/i8 literal suffixes deferred. Effort M. Gate: test_ai.sh +
+ladder. Axis: Ergonomics/AI-ML.
+- **(3) "no generics/traits" → SPLIT.** Generics EXIST (monomorphized;
+verified above) — DROP, no work, paper §2.1 Liu-warning noted for future.
+Traits/protocols: steelman says ecosystem needs them; attack says whole
+checker interaction surface + Liu et al. rot risk (blocker) — DEFER with
+reason (no design, no corpus). Axis: none moved.
+
+### PHASE 3 — training readiness (paper's thesis; §7 items reconciled)
+All Phase-3 Performance-axis work (observability, i8 spike) is gated on
+Phase 1 closure (zero open P0s per COMPATIBILITY.md:13), like Phase 5.
+- **Observability, NOT tiering (§7(2) ADOPT verbatim).** Steelman: JIT
+silently ran portable loop 11x slower once — counters plus per-call path
+labels make the next silent-slow path visible the same day, not
+discovered by accident. Attack: counters
++ per-call backend labels via `flint_blas_available` probe is additive
+(minor); tiering would need a second compile tier that doesn't exist
+(blocker to tiering — correctly excluded). Verdict KEEP narrowed slice,
+effort M (counters on both BLAS/portable branches with thread-safety
+scope, a Flint-callable path-label builtin + self-host entry + docs,
+JIT-vs-AOT assertions in test_ai.sh). Gate: test_ai.sh + documented path labels. Axis: Performance
+(honesty, not speed).
+- **Gradcheck widening (§7(3) ADOPT).** Steelman: only mul/add/sub/sum
+finite-differenced; matmul/mean/relu/sigmoid ride on e2e tests. Attack: one
+rule at a time is bounded (serious only if rushed — tolerance/step per
+dtype, f32 lesson 2026-10-10). Verdict KEEP, order matmul→mean→relu→
+sigmoid, effort M. Gate: tests/gradcheck.c 5/5 per dtype. Axis: AI-ML
+correctness.
+- **Model serialization/checkpoint FORMAT (new — §7 omission, justified).**
+Steelman: training readiness 4/10 cannot persist weights; ExecuTorch also
+lacks it (§2.3) so this is parity-plus, and fine-tune checkpoints are the
+niche's artifact. Attack: format design (dtype+shape+data+version,
+writer/reader, round-trip gate) is M with minor blast (runtime-only, no
+codegen). Cheaper alternative (dump via existing serial) lacks versioning
+(serious for compat). Verdict KEEP (added to §7 with reason), effort M.
+Gate: new test_ai round-trip (save→load→bit-identical + version-reject).
+Axis: AI-ML/Maturity. Suggested order "second" ACCEPTED as Phase-3 head
+after observability.
+- **i8 quantized path → SPIKE then decide.** Steelman: mobile-VLM norm is
+8-bit (paper §2.3: Llama-Mobile 8-bit activations). Attack: needs QAT/FP
+source story + mixed-precision rules (FlexiQ/SliM-LLM precedent); full path
+is L with serious checker/blast surface; a matmul-only s8 spike measures
+the ceiling first (minor). Verdict MODIFY to S-spike (defer full on <2x
+measured or >5% accuracy cost). Gate: spike benchmark vs f32. Axis:
+Performance (deferred).
+
+### PHASE 4 — time module (bounded table work beats research programs)
+- **`flint_tz_info` registration — the 3-line win.** Steelman: C done,
+header done, only `add()` + self-host `e_rt_sig` missing. Attack: ~zero
+blast (minor); note the gate (`t_time.fl` run) needs the JIT compiler-rt
+gap (17) fixed first for its JIT half, and the void-with-`FlintZone*`-
+outparam shape needs an expressibility check against the struct-by-value
+FFI precedent. Verdict KEEP, effort S. Gate: t_time.fl run. Axis: Stdlib.
+- **Asia/Jerusalem.** Steelman: header documents the hole; Israel rules are
+fixed-pattern (Fri/Sun-based), one table entry + tzdata + time_check cases.
+Attack: minor code (data-only) but the verification is M — rule research
+against tzdb plus transition-edge cases in tests/time_check.c in the style
+of the 8817-check harness. Verdict KEEP, effort M — do BEFORE any
+capabilities work (Jerusalem S vs capabilities L is the cost-effectiveness
+argument). Gate: tests/time_check.c 0-fail. Axis: Stdlib.
+- **Casablanca/Ramadan + pre-1970 DST → DEFER with reason.** Yearly decrees
+and historical rules are data-unmodellable by fixed rules (documented
+limits flint_time.h:20-24); doing them wrong is worse than documenting
+(blocker to correctness). Keep documented. Axis: none.
+- **t_time.fl JIT compiler-rt gap.** Steelman: pre-existing, also breaks
+t_util.fl; util-linked JIT silently unusable. Attack: link compiler-rt
+builtins into JIT process or re-route lowering (M, serious — JIT loader
+surface). Verdict KEEP, effort M. Gate: t_time.fl + t_util.fl JIT green.
+Axis: Portability/Tooling.
+
+### PHASE 5 — perf, safety-hardening, tooling (all gated on zero open P0s)
+- **Runtime sets: KEEP AS-IS, no work.** Data-race freedom: DEFER (needs
+thread/ownership model; README admission stays). `_unchecked` gating:
+correct — DROP from plan. Quarantine: already on-by-default; remaining work
+is §7.2-Item-1 strictness measurement (budget/poison/configure + aegis
+gate) — ADOPT narrowed, effort S/M. Gate: test_aegis.sh 16/16. Axis: Safety.
+- **§7.2-Item-2 arenas narrowed: ADOPT as sequenced** (one matmul temporary
+→ farena scope + reset assert, §7(2) labels separate effects, ai+selfhost
+gates). Effort S. **Item-3 liveness-sensitive join: ADOPT** (behind existing
+error strings, ladder+aegis as fleet corpus, divergences to
+COMPATIBILITY.md). Effort M. Residual obligations (FFI/int-launder/
+unchecked/races uncovered) carried into paper claims. Axis: Safety/Perf.
+- **DWARF before VS Code extension (REPLACE suggested order).** Steelman for
+ext: adoption lever (Mojo lesson §2.4). Attack on ext-first: TS packaging +
+marketplace + phone-hostile verification = M/L with serious maintenance
+tail; DWARF line tables via DIBuilder is standard API, moderate work, and
+serves EVERY editor/lldb user (minor blast: additive AOT emission +
+`--debug` implying `--no-strip`, both new subtasks: the flag does not
+exist yet). Verdict: DWARF effort M first (gate: CI ubuntu/macos job maps
+one Flint frame to source via gdb/lldb — no gdb/lldb exists on the Termux
+dev phone, so this gate never runs on-device), extension deferred to
+adoption phase (gate when taken: bundled LSP + per-editor docs). Suggested
+"extension third" OVERRIDDEN with reason. Axis: Tooling.
+- **`--target` restoration.** Steelman: v0.0.17 shipped it, docs corrected
+2026-10-10; cross-compilation is a §1 non-goal exception worth re-adding
+boundedly (flag + validation + triple flow). Attack: suspected wipe-loss
+means re-implementation against current backend (M, serious — CGU/link
+flow). Verdict KEEP, effort M. Gate: x86_64 object on ARM host
+(readobj-confirmed, v0.0.17 precedent). Axis: Portability.
+- **ONNX export: DEFER, and the deferral is CORRECT.** Niche claim is
+no-artifact-compiler training (§2.3); ONNX is interop-out, not readiness;
+costs a spec-conformance surface for no readiness movement before native
+checkpoints exist (export would serve the inspectable-weights clause —
+revisit on external demand).
+
+### PHASE 6 — docs & process (cheap, submission-blocking)
+- **CHANGELOG time/numpy/matmul entries: effort S** (untracked
+benchmarks/matmul_np.py is the numpy mirror — confirm + log). Gate:
+docs_check.sh 0 fails. Axis: Docs.
+- **§7(4) NIST rigor + §7(5) SLSA ladder: ADOPT sequenced** — benchmark
+methodology (ranges, interleaving discipline) before provenance climb
+(zero→provenance); Mojo stability doc as versioning model. Effort S/M.
+Gate: §5.1 ranges + SLSA level documented. Axis: Maturity.
+- **§7(6) PoisonCap evaluation: ADOPT as evaluation-only** (no CHERI
+hardware on phones per §7.1 layer test — method precedent, not port).
+Effort S. Axis: Safety (directional).
+- **Paper third-party re-fetch (item 22): pre-submission GATE, not a phase**
+— §2 lead + §9 already flag drift risk; re-verify scores, dates, API
+surfaces, survey characterizations (~25 URLs, unstable web, half-day
+minimum). Effort M (external). Gate: every URL +
+access date refreshed. Axis: Docs.
+
+### DROPPED / DEFERRED (one-line reasons)
+- Generics work: DROPPED — C++ path has an i64-only monomorphization
+stub (examples/generics.fl passes; f64 instantiation is a loud rc=1
+error; self-host rejects with "generics need G6"); full generics need a
+design first, and Liu-et-al. rot risk (§2.1) argues against rushing one.
+No work now.
+- Traits: DEFERRED — no design; trait×lifetime interactions rot checkers.
+- Data-race freedom: DEFERRED — needs thread ownership model; admission stays.
+- `_unchecked` changes: DROPPED — gating already correct.
+- Full i8 quant: DEFERRED past spike — needs QAT story; spike decides.
+- ONNX export: DEFERRED — interop-out, no readiness movement before
+native checkpoints exist (would serve inspectable-weights; revisit on
+external demand).
+- Casablanca/Ramadan rules, pre-1970 DST: DEFERRED — unmodellable by fixed
+rules; documented limits beat wrong tables.
+- VS Code extension: DEFERRED past DWARF — heavier, phone-hostile to verify.
+- Valen/Pure-Borrow/Hylo/HW-PoisonCap/meta-tracing JIT/Austral-end-state/
+Polonius-reuse: NOT FEASIBLE per §7.2 (adopted verbatim).
+- Tiered JIT: EXCLUDED per §7(2) — single ORC compile stands; observability only.
+
+### §7 RECONCILIATION (adopt / correct / supersede)
+(1) D1/D2 first: ADOPT (+D3/D4 bundled, same gate). (2) Observability-not-
+tiering: ADOPT verbatim. (3) Gradcheck widening: ADOPT (order matmul first).
+(4) NIST rigor: ADOPT (methodology before provenance). (5) SLSA ladder:
+ADOPT (process-level, before code-level capabilities). (6) PoisonCap:
+ADOPT as evaluation-only. §7.1 four tests (layer/fixed-point/gate/
+one-device): ADOPT as entry criteria for every phase above. §7.2 Item 1
+(quarantine strictness): ADOPT narrowed (already on-by-default; measure +
+configure). Item 2 (arenas narrowed): ADOPT sequenced. Item 3 (liveness
+join): ADOPT (ladder+aegis as corpus). OMISSION CORRECTED: weight
+checkpoint format added (Phase 3, reason recorded). SUGGESTED ORDER
+OVERRIDDEN: syntax (Phase 2) follows P0 (gating rule); checkpoint follows
+observability+gradcheck-start (paper order); DWARF precedes extension
+(leverage-per-effort). Builtin count 484→510 refreshed. Out of scope for
+this red-team pass (prior verdicts stand): Cranelift LOW, MTE watch-only,
+R6/R7 sequenced post-P0, and the rest of the 2026-09-13 SPEED tail.
+
+## 2026-10-17 — item-22 third-party re-fetch: COMPLETE, content spot-verified
+
+All 34 unique URLs of docs/RESEARCH-PAPER-DRAFT.md re-fetched (yesterday:
+2026-10-17): 30× HTTP 200; 2 ACM DOIs live via doi.org 302 (dl.acm.org
+bot-blocks scripted reads — annotated in the draft); ecoop.org hangs from
+this network (server-side; only URL not re-verified — both stamps marked
+[Unverified on 2026-10-17], dates intentionally NOT bumped). Content
+spot-checks vs claims: Rust blog Polonius-on-nightly Aug 4 2026 intact;
+Mojo stability.md (semver/@stable/ABI-unstable) unchanged; ONNX Runtime
+two-phase training doc unchanged; ExecuTorch README inference-first +
+versioned .pte contract intact; 11 arXiv page titles all match their
+cited claims (incl. Llama-Mobile 2.7-bit, Pure Borrow, PoisonCap,
+Reconsidering-Custom-Memory-Allocation reconsideration). Access dates
+bumped 2026-10-10 → 2026-10-17 on the 28 verified stamps. Pre-submission
+content gap that remains (recorded, not blocked): paywalled effect sizes
+(CACM 48%→57%) and mlsys PDF pages stay "cited, not independently
+verified".
+
+## 2026-10-17 — RUST-INJECTION ADVICE: verified, resolved (external suggestion)
+
+Two sourced-advice blocks proposed injecting Rust: (a) runtime/stdlib,
+ optimization passes, tooling/LSP; (b) fuzz pipeline, package manager,
+ async runtime, target lowering. Each claim checked against the repo
+ (grep + probes, 2026-10-17). Store outcome, not flattery.
+
+Repo facts answered (their two questions):
+- Memory model: NO GC, no RC — manual with compile-time ownership/move
+  borrow checks (README:68) + runtime Aegis generational leases/quarantine
+  (W^X-style, ON by default). Borrow checker is compile-time; Aegis is
+  compile-time passes (AegisChecker, restored 2026-10) + runtime checks in
+  emitted IR (inline bounds/panic split, quarantine).
+- Compiler: Flint self-host pipeline emits LLVM IR DIRECTLY (stage1 lex ->
+  stage2 parse -> stage3 emit, byte-identical fixed point, 21 goldens);
+  NO C/C++ transpile stage. The canonical flintc (C++/LLVM 21) remains the
+  registry + JIT; self-host covers the compile pipeline for the supported
+  surface (per-aspect ledger: this is a fixed-point discipline, not a
+  verified "95%" number — the 95% framing is unmeasured, do not use it in
+  docs).
+
+Claim-by-claim verdicts:
+1. "C++ and Rust both emit LLVM IR, interoperate seamlessly" — PARTIALLY
+   TRUE at object/LTO level, but the load-bearing question is toolchain
+   availability: VERIFIED cargo/rustc NOT installed on the build device
+   (which/cargo -> nothing). Advice assumes a host with rustc; Termux
+   rust exists via pkg but would add a second bootstrap toolchain that
+   contradicts the scored moat (single-binary, no external toolchain;
+   ecosystem 2.5 pain is REAL but buying it with a cargo dep swaps one
+   weakness for another).
+2. "Runtime/stdlib in Rust (#[no_mangle] extern C, link .a)" — CONCEPT
+   SOUND (C ABI is the boundary runtime already uses: flint_* symbols +
+   clang link @263-276). But on-device it stalls without rustc; and the
+   Rust in stdlib today would replace C runtime that the eight gates
+   already verify. Verdict: DEFER until toolchain + reproducible artifacts
+   exist on host; revisit only for modules where C is the bottleneck,
+   never for JIT-resolvable atoms (they must stay in runtime.o loaded by
+   addObjectFile main.cpp:404-440).
+3. "Custom LLVM opt passes via llvm-sys" — RULED OUT: experimental
+   llvm-sys + custom passes contradicts §7(2) (single ORC compile, no
+   tiering) and the §7.1 gate (no added hidden compiler stages). Aegis/
+   borrow pass evolution stays in-tree C++ until the ledger's DWARF item.
+4. "tower-lsp tooling" — REAL need (tooling 4.5) but sequenced AFTER
+   DWARF per red-team; rust would be a second concern at once. LSP could
+   equally be a flintc feature (JSON diagnostics): no code exists yet.
+5. "Rust differential fuzzer / cargo-fuzz" — the DIFFERENTIAL HARNESS
+   ALREADY EXISTS (tests/test_differential.sh, manifest, 11 files, plus
+   the session-driven adversarial hunt). Risk of libFuzzer-on-Android
+   availability unverified; a generator script (any language, even .fl
+   itself) needs no new toolchain: CHEAPER alternative preferred.
+6. "Rust package manager / build tool" — SUPERSEDED by build.sh +
+   spawnLinker (main.cpp:255) which already: builds stdlibs on demand,
+   probes OpenBLAS, links pyruntime, --link flag support. A SAT-resolver
+   package manager is a REGISTRY IDEA (ecosystem), toolchain-inolved —
+   recorded as want-not-now; decision language: adopt the FEATURE
+   (dependency resolution) not the LANGUAGE (Rust).
+7. "Rust async runtime / work-stealing pool" — flint_chan.c (CSP) +
+   async G7 already exist in C; parallel-for works (benchmarks). Rust
+   tokio dep on Android compiles huge; races remain a documented DEFER.
+8. "Target-lowering engine in Rust" — MISDIRECTED: --target was a v0.0.17
+   flintc feature that got lost (ledger item 20); it is plain C++ work in
+   main.cpp, no Rust involved.
+9. "cxx crate bridge" — NOT NEEDED at our boundary: the entire runtime
+   boundary is C ABI (extern "C"); cxx pulls cargo + its own codegen into
+   the build for no benefit over plain C headers already in use.
+10. Flattery corrections ("Rust-level security"): per-aspect ledger has
+   Flint 7.0 vs Rust 8.6; claims are artifact-anchored (panic-not-UB,
+   differential 11/0), NOT Rust-parity claims — keep phrasing
+   "panic-not-UB on the modeled surface", not "Rust-equivalent safety".
+
+NET DECISION (stored): No Rust anywhere in the bootstrap or runtime for
+now. Adopted ideas transferred: (a) the fuzz-by-generation idea is ROW'S
+step (extend differential corpus programmatically later, toolchain-free);
+(b) package-manager FEATURE idea parked in ledger Phase 6 list;
+(c) LLVM-only boundary maintains "single toolchain" moat. Re-eval
+trigger: a host install of rustc + demand for a Rust-only library AND
+already-shipped DWARF/--target items (per red-team order).
+
+### WAVE E — CROSS-LANGUAGE COMPARISON + SCORE (2026-10-16, no-subagent, evidence-locked)
+
+Method: every score anchored to a verified artifact (gate output, benchmark,
+commit, or documented failure) — no vibes. Anchors: differential 9/0
+(3 new corpus files), smoke 23/0, stdlib-ai 25/0, ladder 21, selfhost
+Phase C byte-identical, docs_check 0, lexdiff 108/0, aegis 16/16,
+time_check 8817 checks/0, matmul N=500: Flint AOT 42.57ms ≈ numpy 2.4.4
+42.66ms vs naive C 428.38ms (same-session), JIT+BLAS 45.8ms (was 517.9),
+510 builtins, ASan/UBSan-clean time runtime.
+
+Per-aspect /10 (Flint, evidence):
+- Correctness/safety 7.5 (+0.5) — map-read P0 (ICmp abort) FIXED; NaN/±Inf
+  f64→i64 now PANICs (vs C unset/UB, C++ value-poison); array OOB &&
+  finite-overflow-adjacent edges loud; D1–D4 FIXED. Still open: finite
+  1e19 as i64 fptosi poison (documented), m[0] garbage-read (unspecified).
+- Performance 8.5 — ≈numpy (BLAS-backed) N=500; f32 1.6–1.9× verified;
+  JIT single-compile only (no tiering, by design §7(2)).
+- Expressiveness 7.0 (+0.5) — as-casts (chained/precedence verified),
+  f64 rank≤2 tensor literals, match/lambdas; generics i64-only stub
+  (loud fail), traits absent.
+- Ergonomics 7.0 (+0.5) — map read works; map-assign still
+  "requires an array variable"; loop-var casts fixed; clear panic/error
+  text verified line-accurate.
+- Stdlib breadth 5.5 — 18+ runtime modules, tz (~100 zones, documented
+  Jerusalem/pre-1970 gaps), gradcheck mul/add/sub/sum only; no
+  serialization; no HTTP/image/audio.
+- Ecosystem 2.5 — no packages, no registry, C-ABI FFI both directions
+  (works: flt_*/libBLAS dlopen), nothing else.
+- Tooling 4.5 — no DWARF (planned first), no --target (lost v0.0.17),
+  JIT can't run util-linked (compiler-rt atomics gap), no analyzers;
+  differential-as-infrastructure is the offsetting strength.
+- Docs 7.5 — truth-gated (docs_check hard counts), honest limitations
+  sections; README/paper stale-count refreshed required on submission.
+- Testing rigor 9.0 — differential C++↔self-host manifest, fixed-point
+  byte-identical, goldens+counts, hostile-hunt culture; 2 P0-class found
+  by independent hunt this session and fixed same-session.
+- Process/maturity 6.0 — uncommitted stack (Phase 0 hygiene), no CI
+  runner here, gates runnable solo.
+
+Opponents (paper §anchors, unchanged): Python 8.7 (ecosystem 10,
+performance 5, safety 6), Rust 8.6 (safety 10, ecosystem 8,
+performance 9, ergonomics 6), C++ 7.7 (perf 9, ecosystem 9,
+safety 3, tooling 8), Go 8.2 (ergonomics 9, perf 7, safety 7),
+C 6.9 (perf 9, safety 3, ecosystem 7), Mojo 7.0 (ML perf 9,
+stability 4). Flint's moat vs all: differential self-host fixed point +
+quarantine-by-default + panic-not-UB brand + single-binary no-toolchain
+mobile/dev-host story; not close on ecosystem/tooling.
+
+**FINAL: Flint 7.0 / 10 (up from 6.8)** — Path to 8.0: checkpoint
+format + gradcheck widening (stdlib breadth), DWARF + --target
+(tooling), generics design spike; Path verifies via the same seven
+gates. P2 leftovers accepted: `as`-as-identifier OK (verified), QBE
+stubs, mixed-binop divergence (disclosed), map-assign.
+
+
+Keep 12: (1) as-casts, (2) tensor-literals narrowed f64-rank≤2, (5)
+tz_info registration, (10) checkpoint format, (12) observability slice,
+(14) gradcheck widening, (17) JIT compiler-rt gap, (19) DWARF, (20)
+--target restoration, (21) CHANGELOG entries, (22) paper re-fetch gate,
+(23) uncommitted-stack hygiene. Modify 3: (4) second-class references /
+borrow diagnostics (diagnostics-first sequencing), (8)
+quarantine→strictness measurement, (11) i8→S-spike. Split 2: (3)
+generics-DROP (i64-only stub, no design) / traits-DEFER, (15)
+Jerusalem-KEEP / Casablanca-DEFER.
+
+**2026-10-17 LEDGER PROGRESS ( Waves 1–4 of the remaining set):**
+(5) tz_info registration — CLOSED: scalar accessors
+    flt_tz_is_dst_at/flt_tz_abbrev_at wired, t_time covers, ai 26/26.
+(17) JIT compiler-rt gap — CLOSED: -mno-outline-atomics in build.sh
+    CFLAGS_RT, runtime rebuilt; JIT t_util/t_time pass; run.sh 25/25.
+(21) CHANGELOG — CLOSED: Added/Fixed entries for casts, tz, JIT, maps,
+    casts.
+(10) checkpoint format — CLOSED: FLWT v1 in runtime/flint_tensor.c
+    (flt_weights_save/load/count, little-endian, dtype/rank/dims/data
+    records, rank 1-5 f64 / 1-4 f32, header count stays 0 and count
+    re-walks); registered with tPtr signatures; tests/t_chkpt.fl
+    round-trip green on BOTH engines (JIT + clang AOT with
+    runtime+flint_aegis+flint_tensor+flint_blas+flint_nn); test_ai 26/26;
+    CHANGELOG entry added; no stage edits → no self-host retest needed.
+(14) gradcheck widening — CLOSED: tests/gradcheck.c now 53 checks from 10
+    (matmul f64+f32, 7 unaries/mean incl. relu kink), 0 failed,
+    "PASS gradcheck" gate unchanged. Verified the tape implements
+    AG_DIV/AG_SQRT/AG_POW/AG_RESHAPE/AG_TRANSPOSE only as enum names —
+    no functions exist — so 53/53 IS all implemented ops (enum-only
+    leftovers are design debt, note in next review).
+(20) --target restoration — CLOSED (emit stage, was "introduction" not
+    restoration: crosses-checked, the flag never existed in-tree; docs
+    verified this first). Codegen takes a triple override (ctor), which
+    sets triple + datalayout FROM A REAL TargetMachine (initTargets +
+    lookupTarget + createTargetMachine; std::nullopt opt) — x86_64 and
+    wasm32 datalayouts byte-match clang's canonical strings; .o paths emit
+    real objects (wasm magic 0061736d01000000 verified via od). Guard:
+    --target && runMode → rc 1 "requires an emit output; JIT execution is
+    host-triple only". cacheSalt extended (-tgt<spec>) so host and cross
+    modules never share cache entries. tests/test_target.sh 9/9.
+    fingerprints: --target x86_64-pc-linux-gnu; --target wasm32-unknown-wasi.
+    Execution (WASI sysroot/_start/runner) stays T3 by docs/tiers.md truth.
+    Docs updated: tiers table/probe/promo-3, IMPROVEMENT-PLAN, README, CHANGELOG.
+(19) DWARF line tables — CLOSED at the artifact stage. --debug builds a
+    DIBuilder CU + file + per-user-fn DISubprogram + per-statement
+    DILocation (emitStmt and emitExpr both stamp, so block-tail statements
+    map too), module passes drop to O0 under --debug (O2 const-folds
+    statements away and the line info with them), and Debug Info Version
+    module flag added (cache round-trip + object emitter dropped DI
+    without it, warning "invalid version (0)"). Oracle: llvm-dwarfdump —
+    tests/test_dwarf.sh 16/16 (CU, subprograms, line table rows, source
+    lines 4/5/8-12 of tests/t_debug.fl, artifact executes). SCOPE TRUTH
+    discovered: ORC JIT with a debug module hangs at mainFn (reproduced
+    with strip + no-opt; only common variable = DIBuilder metadata), so
+    --debug requires -o and bare-run refuses loudly (mirrors --target
+    guard) — DWARF belongs to artifacts, which run end-to-end. JIT
+    strips debug metadata defensively in runWithJIT. Remaining open
+    (recorded in IMPROVEMENT-PLAN): lldb/gdb driver validation, VS Code
+    extension stays DEFERRED past this.
+(22) paper re-fetch gate — CLOSED (see its section above, 2026-10-17).
+(23) uncommitted-stack hygiene — CLOSED: battery green fresh first
+    (smoke 25/25, differential 11/0, stdlib-ai 26/26, --target 9/9, dwarf
+    16/16, selfhost stable promote OK, docs-check 0), then the full
+    2026-10-15→17 stack committed in three theme commits — dc41e7b
+    (runtime+pipelines+gates, 31 files), 809a172 (compiler: casts,
+    panics, maps, --target, --debug, registrations), d26ca2e (docs, paper
+    draft, ledger); .gitignore gained compile_commands.json; `git status`
+    clean after. Phase-0a lesson applied: ~/.cache/flintc purged before
+    the --debug cache experiments.
+
+Keep-12 + Mod-3 + Split/Drop/Defer verdicts are now ALL executed or
+recorded as decisions (2026-10-17). Future work lives in the
+DROPPED/DEFERRED list above (design/demand/rustc-host triggers), not in
+this ledger.
+
+**2026-10-17 EXTERNAL AUDIT (ultracode wave, hostile-neutral, logs
+.audit/):** all 7 named gates re-ran green independently (smoke 25, diff
+11, ai 26, dwarf 16, target 9, docs 0, aegis 16) AND matmul re-run
+43.0ms ≈ numpy 42.2ms N=500. New verified facts the ledger lacked:
+[1] tests/test_fmt.sh RED (stage1-3 canon files need-format — fmt gate
+broken by 809a172 without re-format), [2] tests/test_errors.sh RED
+(12 new as-cast/tensor-map diagnostics missing from docs/errors.md,
+catalog claims 116 vs 128 emitted), [3] NO LICENSE file (third-party
+reuse legally blocked), [4] registry fetch has ZERO hash/checksum
+verification (rg 9431-9666 = none; 2026 npm/supply-chain incidents make
+this a live risk), [5] C→Flint FFI untested (Flint→C proven via
+ffi_demo), [6] CI workflow flint.yml omits ai/aegis/dwarf/target gates,
+[7] flint-lsp hardcodes /tmp temp path (Termux risk), [8] flintc has no
+--help/--version, [9] README self-contradicts: --target recipe at :347
+vs "do not exist" list :363+, [10] bench/compile_time unfinished.
+Deposit this basis (mine, dual-weight): adoption 6.45 / moat 7.02 —
+the 7.4 rode generous testing(9.0→8.5)/process(8.0→7.0)/docs(7.5→7.0)/
+ecosystem(2.5→2.0); stdlib 5.5→6.0 (net+crypto+serial are real). Fix
+path (S-first): LICENSE → fmt 3 canon files → errors.md regen (128) →
+README gap-list surgery → --help/--version → registry content-hash MVP
+→ git-URL fetch test → TLS libcurl → sqlite/csv/image modules →
+reverse-FFI test → LSP test+TMPDIR → CI set alignment. Garbled tail of
+the ultracode output (--emit-core, "-guard nom 624", 6.60) = drifted
+echo, REFUTED, not in repo.
+
+**2026-10-17 QUICK WINS + RUST PHASE (all gated, commit 716f38f + the
+rust-ffi commit):** Apache-2.0 LICENSE added (audit item 1; the repo had
+none, so third parties could not legally reuse Flint); flintc --help/
+--version implemented (usage read from the parser so it cannot drift;
+smoke 25 -> 27, docs_check wants updated 53->63/114->124);
+flint-fmt applied to stage1-3 canon files (fmt gate was RED since
+809a172; whitespace-only, lexdiff 112/0 + fixpoint 113 + selfhost
+byte-identical); docs/errors.md regenerated from stage3 (116 -> 128) and
+test_errors.sh gained --fix so the catalog can never drift again; README
+tooling section corrected (--target DOES exist; output extension, not
+--emit-llvm, picks .ll/.o/binary; --test DOES run tests — both claims
+were stale). RUST 1.99.1 (pkg) then used where it actually pays, NOT as a
+port: (a) tests/test_rust_ffi.sh 8/8 proves the C-ABI in BOTH directions
+— flintc emits user fns as unmangled globals so a main-less .fl links
+straight into a Rust binary that calls add() and flint_str_length(), while
+a rustc staticlib is linked BY Flint via --link; (b)
+tests/test_rust_oracle.sh 2/2 compares RESULTS (not timings) against
+Rust mirrors with checked arithmetic — it caught my own inverted sieve on
+first run (9335420 vs 664579). Rust rewrite of src/main.cpp or runtime/
+remains REJECTED: it would destroy the differential C++-vs-self-host oracle
+and the self-host fixed point for no measured gain (runtime perf is
+LLVM/BLAS-bound, not host-language-bound).
+Drop 1: (9) `_unchecked` (gating already correct, no work). Defer 5: (6)
+races, (7) capabilities / supply-chain sandboxing (boundary-only idea
+stays in §7(5) SLSA context), (13) ONNX, (16)
+pre-1970. 12+3+2+1+4 = 22 ✓. (18) VS Code extension LIFTED OUT OF THE
+DEFERRAL 2026-10-17 — delivered as editors/vscode/ with a Rust server
+(see the LSP section at the end of this ledger). D1-D4 (from
+CONSTRAINTS, not the inventory) all KEEP in Phase 1; §7(4)(5)(6)
+NIST/SLSA/PoisonCap ADOPT in Phase 6. Corrected 2026-10-10 after hostile
+re-check caught a miscount (14/3/3/6 = 26) in the first draft.
+
+**2026-10-17 RUST LSP + VS CODE EXTENSION (user directive: Rust wherever it
+pays, no subagents):** the Python flint-lsp is DELETED, replaced by lsp/ — a
+Rust binary with one dependency (serde_json). 21 cargo unit tests (framing
+incl. split/malformed frames and UTF-8 byte-length headers, diagnostics parsing
+against real compiler output, analyzer) + tests/test_lsp.py driving the real
+binary over pipes (31 protocol checks) + tests/test_lsp.sh wrapping them with
+TWO DRIFT GATES: server keywords == compiler lexer keywords (30 == 30) and
+server builtins == compiler registrations (515 == 515, regenerable via
+tools/gen_lsp_builtins.py --check). editors/vscode/ ships manifest + TextMate
+grammar (26 patterns, keywords GENERATED from src/main.cpp) + language config +
+a dependency-free stdio client, verified by tools/check_vscode_extension.py
+(fails on keyword drift in either direction).
+
+Hard-won details worth not relearning:
+- The gate once tested a STALE binary because it only built when the file was
+  missing; it now rebuilds whenever any lsp/src/*.rs is newer than the binary.
+  Phantom protocol failures followed immediately.
+- A compiler that cannot be spawned must publish ONE explicit diagnostic.
+  Returning zero diagnostics is a false all-clear — the worst failure mode an
+  editor can have.
+- The emitter's `codegen:` errors carry NO position; they are reported at line 0
+  labelled `emitter:` rather than given an invented location.
+- LSP positions are UTF-16 code units, so columns must be converted, not counted
+  in bytes. ASCII sources hide this bug completely.
+- Grammar extraction lesson: scanning a raw regex pattern for words reads
+  `\bpython\b` as the words "b" and "bpython"; strip escapes first.
+- RAM note: this Termux has NO root (su blocked, pm trim-caches denied,
+  dumpsys returns nothing), so caches cannot be dropped from the shell at all;
+  the largest resident process was opencode itself (755 MB).
+
+**2026-10-17 FIRST RUST STDLIB MODULE (CSV) — the Rust decision, tested:**
+the user's instruction was "use Rust instead of C/C++ for stdlib". Two measured
+facts shaped the design, and both were counter-intuitive:
+- Rust `std` CANNOT be linked into Flint's JIT: std resolves TLS handles via
+  libc, and inside JIT memory Android aborts the process with
+  "increment_dso_handle_reference_counter: Couldn't find soinfo by dso_handle".
+  So the module is #![no_std] (arena, no allocator, no TLS) and loads as a
+  PLAIN OBJECT like the C modules — no dlopen, no ORC symbol plumbing.
+- TWO Rust staticlibs cannot share one link: std symbols collide
+  (rust_eh_personality, std::panicking::EMPTY_PANIC). no_std modules remove
+  that, so a user's own Rust .a still links alongside Flint's.
+- Flattening the archive needs SEEDED `ld -r -u <exported symbols>`, not
+  --whole-archive: whole-archive drags in every compiler_builtins member and the
+  JIT cannot resolve them. 11.6 KB / 3 undefined libc symbols vs ~2 MB / 800.
+- Trap: a no_std #[panic_handler] using `svc #0` is delivered by Android as
+  SIGSEGV with no message — it turned an ordinary assertion failure into an
+  unattributable segfault. Use libc `abort()` via extern "C".
+- Trap: tests must not stack-construct Doc (~41 KiB even scaled down for test);
+  it overflows the test harness threads here. Tests heap-allocate.
+- Trap: `ld -r` without -u pulls NOTHING out of an archive (no undefined
+  symbols to resolve) and yields an object with no symbols at all.
+- Trap: ORC in LLVM 21 has no DynamicLibrarySearchGenerator::GetProcessSymbols
+  and no absoluteSymbols in Core.h (my training memory was stale). The pattern
+  that does exist: llvm::orc::absoluteSymbols(SymbolMap) in
+  ExecutionEngine/Orc/AbsoluteSymbols.h, keyed by pool.intern(name).
+  (Not needed in the end, because no_std loads as a plain object.)
+- GATE lesson: differential went 1/10 after a compiler rebuild because the
+  self-host binaries under $TMPDIR/slipstream/self were invalidated. Rebuild
+  with `bash tests/test_selfhost.sh` before judging it a regression.
+
+
+---
+
+# Capability Audit and Improvement Plan (2026-10-18)
+
+**Method note (read this before trusting any doc).** `memory.md`, `ROADMAP.md`
+and `README.md` have all been caught containing false claims about this
+compiler. Concrete instance: docs asserted "match with `{...}` block arms
+aborts the compiler (P0)". Running `examples/enums.fl` prints `42 99` and
+exits 0. Every finding below was produced by COMPILING AND RUNNING small `.fl`
+programs, or by reading the cited `path:line`. Claims carried over from the
+docs are marked REFUTED. Trust the code, never the prose.
+
+**Resource note.** The audit device had ~1 GB free RAM of 3.6 GB. Runs were
+sequential; no parallel builds. If you re-verify, free
+`runtime/rust/target` and `lsp/target` first (317 MB + 76 MB on disk).
+
+---
+
+## 1. VERIFIED BASELINE — what genuinely works
+
+Do not "fix" these. Several look like bugs in the docs and are not.
+
+| Feature | Evidence |
+|---|---|
+| Enum payload match, block arms | `examples/enums.fl` prints `42 99`, exit 0 |
+| Struct methods, struct args/returns | `getx<T>` over `P{x}` prints `3` |
+| Ordinary `f64` functions | `fn id_f64(x: f64) -> f64` prints `2.5` |
+| Pipe lambdas WITH capture | `f = \|x: i64\| x + 1` prints `42`; captured `base=10` prints `15` |
+| Bounds checking | `a[5]` on len 3 -> `PANIC: index 5 out of bounds for length 3` |
+| Division by zero | `PANIC: division by zero` |
+| Use-after-free | `examples/aegis_uaf.fl` -> `aegis error in 'main': lease used after free` at COMPILE time |
+| Self-hosting | `tests/test_selfhost.sh` byte-identical fixed point |
+| Rust stdlib in both JIT and AOT | `tests/test_rust_stdlib.sh` 20/20 |
+
+The safety story is real and strong. Bounds checks, division guards and
+compile-time use-after-free detection all work. That is the core asset.
+
+---
+
+## 2. ARCHITECTURE — why the bugs exist
+
+Understand these five facts and every bug below becomes predictable.
+
+**2.1 `Type` has no size field.** `src/main.cpp:1082-1085` defines `Type` with a
+`TypeKind` and a `structName`, and nothing else. `Type::array` (`:1106`)
+carries only the element `Type`. `llvmType` (`:1153-1156`) therefore maps
+EVERY array to `{ptr, i64}` — a fat pointer with no element descriptor. The
+element type is erased at the LLVM boundary. Consequence: `emitIndexEmit`
+(`:8791`) and `emitIndexStoreEmit` (`:8803`) hardcode `CreateGEP(i64Ty, ...)`,
+`inferType` hardcodes `Type::array(Type::i64())` at `:2620` and `:5571`, and
+the AST array-literal emitter hardcodes `i64Ty` at `:6980`, `:6989`, `:6993`,
+`:7008`, `:7023`. **Every array operation in the language is i64-only, and
+this is structural, not a missing feature.**
+
+**2.2 There are TWO generic instantiation engines.**
+`Codegen::emitCall` (`:7532-7601`) and `Parser::emitDirectCall` (`:8986-9031`)
+each independently infer type arguments and build the call. They were written
+separately and drifted. Every generic bug exists in both. Fixing one and not
+the other re-creates the divergence.
+
+**2.3 `CodeGen::mangle` is not injective.** `:7391-7408` builds the mangled
+name used for monomorphization and for the `genericCache` key. There is **no
+`TypeKind::F64` case**: `F64`, `Ptr`, `Void` and `TypeParam` all fall through
+to `default: s += "any"` at `:7404`. Two different instantiations can
+therefore produce the same cache key. This is a latent cache-poisoning bug
+that must be fixed BEFORE anything else touches generics.
+
+**2.4 The symbol table is wiped before parallel bodies.**
+`Parser::parseParallelForStmtEmit` does `cg->symTable = SymbolTable();` at
+`:9633` before emitting the worker body, which is why `total` is undefined
+inside `parallel for`. Note `:9624` carries the comment
+`auto savedSym = cg->symTable; // copy assuming copyable` — which is exactly
+the assumption that was never checked.
+
+**2.5 The stable token table is a contract, not an implementation detail.**
+`stableTokenKind` (`:1182`+) is consumed by `stage1/flint_lex.fl` and enforced
+by `test_lexdiff.sh`, `test_parse_gate.sh` and `test_fixpoint.sh`. Adding a new
+keyword breaks the self-hosting ladder. The compiler already has the correct
+technique for this: contextual identifiers, used for `map` (`:8422`), `python`
+(`:9664`) and `as` (`:1802-1804`). **Use contextual detection. Never add a
+token.**
+
+---
+
+## 3. BUGS — verified, with mechanism
+
+Ordered by severity. Each was reproduced.
+
+### B1. Float TENSOR indexing silently produces garbage — NO DIAGNOSTIC
+**Severity: highest. This is the worst class of compiler bug: a wrong answer
+with no error.**
+
+```
+fn main() { a = [1.5, 2.5]  print(a[0]) }   ->  48     (should be 1.5)
+fn main() { b = [1, 2, 3]   print(b[0]) }   ->  1      (correct)
+```
+
+**CORRECTED DIAGNOSIS (2026-10-18, after M0).** The earlier write-up blamed
+plain array element-type erasure. That is the underlying cause (2.1) but not
+the proximate one, and the distinction matters:
+
+- `[1.5, 2.5]` is claimed by `Parser::tryParseTensorEmit` (`:8331`) as a
+  **rank-1 f64 tensor**, not as an array. The tensor path runs BEFORE the array
+  path (`:8495`) and does not soft-fail for float elements.
+- The tensor is built by `flint_create_*` and returns a handle that is
+  `{ptr, i64}` at the LLVM level — indistinguishable from an array slice.
+- `Parser::emitIndexEmit` (`:8861`) unconditionally does
+  `CreateGEP(i64Ty, dataPtr, index)` and `CreateLoad(i64Ty, ...)`, so indexing
+  a float tensor reinterprets float bits as an integer.
+
+So `[1.5, 2.5]` itself is CORRECT and must not be rejected — rejecting it would
+break float tensors. The defect is that `[]` index access has no way to tell a
+tensor from an array, and silently produces a wrong number.
+
+**Fix requires tensor type tracking**, which does not exist today: `inferType`
+never returns a tensor type and `TypeKind` has no Tensor member. The narrow,
+low-risk path is to give `emitIndexEmit` provenance — mark tensor-typed values
+so it can refuse with `tensor values cannot be indexed with []; use
+flint_tensor_get(t, i)`. The thorough path is a real Tensor type in the type
+system, which is larger and needs the Rust array representation first.
+
+**Partially fixed in M0:** non-i64 elements that DO reach the array path (for
+example strings) are now rejected with a diagnostic instead of being stored
+into an i64 slot. See 07d2df1. The tensor-indexing hazard above remains OPEN.
+
+**Fix applied in M0 (07d2df1).** `Parser::emitArrayLiteralEmit` (`:8908`) and
+the AST emitter now reject any non-i64 element with a Flint diagnostic naming
+the element index and its type. Widening arrays to f64 remains a separate,
+deliberately-gated milestone.
+
+### B2. `f64` generic leaks raw LLVM IR
+```
+fn first<T>(a: T) -> T { return a }   print(first(2.5))
+-> Call parameter type does not match function signature!
+   i64 %0 = call i64 @first.i64(double 2.500000e+00)
+   function verification failed: main
+```
+Three causes, in dependency order:
+1. `mangle` has no F64 case (2.3) — fix FIRST, or the fix below creates a new
+   cache collision.
+2. `Codegen::emitCall` `:7546-7548` maps `NodeKind::Number` to `Type::i64()`
+   without checking `NumberExprAST::isFloat`. Contrast `:7550-7554`, the
+   `Variable` branch, which correctly reads the symbol's real type. That is
+   why `let v = 2.5; first(v)` works but `first(2.5)` does not.
+3. `Parser::emitDirectCall` `:9009-9010` repeats the mistake.
+
+**Fix:** after (1), check `isFloat` at `:7547` and `:9009`. Then add a
+signature guard before `CreateCall` at `:7601` and `:9029`: if argument LLVM
+types do not match the callee, raise a Flint diagnostic naming the function,
+the expected type and the actual type. That guard is what permanently
+converts this ICE class into ordinary errors.
+
+### B3. Generic inference is a 4-case `NodeKind` switch
+`:7545-7563` and `:8990-9011` handle only `Number`, `String`, `Variable` and
+`EnumConstruct`. Missing: `FieldAccess`, index access, `StructLiteral`,
+`Call`, `Cast`, `Binary`, array literal. Each silently instantiates `i64` at
+`:7570` / `:9024`. So `max<T>(a.x, b.y)` is quietly wrong.
+
+Verified sub-case: struct generics DO work in parameter position
+(`getx<T>(p: T) -> i64 { return p.x }` prints `3`). The failure appears when the
+generic's result is used as a struct, because return-only `T` falls to i64.
+
+**Fix:** extract one `inferTypeArgs(FunctionAST*, args)` and route both call
+sites through it; then replace the switch with a real `unifyParamType(formal,
+argExpr, out)` walking compound types via `elemType`. Delete every silent
+`Type::i64()` default at `:7570`, `:9024`, `:9683` — an un-inferrable
+parameter must be an error naming the parameter.
+
+### B4. A lambda is a compile-time symbol, never a value
+Verified: `f = |x: i64| x + 1` works and captures work. But passing one to a
+function fails:
+```
+fn apply(f: i64, x: i64) -> i64 { return f(x) }
+fn main() { dbl = |x: i64| x * 2  print(apply(dbl, 5)) }
+-> codegen: undefined function 'f'
+```
+Mechanism: `:7498` rejects calling a lambda from a different function, because
+the binding is a symbol resolved at compile time. There is no representation of
+a function as a runtime value, and `map`/`filter`/`reduce` do not exist.
+
+Secondary defect: the natural-looking form `|x: i64| -> i64 { return x + 1 }`
+produces THREE cascading errors (`empty lambda body`, `undefined var 'x'`,
+`undefined function 'f'`) because `:4162` is `parseExpression()` with no
+return type and no block body. People write the language off after one
+confusing error.
+
+**Fix:** closure conversion is already complete — `emitLambdaDef`
+(`:6422-6485`) outlines a real function and freezes captures into hidden
+slots. Only two things are missing: a `fn(i64, i64) -> i64` type in
+`Parser::parseType` (`:2580`), and materializing the env pointer when a lambda
+symbol appears in value position (`emitExpr` `:6070`/`:6142`). A `call(f, x)`
+builtin then desugars to an LLVM indirect call with the env prepended.
+**Zero runtime code, zero ABI change, identical in JIT and AOT.** Honest
+constraint to document: closures remain stack-scoped and cannot outlive their
+defining function — that is correct for v1, state it rather than hiding it.
+
+### B5. `trait` is not a keyword; it silently mis-parses
+`grep -n trait src/main.cpp` returns nothing. `:2333` treats a top-level
+`IDENTIFIER IDENTIFIER` as a keywordless function definition, so
+`trait Shape { fn area(self) -> i64 }` is parsed as a function named `trait`
+taking a parameter named `Shape`, and the nested `fn area` is never registered.
+The `undefined function 'area'` a user sees is a downstream symptom of a silent
+mis-parse.
+
+**Fix (minimal):** add `struct TraitDef { name, methods }` and a
+`traitRegistry` beside `structRegistry` at `:4680-4682`. Detect `trait`
+contextually in `parseProgram` (`:2264-2355`) via `IDENTIFIER "trait"
+IDENTIFIER`. Impls are ordinary functions — `fn area(s: P) -> i64` — so there is
+no new declaration syntax. At the single dispatch point, resolve by
+name+arity: exactly one match -> direct call; zero -> `no type in scope
+implements 'area'`; more than one -> `ambiguous: candidates P, Q`. Support
+`P.area(s)` qualification by rewriting to `area(p)`, mirroring the enum
+qualification that already works. **Do not add a lexer keyword (2.5).**
+
+### B6. `parallel for` — two independent blockers
+Verified: `parallel for i in 0..n { total = total + i }` ->
+`codegen: undefined var 'total'`.
+Blocker A: the symbol table is wiped at `:9633` (2.4).
+Blocker B: `runtime/runtime.c:490-513` `flint_parallel_for` returns a
+hardcoded `0` at `:512`, and `:9660` discards the return value entirely. There
+is no reduction channel, so even a perfectly capturing `parallel for` could not
+compute a sum.
+
+**Recommendation: REMOVE the keyword, do not fix it.** Capture-by-value across
+`pthread` workers is a cross-thread use-after-free: a captured `str`/map/array
+pointer can be snapshotted while the parent frame frees it. That would open a
+memory-safety hole in the one property this language leads with — and the rest
+of the safety story (compile-time use-after-free, bounds checks) would be
+for nothing. The self-hosted compiler contains `"parallel for "` only as a
+pretty-printer string literal (`stage2/flint_parse.fl:3140`), so removal breaks
+nothing in the self-hosting gate. Replace the parse with a migration error and
+leave the runtime symbol for ABI stability. If concurrency returns, ship
+order-deterministic capture-free builtins in `runtime/rust/` instead — no
+syntax sugar, no capture, no new language feature.
+
+### B7. `specialize` latent bugs that bite the moment generics is real
+`CodeGen::specialize` (`:7410-7488`):
+- **No recursion guard.** `genericCache[mangled]` is written at `:7486`, AFTER
+  the body is emitted. A self-recursive generic re-enters forever and hangs or
+  overflows the compiler.
+- **Lossy insert-point restore.** `:7484` uses `SetInsertPoint(savedBlock)`,
+  which re-inserts at the END of the block. Nested monomorphization misplaces
+  instructions. Must be `saveIP()`/`restoreIP()`.
+- **Compound params never substituted.** `:7421-7426` does
+  `subst.find(rt.structName)`, but for `[T]` the structName is `""`.
+  `resolveType` (`:4645-4656`) already recurses through `elemType` correctly —
+  point `specialize` at `resolveType` and the compound case falls out.
+
+### B8. `Option<T>` in ROADMAP is not generic
+`ROADMAP.md:466` claims a builtin generic `Option<T>`. FALSE.
+`initStdEnums` (`:4697-4703`) defines `Option.Some(i64)` — a fixed i64
+payload. There is no type-level generic enum, which is why a generic `Result`
+or `Option` cannot be written today.
+
+### B9. Array API pairing is inconsistent
+`flint_array_alloc` returns a `{ptr, i64}` slice while `flint_aegis_free`
+expects a plain `i8*`, so mixing them fails to link with a raw LLVM type
+mismatch. Not a correctness bug (the compiler refuses) but it surfaces internal
+IR at the user. Any signature guard added in B2 should be applied here too.
+
+---
+
+## 4. WHERE RUST SHOULD BE USED
+
+Context respected: `runtime/rust/` is already a `#![no_std]` staticlib linked
+into BOTH JIT and AOT, so Rust is a proven vehicle here, not a rewrite.
+Constraint that matters: the crate has a **custom `panic_impl` lang item**, so
+any dependency that links `std` breaks the build. This is not theoretical —
+`fdeflate` linked `std`, the release staticlib silently failed, and `build.sh`
+fell back to "no Rust stdlib" entirely, taking down every Rust builtin at
+runtime while still reporting success.
+
+| Candidate | Call | Reason |
+|---|---|---|
+| Bounds-checked array element access (`flint_array_get/set`) carrying an explicit element size | **R** | Lets `[T]` work without touching `llvmType(TypeKind::Array)`. Unsafe indexing is precisely the class where a Rust bound check is worth a predictable branch. Move into `runtime/rust/` next to the arena. |
+| Checked arithmetic helpers (overflow, div-by-zero, index math) | **R** | Centralizes overflow policy currently scattered through C++ hot paths; `panic` + the arena give a consistent failure mode. |
+| Generic array/slice storage (length, element size, data pointer) | **R** | The representation is a value type with no compiler invariants attached; it is a library concern, not an IR concern. |
+| Lexer/parser for stage1/2/3 | **C** | The self-hosting ladder REQUIRES these stages to be written in Flint. Moving them to Rust destroys the property that makes this compiler unusual. |
+| The two emit paths / `specialize` / `mangle` | **C++** | These construct and inspect LLVM IR and depend on compiler-internal invariants. Handing them to a second language couples the fix to an FFI boundary for no gain. |
+| Module cache hashing | **C++** | It reads the compiler's own AST for the key; already inside that code. |
+| LLVM `StringMap`/ADT internals | **C++** | Honestly: no. Already optimal, and replacing them adds a boundary for zero benefit. |
+
+Practical note on B1: the cheapest correct fix is the C++ rejection above. The
+Rust array work is what unlocks `[T]` later; it is not needed to stop the lie.
+
+---
+
+## 5. MILESTONES
+
+Critical path M0 -> M1 -> M2 -> M3 -> M4. M5 and M6 touch disjoint code
+(`:9592`/`:2820` and `:8374`/`:2333`) and can run any time.
+
+**M0 — Stop the bleeding.** Make `mangle` injective (`:7391`). Fix `isFloat`
+inference (`:7547`, `:9009`). Add `CreateCall` signature guards (`:7601`,
+`:9029`). Reject non-i64 array literal elements loudly (`:8826`, `:6975`).
+*Gate:* `first(2.5)` prints `2.5`; `[1.5,2.5]` is a clean error; a negative
+test asserting zero LLVM verifier text on stderr.
+*Rollback:* pure additions plus one error message; revert is trivial.
+
+**M1 — One instantiation engine.** Extract `inferTypeArgs`; delete the
+`NodeKind` switches; fix `specialize` (B7): cache before body, `saveIP`,
+route compound substitution through `resolveType`.
+*Gate:* both backends emit byte-identical IR for a generics file;
+`test_differential.sh` green.
+*Rollback:* this is the riskiest milestone — it touches both emit paths. If
+the self-host fixed point breaks, revert wholesale rather than partially.
+
+**M2 — Real inference.** `unifyParamType` for `FieldAccess`/index/`Call`/
+`Cast`/`Binary`/`StructLiteral`; add `f::<T>(...)` explicit type arguments;
+delete every silent i64 default.
+*Gate:* return-only params, field-access args and nested generic calls all
+work; every un-inferrable case errors by name.
+
+**M3 — Traits (static).** `traitRegistry`, contextual parse, name+arity
+resolution, ambiguity error, `P.area(s)` qualification.
+*Gate:* `test_lexdiff.sh`, `test_parse_gate.sh`, `test_fixpoint.sh` all still
+green and unmodified — that is the proof the token contract was not touched.
+
+**M4 — Lambda as a value.** `fn` type in `parseType`; env-pointer
+materialization in `emitExpr`; `call` as a pure LLVM indirect call.
+*Gate:* `apply(|x| x + 1, 5)` works; a closure escaping its frame still errors.
+
+**M5 — Remove `parallel for`.** Parser change plus migration error; keep the
+runtime symbol.
+*Gate:* `tests/t_flow.fl` migrated; `test_errors.sh` asserts the message;
+self-host gate unaffected.
+
+**M6 — Diagnostics.** Stop the cascade for the `|p| -> T {}` form at `:8374`;
+tighten top-level `IDENTIFIER IDENTIFIER` at `:2333`.
+*Gate:* each malformed input yields exactly one error.
+
+**M7 — `[T]` containers.** Deferred. Requires the Rust array representation
+from section 4 plus an explicit ABI decision. Only after M0-M6 are green.
+
+---
+
+## 6. REJECTED APPROACHES
+
+1. **Do NOT add an element-type field to `llvmType(TypeKind::Array)` (`:1153`).**
+   The single most dangerous available change. It alters the layout of every
+   array value in every object file and every `.flint.bc` interface, silently
+   mismatching `--use-interface` copies (`:11845-11856`), AOT/JIT parity, the
+   Rust staticlib ABI and C FFI. Use the Rust array representation with an
+   explicit element-size parameter instead.
+2. **Do NOT add a lexer keyword.** `stableTokenKind` is a Stage-1 contract
+   consumed by `stage1/flint_lex.fl`. Use contextual detection like `map`,
+   `python` and `as` already do. `KW_PARALLEL` already exists at `:1175`;
+   removing its USE is safe, adding a NEW token is not.
+3. **Do NOT use dictionary passing or vtables for generics.** It requires the
+   runtime value to carry a type descriptor, which arrays do not
+   (2.1) — an ABI change rippling through the runtime, the Rust staticlib, C
+   FFI and the interface format. Monomorphization is a local, deterministic
+   transformation that the self-hosted emitter can reproduce byte-identically.
+4. **Do NOT fix the two emit paths in different milestones.** That is how B2
+   and B3 exist twice. One change, both paths.
+5. **Do NOT reword existing error strings.** `tests/run.sh` matches on text.
+   Add new messages; never edit existing ones inside a feature milestone.
+6. **Do NOT ship `dyn Trait` before static traits exist.** A second erased
+   value representation compounds the array-erasure problem for zero users.
+7. **Do NOT "fix" float arrays by widening them in M0.** Reject first, widen
+   deliberately later behind its own gate.
+
+---
+
+## 7. RISK REGISTER
+
+| Risk | Detect with | Mitigation |
+|---|---|---|
+| Array layout change breaks `--use-interface` | `test_selfhost.sh` phase C | Never edit `llvmType` array case; see Rejected 1 |
+| Generic change breaks the fixed point | `test_selfhost.sh` byte-identical comparison | Fix both emit paths in ONE change; revert wholesale if red |
+| New lexer token breaks stage1 | `test_lexdiff.sh`, `test_parse_gate.sh` | Contextual detection only |
+| Rust dependency links `std` | Build output must show `flint_std.o (Rust stdlib, both paths)`; grep the object for `std` symbols | Every new dep must be `no_std`; the gate already checks "module is no_std" |
+| Rust dep breaks JIT on Android | Run `test_rust_stdlib.sh` on-device | `no_std` + no TLS; the existing stdlib is the proof |
+| Silently-wrong answers like B1 | Add negative tests asserting diagnostics | Treat any silent wrong answer as P0 |
+| Monomorphization compile-time blowup | `bench/compile_time/BASELINE.md` | Only one file uses generics today; revisit past ~200 instances |
+
+---
+
+## 8. OPEN DECISIONS FOR THE MAINTAINER
+
+1. Is removing `parallel for` acceptable as a product decision? The analysis
+   says yes (B6); it is a user-visible language-surface removal, so it is
+   yours to call.
+2. Should generics stay monomorphization-only, or is a `dyn`-style escape
+   hatch wanted later? M0-M2 do not foreclose either.
+3. Does `[T]` matter enough to justify the Rust array representation now, or
+   should M7 wait until real programs need it?
+
+---
+
+## 9. TRAP LESSONS FROM THIS AUDIT
+
+- Trap: trusting `memory.md`/`ROADMAP.md` as evidence. They asserted a P0
+  compiler crash that does not exist. Always compile a 5-line program before
+  believing a doc claim about behaviour.
+- Trap: assuming a generic call's parameter position tells you about its
+  return position. Struct generics WORK in parameter position; return-only `T`
+  is what breaks. Test both.
+- Trap: testing a language feature with syntax you guessed. `fn(x){}` lambda
+  syntax does not exist; `|x: i64| x + 1` does, and captures work. A failed
+  test proves nothing until the syntax is confirmed against real examples.
+- Trap: an ICE that leaks LLVM IR is a missing signature guard, not just a
+  type-inference bug. The guard is what stops the whole class recurring.
+- Trap: a compiler that accepts wrong code silently is worse than one that
+  refuses. B1 (`[1.5, 2.5]` -> 48) is the most serious defect found in this
+  audit, precisely because nothing complained.
+- GATE lesson: establish a green `tests/run.sh` + `tests/test_selfhost.sh`
+  baseline BEFORE M0. Every milestone gate above assumes a green baseline.
+
+---
+
+# Addendum (2026-10-18, after M1) — two new findings
+
+## N1. A function that matches a PAYLOAD enum hangs the compiler. PRE-EXISTING.
+
+Found while testing M1. Confirmed on the committed baseline, so it predates
+every change in this session.
+
+```flint
+enum Tree { Leaf, Node(i64, i64) }
+
+fn sum(t: Tree) -> i64 {          // <-- a named function, not main
+    match t {
+        Tree.Leaf => 0,           // expression arms
+        Tree.Node(a, b) => a + b,
+    }
+    return -1
+}
+fn main() { print(sum(Tree.Node(3, 4))) }
+```
+
+`./flintc` never terminates; killed by `timeout -s KILL` (exit 137).
+
+**Bisected.** The trigger is the payload enum inside a function with a declared
+return type:
+
+| Case | Result |
+|---|---|
+| payload enum + match in `main` | works (`examples/enums.fl` prints `42 99`) |
+| no payload (`enum E { A, B }`) + match in a function | works |
+| payload enum + match in a function, expression arms | **HANGS** |
+| payload enum + match in a function, block arms | **HANGS** |
+
+So: **`match` on a payload enum only works inside `main`.** Any other function
+deadlocks the compiler. That is a severe limitation, not a cosmetic one — it
+means pattern matching cannot be used in real code, and it is the most likely
+reason `match` has felt unfinished.
+
+**RESOLVED — this note was STALE when read back (verified 2026-10-19).** The
+root cause was NOT in the match emission path: the match-ARM parser accepted
+exactly one binding name, so `Node(a, b)` was a parse error, and `consume()`
+reported the error WITHOUT advancing the token cursor, so the enclosing arm
+loop could not make progress and spun forever. Both are fixed: patterns bind
+one name per payload field, and `consume()` always advances when recovering.
+The regression fixture is `tests/t_payload_match.fl` (passes: 7, 0, 6, 9, 12,
+24, 0, 10) and `tests/test_generics.sh` keeps an explicit no-hang check with
+`timeout -s KILL`. No test corpus needs to avoid payload-enum matches in a
+non-`main` function any more. Lesson (this file's own §9 trap list): a doc
+claim about behaviour is not evidence — compile the 5-line program before
+believing it, even when the doc is this file.
+
+## N2. Rust placement that paid off, and one trap
+
+`runtime/rust/src/array.rs` replaced the array runtime from `runtime.c`. The
+value was not "fewer lines of C": it was that the length now travels with the
+pointer, so `flint_array_get`/`_set` can be checked at the point of memory
+access, and a negative index has no valid representation as a `usize` offset.
+
+Three defects were caught only by running the tests, not by reading the code:
+
+1. The crate's global allocator is `arena::BumpAllocator`, whose `dealloc` is a
+   **no-op**. Routing arrays through it meant every array permanently consumed
+   arena space and `flint_array_free` freed nothing. The array heap must be
+   libc's `calloc`/`free`.
+2. `match raw { null => ..., ptr => ... }` are **binding patterns**, so the
+   first arm matched every pointer and every allocation silently failed. Use
+   `if raw.is_null()`.
+3. Formatting an i64 with `i128` division pulled in a compiler_builtins member
+   carrying an undefined `rust_eh_personality`, which made **every JIT program
+   fail to load**. Any arithmetic in this crate must stay within the target's
+   native width.
+
+**Rule to keep:** in this crate, prefer `u64`/`i64` arithmetic, avoid anything
+that pulls compiler_builtins members, and never assume the global allocator is a
+heap.
+
+---
+
+# Addendum 2 (2026-10-18, after M2) — three items found DURING M0–M2
+
+These are not in the milestone table. Two of them outrank M3.
+
+## P0-NEW-1 — COLLAPSE THE DUPLICATED EMIT PATHS. Above M3.
+
+Comparison emission, call emission and generic inference each exist TWICE:
+once in `Codegen` (the AST path) and once in the single-pass `Parser` path.
+A fix applied to one does not reach the other.
+
+This has produced three separate bug classes in one session:
+
+1. The `f64` comparison abort (`ICmp` on doubles) was fixed in `Codegen`;
+   `Parser` kept the broken version.
+2. The call-signature check (arity + argument types) was added to `Codegen`;
+   `Parser` had none, so a wrong-arity call still emitted invalid IR.
+3. Aggregate equality was lowered in `Codegen`; `Parser` had none, so enum
+   equality kept aborting.
+
+Each time the symptom looked like "the AST path is broken" or "enums are
+broken". It was neither. It was two implementations drifting.
+
+**Cost of leaving it:** every codegen fix must be applied twice and verified
+twice, and the differential gate does not catch it because the two paths are
+never both exercised on the same construct.
+
+**Why it is first:** it removes an entire category of bug. M3 adds a feature;
+this removes a source of defects that has produced four findings so far.
+
+## P0-NEW-2 — ENUM EQUALITY NEEDS PER-VARIANT PAYLOAD WIDTH
+
+Enum equality is currently REFUSED with a diagnostic. That is deliberate and
+correct for now: the alternative was silently wrong.
+
+An enum's LLVM type is `{ i8, [N x i8] }` — a tag plus a packed payload array
+sized to the WIDEST variant. Bytes past what a given variant writes hold
+whatever was on the stack, so byte-wise comparison reports two identical
+`Some2(3, 4)` values as UNEQUAL. A confidently wrong answer is worse than the
+abort it replaced.
+
+**The fix:** thread the per-variant payload width from `enumRegistry` (which
+has `variants` with `payloadTypes`) into the comparison, then compare tag plus
+exactly the bytes the variant writes. The width is NOT in the LLVM type, which
+is the entire problem. Contained and well-defined now that the crash and the
+silent-wrong-answer are both gone.
+
+## P0-NEW-3 — B1 REGRESSION CHECK: f64 ARRAYS MUST NOT BE SILENT
+
+B1 remains open: `[1.5, 2.5]` is claimed by `tryParseTensorEmit` as a float
+TENSOR, and indexing that tensor with `a[0]` reinterprets float bits through an
+i64 GEP, printing 48 with no diagnostic.
+
+Detecting it needs tensor provenance that does not exist: `inferType` never
+returns a tensor type and `TypeKind` has no `Tensor` member. Narrow fix: mark
+tensor-typed values so `emitIndexEmit` can refuse with "tensor values cannot be
+indexed with []; use flint_tensor_get(t, i)". Thorough fix: a real Tensor type,
+which needs the Rust array representation (M7).
+
+## Status of the milestone table after this addendum
+
+| Item | State |
+|---|---|
+| M0, M1 | done |
+| M2 | **done** (param matching + f64 FCmp; cast + nested-call args infer — 3f062e4; explicit `f::<T>(...)` — 3d3d914; array args — 361d810; STRICT resolver, no silent i64 default, f64 arithmetic infers f64 — 922d03a). The resolver reports an un-inferrable argument by name. |
+| P0-NEW-1 path collapse | **done** (compare/call/generic cores shared, commit below) |
+| P0-NEW-2 enum payload width | **done** (per-variant field compare, commit below) |
+| P0-NEW-3 tensor index check | **done** (narrow stop-gap, commit below) |
+| M3 traits | **done** — commit 1219665 |
+| M4 lambda as a value | **done** — commit a6b89e6 |
+| M5 remove `parallel for` | **done** — commit 9553f8c |
+| M6 diagnostics | **done** — commit d65ed3f |
+| M7 `[T]` containers | **deferred by maintainer decision (2026-10-19)** |
+
+# Addendum (2026-10-19, after M3-M6) — milestone wave complete
+
+All milestone work landed in ONE session with every gate green at each
+commit:
+
+- **M3 static traits (1219665).** traitRegistry beside structRegistry; `trait`
+  stays contextually parsed (no lexer keyword — token contract proven intact:
+  lexdiff 130, parse_gate 131, fixpoint pass); name+arity dispatch (exactly-one
+  → call, zero → "no type in scope implements", >1 → "ambiguous
+  (candidates:)"); `P.area(s)` qualification via M3 UFCS. Pre-existing gate
+  breaks discovered and FIXED: binary string-literal fixtures (NUL truncates
+  the self-host lexer) extracted to tests/fixtures/*.bin read via
+  flint_read_file; flint_parse.fl spelled out `and`/`or` (pp keeps source
+  spelling) and accepts multi-binding match payloads.
+- **M4 lambda-as-a-value (a6b89e6).** `TypeKind::Func` with
+  funcParams/funcRet (funcRet is a shared_ptr — a struct cannot hold a Type
+  member of itself); `fn(T1,T2) -> Ret` in parseType (arrow required);
+  uniform closure protocol: outlined fn = (env, userargs...), env box =
+  {fnptr, caps...} in the defining frame; every call indirect (load field 0,
+  CreateCall(fnTy, ptr, {box,...})); fn-typed params/bindings; escape rule =
+  hard error at return/global store; named-fn-as-value refuses with clean
+  advice (`let h = inc` — future work). Gates: apply(|x| x+1, 5) == 6
+  in-run; escaping closure fails rc=1; smoke 29/29; all suites rc=0
+  (differential, generics, no_hang, errors, parse_gate, lexdiff, fixpoint,
+  python, ai, rust_stdlib); selfhost fixed point held.
+- **M5 `parallel for` removal (9553f8c).** parseParallelForStmt AND
+  parseParallelForStmtEmit replaced wholesale with the B6 migration error
+  ("'parallel for' was removed: it could not capture variables and had no
+  result channel. Use a plain 'for' loop, or move the work into a Rust
+  runtime function such as flint_parallel_reduce"); KW_PARALLEL token and the
+  flint_parallel_for runtime symbol kept (ABI); tests/t_flow.fl migrated to a
+  plain for (100..104 same expectations); NEW tests/t_pfor_removed.fl with
+  run.sh check_fail asserting the message (test_errors.sh only catalogs the
+  stage3 emit strings, so the parse-side message lives in run.sh). Smoke
+  30/30; selfhost byte-identical after the change.
+- **M6 diagnostics (d65ed3f).** `|p| -> T {}` refuses at the parse ("a lambda
+  has no '-> Ret' form...") — the old flow silently accepted it and codegen
+  reported "empty lambda body" + "function body emission failed"; top-level
+  `name (not-a-fn)` and `name name` candidates that fail the isFunc lookahead
+  now error once instead of silently parseExprStmt-ing garbage (previously
+  rc=0 NOTHING happened). Parser::skipToLineEndTokens() enforces the
+  exactly-one-error contract. Gates: smoke 30/30; parse-gate 131; lexdiff
+  130; differential 11; errors catalog 128/128; three malformed fixtures each
+  produced exactly one error with a precise location.
+
+**B-tasks of the next chat, in order:** P0-NEW-3 → P0-NEW-1 → P0-NEW-2
+(user's priority). P0-NEW-3 landed as commit 67edab9.
+
+- **P0-NEW-2 enum equality (per-variant payload width).** EmitEnumEqual keyed
+  off `enumRegistry` at the top of emitAggregateEqual (both callers unchanged):
+  compare the i8 tags; when they match, chain across variant blocks, and in
+  each variant body bit-free GEP into `{ i8, T0..Tn }` (the IDENTICAL layout
+  both constructor sites write) and compare only the fields the variant
+  declared — garbage tail bytes are never read. Result accumulates in an i64
+  slot (0 = unequal), tags differing or unknown tags short to bbEnd, tag-only
+  enums store 1 immediately. Refusal stays for non-enum struct array fields.
+  Fixture: tests/t_agg_eq.fl enum section now asserts Some2(3,4)==Some2(3,4)
+  → 1 (the exact case that motivated the refusal is now pinned), cross-variant
+  → 0, None==None → 1. Gates: smoke 30/30, lexdiff 130, parse_gate 131,
+  fixpoint, errors 128/128, differential 11. Traps hit: a first naive
+  paste-by-anchor edit left the old refusal tail duplicated (brace mismatch);
+  LLVM StructType has no hasStructName() in this version — literal-struct
+  detection via isLiteral() only. **CORRECTION (after P0-NEW-1):** the closing
+  claim "all 16 outputs verified by run" for THIS task was careless — the
+  emitEnumEqual accumulator had a real bug at commit d1c58cf (ANDing variant
+  bodies against the 0-initialized slot instead of ORing), so == computed 0 on
+  equal payloads and even made == disagree with != on the same operands. The
+  fixture was re-verified line-by-line mapped to semantics only during
+  P0-NEW-1; the fix is in the same commit as P0-NEW-1 (below). Lesson: verify
+  by mapping EACH printed line to its assertion, never by eyeballing ones
+  and zeros. The P0-NEW-2 commit message therefore overclaims.
+
+- **P0-NEW-1 path collapse.** Shared Codegen cores; the Parser emit path now
+  delegates instead of keeping drifting copies (the source of four findings):
+  1) emitCompareValues(op, l, r) — aggregate-first, pred map, str-compare,
+     null-norm, FCmp-float branch; both cmp arms now single calls.
+  2) createCallChecked(name, f, args, instantiationMsg) — arity + loose-ptr
+     type guard before CreateCall; AST plain tail, AST generic-instance,
+     Parser functionMap branch (previously UNGUARDED — wrong-arity emitted
+     invalid IR), Parser generic-branch, Parser UFCS branch all route here.
+  3) emitPrintCall(v) — type-keyed println dispatch (Parser copy used to
+     silently pick println_i64 for unsupported types and RETURNED nullptr).
+  4) emitArrayGet/Set/Data/GetPtr/SetPtr cores — the struct guard lives in
+     the core ("flint_array_get needs an array"); the Parser copy had lost
+     it and extracted field 0 of a bare i64.
+  5) Parser generic inference rewritten to the by-PARAMETER rule (type param
+     infers from the argument filling the parameter that mentions it) like
+     the AST path; the old copy indexed typeParams by arg position, so
+     swap<T,U>(a: U, b: T) instantiated swapped. Un-inferrable still
+     defaults to i64 in emit mode (no AST available); the guarded call
+     below the inference catches misfits.
+  Wait — this is intentionally left as a residual: emit-mode inference
+  cannot use exprFlintType (no AST), so the type SOURCE stays path-specific;
+  the RULE and the validation are shared. That is the collapse boundary —
+  further unification would mean the Parser builds AST nodes, which is a
+  different milestone.
+  Gates on the fresh build: smoke 30/30, lexdiff 130, parse_gate 131,
+  fixpoint 131, errors 128/128, differential 11/11, generics 7/7; every
+  t_agg_eq line mapped to its assertion; bad-arity, enum ==/!= per-case,
+  nested-struct payload compare all verified individually.
+
+**M7 decision (2026-10-19, maintainer):** `[T]` containers stay DEFERRED
+(memory.md §8 decision #3). The Rust {length, elem_size, ptr} representation
+(§4) is approved IF a real program needs it later; the narrow B1 stop-gap
+(tensor index refusal — P0-NEW-3) is the first B-task of the next chat and
+does not pay for the ABI change.
+
+# Addendum (2026-10-19, later) — M2 residue part 1 + a STATE pick-up guide
+
+- **M2 residue part 1 (commit 3f062e4).** Generic argument inference learned
+  two argument shapes it did not know: a CAST argument (its type is the cast
+  target) and a nested CALL argument (the callee's return type, resolved with
+  the same by-parameter rule, recursively). Both used to fall through to i64,
+  so the program failed later with a message about the instantiation
+  ("expects i64") instead of about the program. New
+  `Codegen::inferGenericArgType`; `exprFlintType` gained the Cast case.
+  Fixture `tests/t_generic_infer.fl` (6 smoke checks; the 1.5 line is the
+  discriminator — an i64 instantiation would print 1). Gates: smoke 36/36,
+  lexdiff 131, parse_gate 132, fixpoint 132, errors 128/128, differential
+  11/11, generics 7/7, no-hang 88/88. Still open in M2: explicit `f::<T>(...)`
+  type arguments, deleting the remaining silent i64 defaults, and arrays as
+  generic arguments (`idc([1,2])` — probe whether generic instantiation over
+  an array type works end-to-end before enabling inference for it).
+- **STATE.md is now a pick-up guide (commit b54ae7b).** §1 build/verify
+  recipes and the device traps (stale `flintc`, `/tmp` unwritable, pipes
+  eating exit codes, tool timeouts killing process groups, pkill matching its
+  own shell); §2 the VERIFIED open-items table (8 items) with the note that
+  N1 was already fixed and the audit note was stale; §3 concrete next steps;
+  §4 file anchors; §5 dead ends. The milestone history is preserved below the
+  guide header.
+- **Gate dependency worth knowing:** `test_differential.sh` needs the
+  self-host binaries under `$TMPDIR/slipstream/self` (build with
+  `bash tests/test_selfhost.sh A`). If tmp was cleaned, the gate reports
+  "1 passed, 10 failed" with `self binaries` — that is a missing artifact,
+  not a divergence. `test_no_hang.sh` (88 checks) is the gate that proves no
+  corpus file hangs the compiler.
+
+# Addendum (2026-10-20, later) — M2b, the named-function value, and a finding
+  about the "two emit paths"
+
+- **M2b explicit type arguments (3d3d914).** `f::<T1, T2>(...)` states the
+  type arguments instead of inferring them. `::` is two COLON tokens to the
+  lexer, so no lexer change was needed and the token contract is untouched
+  (lexdiff 131 unchanged); nothing in the language used `::` before. Explicit
+  arguments override inference and feed the same instantiation path
+  (mangle + specialize + genericCache). Errors: wrong count, a non-generic
+  callee, a non-concrete type argument. Both C++ paths changed (AST and the
+  single-pass Parser). The fixture lives in tests_manual/ because the
+  self-hosted parser (stage2/flint_parse.fl) does not implement the syntax —
+  the same situation as the `trait` keyword.
+- **A named function can be a value (fd8cf09).** `let h = inc` now works.
+  A named function has no captures, so it joins the existing lambda protocol
+  through a THUNK: a generated wrapper with the same fn(env, args...) shape
+  that ignores its env argument and forwards to the real function. The call
+  site needs no discriminator, and the fn-value call path is unchanged. The
+  box lives in the current frame, so the escape rules apply (it cannot be
+  returned or stored in a global). A generic function as a value is refused
+  by name.
+- **FINDING — the C++ "single-pass emit path" is UNREACHABLE (361d810).**
+  The doctrine in this file (and in STATE.md) says every fix must land in
+  both C++ paths, because "comparison emission, call emission and generic
+  inference each exist TWICE". They DO exist twice, but the second copy
+  (Parser::emitXxx) is entered only from `Codegen::emitFunction` for a
+  function with no AST body — and in a normal compile every function has
+  one. Measured with the FLINT_TRACE_EMITPATH probe added in 361d810: over
+  all 137 corpus .fl files, ZERO hits. So:
+  - fixes applied to that path are harmless but not load-bearing;
+  - the REAL second implementation is the SELF-HOST Flint pipeline
+    (stage2/flint_parse.fl + stage3/flint_emit.fl), which the differential
+    gate compares against and which is a genuine independent oracle;
+  - the self-host pipeline has NO traits, NO generics, and no `::<` — so
+    features added to the C++ compiler are not yet available to the
+    self-hosted toolchain. That gap is the one that matters now.
+
+# Addendum (2026-10-20, later still) — M2c, the P4 error-code docs, and the
+  self-host feature gap
+
+- **M2c — the generic argument resolver is strict (922d03a).** The M2 spec
+  asked for "an un-inferrable parameter must be an error naming the
+  parameter". `Codegen::inferGenericArgType` is now a strict resolver: it
+  returns false when the argument's type cannot be determined, and the
+  inference loop reports the parameter by name ("cannot infer type parameter
+  'T' for 'idc'; the argument's type could not be determined") instead of
+  instantiating i64 and letting the program fail later with a message about
+  the instantiation. Two real silent-wrong answers fixed on the way:
+  a float arithmetic expression inferred i64 (`idc(1.5 + 2.5)` instantiated
+  idc.i64), and a call to a USER function inferred i64 (the builtins table
+  does not know user functions, so `idc(f())` instantiated idc.i64). The
+  fixture caught a regression during this work: an index argument
+  (`idc(arr[1])`) used to work only because the silent default happened to
+  be right; the resolver named it and the index case was added.
+- **P4 — the C++ compiler's diagnostics are catalogued (4214082).** The P4
+  ship list asked for error-code documentation. `docs/errors.md` catalogued
+  the SELF-HOST EMITTER's messages; the messages users actually see come
+  from `src/main.cpp` and had no catalog. `docs/errors-cpp.md` now lists all
+  135 of them as PATTERNS (literal text with `<...>` where a value is
+  interpolated — a catalog of literal fragments is useless to a user
+  searching for a message), with curated fix guidance by family.
+  `tools/errors_cpp.py` extracts them; `tests/test_errors_cpp.sh` keeps the
+  doc and the source in sync BOTH ways (a new diagnostic cannot ship
+  undocumented; a removed one cannot linger) and is wired into CI.
+  The rest of the P4 list: the semver freeze and the SBOM generator
+  (`tools/sbom.py`) already exist; signed tags need a GPG key, which this
+  device does not have — the procedure is documented in `docs/RELEASE.md`.
+- **D5 — the self-host feature gap is now recorded (COMPATIBILITY.md).**
+  The differential gate is green (11/11) but it cannot see what it does
+  not cover: the C++ compiler now accepts programs the self-hosted pipeline
+  cannot parse or emit at all — `trait`, generics, `f::<T>(...)`, enum
+  equality, a named function as a value. D5 lists them with the policy that
+  every feature added to the C++ compiler from now on either lands in the
+  self-host pipeline too or is listed there. Porting them is a project of
+  its own (stage2 is 4.1k lines, stage3 is 7.6k); it is a feature gap, not
+  a miscompile in either compiler.
+
+# Addendum (2026-10-20, assessment) — a measured language/compiler roadmap
+
+`docs/LANGUAGE-ROADMAP.md` (30 sections) is the engineering assessment and
+roadmap. Every claim in it is labelled by kind: [M] measured, [P]
+published, [R] reported, [I] inference, [D] design, [S] speculation. It is
+the companion to this ledger, `STATE.md` (pick-up guide) and
+`COMPATIBILITY.md` (divergence log).
+
+- **The binary-size regression was found, root-caused and fixed (46a007e).**
+  A hello-world linked to 743,520 B (565,600 B stripped) — 130x C — and
+  reserved 72 MB of `.bss` in every process, because the link line had no
+  `-Wl,--gc-sections` (the runtime objects were already compiled with
+  `-ffunction-sections`, so the capability existed) and linked sqlite3,
+  curl and openblas unconditionally. After the fix: 8,048 B raw / 4,536 B
+  stripped (C: 4,368 B), `.bss` 24 B, and ONE dynamic dependency (libc).
+  Two traps found on the way: the compiler CACHES THE LINKED BINARY by
+  source hash, so a stale artifact can survive a source fix; and
+  `--as-needed` ignores WEAK undefined symbols, which silently demoted the
+  BLAS matmul to the portable loop (n=200: 14.4 s instead of 2.9 s) — a
+  5x regression no test caught, because the results were still correct.
+- **Measured performance baseline** (this device, `tools/bench_compare.sh`):
+  sum_array 10M 19.1 ms (C 10.1), primes 10M 495 ms (C 220), fib(45) 12.9 s
+  (C 9.6), pi 100M 779 ms (C 783 — parity). Build 144 ms (C 439, Rust
+  674); cold start 37 ms (C 33). `--unsafe` removes 13% of sum_array and
+  2.5% of primes, so checks are at most 13% of the integer-loop gap; the
+  remaining ~1.6x is NOT yet explained, and §4.5 of the roadmap defines
+  the experiment (compare optimized IR against C's) that will explain it.
+- **Where the safety cost actually is** (`--check-bce`): checks die when
+  the bound is provable in the same function (100% eliminated for a
+  constant-trip-count loop) and survive when the array length is a separate
+  loaded value (sum_array: 3 of 6 survive). The fix is to make the length
+  and the loop bound the SAME SSA value (the "reslicing" technique), which
+  needs no new IR.
+- **The performance gap is now MEASURED, not guessed** (IR comparison of
+  the optimized modules, `flintc --emit-llvm` vs `clang -O2 -S -emit-llvm`
+  on sum_array): C 52 instructions in main vs Flint 49 (Flint is
+  SMALLER), but C has 16 vector operations and Flint 0, and C has 2 icmp
+  vs Flint 4. So the gap is NOT code bloat: C auto-vectorizes the integer
+  reduction while Flint cannot, because C's out-of-bounds and signed
+  overflow are UB (assumed away) whereas Flint's are defined traps, and
+  because the array length is a runtime value unrelated to the loop bound.
+  The f64 benchmark is at parity exactly because clang will not
+  reassociate an FP reduction either -- the gap appears precisely where
+  C's UB buys it more. Consequence: the fix is ANALYSIS (range analysis to
+  drop the overflow check; same-value bounds so the bounds check folds),
+  after which LLVM's own vectorizer can vectorize -- Flint does not need a
+  vectorizer of its own. This also disproved one of the roadmap's own
+  proposals ("inline the array accessors"): the IR shows the accessor's
+  fast path is ALREADY inlined.
+- **The roadmap's order** (measure -> recover -> unify -> safety -> type
+  system -> optimization -> size -> tooling -> ecosystem -> domains):
+  Phase 0 is measurement infrastructure (CI benchmarks + size attribution
+  + the safety dashboard) because two invisible regressions in this
+  assessment prove the gap. Phase 1 is the now-shipped link fix plus the
+  IR comparison. Phase 2 is a typed HIR — the precondition for range
+  analysis, escape analysis, capability types, and a non-drifting LSP.
+
+# Addendum (2026-10-20, deep-research pass) — the 2026 external landscape
+
+Sources consulted in the second research pass (all 2026 unless noted), for
+the comparison table and the sharpened plan. Claims from these are tagged
+[P] in `docs/LANGUAGE-ROADMAP.md`:
+
+- **Rust**: Polonius Alpha on nightly since 2026-08-04 (flow-sensitive
+  borrow checking; NLL "problem case #3" — conditional borrows — now
+  accepted; one known soundness issue remains; stabilization targeted for
+  late 2026). Rust for Linux is integral in the kernel (mainline drivers).
+- **Go**: 1.26 (Green Tea GC default, Swiss Tables maps, cgo −30 %, more
+  stack-allocated slice backing stores); 1.27 adds a portable, size-agnostic
+  `simd` package (AVX/AVX2/AVX-512, NEON, wasm) with emulated fallback
+  everywhere, explicitly designed to be readable by LLMs.
+- **Zig** 0.16: self-hosted x86 backend is the Debug default; incremental
+  compilation reached millisecond rebuilds by avoiding over-analysis and
+  making the dependency graph acyclic; still off by default (known bugs and
+  miscompiles).
+- **Swift** 6.2 (Approachable Concurrency: `Task.immediate`, isolated
+  `deinit`, WebAssembly, Android SDK preview); Swift 6 mode makes
+  data-race checking the default.
+- **TypeScript** 7 is the native Go port: 8-10x faster builds (vscode
+  89.11 s -> 8.74 s), type-checking "very nearly complete" (20,000 test
+  cases, 74 known gaps); TS 6.0 is the last JS-based release; `--strict`
+  becomes the default.
+- **Kotlin** K2 default (~40 % faster builds); **Java** JDK 25 LTS;
+  **C#** .NET 10 LTS with C# 14 (TIOBE language of the year).
+- **Domain-system precedents**: Reactant.jl (MLIR+XLA: 14.8-17.3 TF/s
+  GEMM, cuBLAS-level, but seconds to compile) vs JLIR (arXiv 2609.04585:
+  a Julia-native dialect IR, <1.5 ms transformation overhead, 87-96 % of
+  hand-written baselines, but 1.2 TF/s GEMM without tiling). MLIR's stated
+  drawback for dynamic languages: strong compile-time type requirements and
+  a low-level C++ extension model.
+- **Size attribution tooling**: Bloaty (compile-unit / symbol / section /
+  segment, with size diffs for CI), cargo-bloat (per crate), twiggy
+  (monomorphization), plus a pure-Rust equivalent that flags monomorphized
+  instantiations.
+- **C++26 safety**: core safety profiles (P3081R2) with "Pro.Bounds";
+  `std::span::at()` (P2821R5); `std::expected` in freestanding; saturation
+  arithmetic (P0543R3, shipped).
+- **LSP 3.18** (2026-04-06): inline completions, dynamic document
+  content, folding refresh, multi-range formatting, snippets in workspace
+  edits, code-action kind documentation, debug message kind. 3.17 (2022)
+  added inlay hints, semantic tokens, type hierarchies, the diagnostic PULL
+  model, notebook documents.
+- **Ecosystem size (2025-12/2026-01)**: npm 3.75 M, Go modules 2.16 M,
+  Maven 751 k, PyPI 706 k, PHP 431 k, crates.io 208 k. 9.8 trillion
+  downloads in 2025 (npm +65 % YoY, PyPI +51 % YoY).
+- **LSP vs grep for agents**: LSP cut tool-output tokens 31-34 % on a
+  149k-line TypeScript repo, with time roughly unchanged.
+
+Consequences already folded into the plan: SIMD via a portable stdlib layer
+(Go 1.27) rather than a Flint vectorizer; domains as a data table with a
+lightweight tier and one deep tier (Reactant vs JLIR); a fast compiler as
+the precondition for a good LSP (TypeScript 7); flow-sensitive region
+inference as the target for the ownership model (Polonius Alpha);
+`--print-size` shaped like Bloaty/cargo-bloat/twiggy; `--unsafe` framed as
+a C++26-style safety profile; the LSP's first features taken from LSP 3.17/3.18;
+and a curated (not mirrored) registry.
+
+# Addendum (2026-10-20, later) — Phase 0 measurement + two codegen defects
+
+- **Phase 0 measurement infrastructure (fdbf119, 660fab3, 26920a8).**
+  `flintc --print-size` now reports the artifact's own size attribution
+  (file bytes, section bytes, header bytes, .bss reserved, per-class symbol
+  attribution, sections, dynamic dependencies, objects offered to the
+  linker); `--print-size-json=PATH` writes it as JSON. Every number is read
+  from the artifact, and `tests/test_print_size.sh` checks the report is
+  TRUE against the file on disk. `tools/bench_gate.sh` is the measurement
+  gate: runtime > +3%, binary > +5%, compile time > +10% fails, baselines
+  are per machine (a baseline from another machine is refused rather than
+  silently compared), and timings use the minimum of N runs. CI runs the
+  size gate as a required step; the measurement job is advisory until a
+  per-runner baseline exists.
+- **DEFECT 1 (660fab3): invalid IR for fn-typed returns.** The default
+  terminator built its return value with `ConstantInt::get(retType, 0)` --
+  an integer constant with a POINTER type, because an `fn(...)` return type
+  is a pointer (M4). A valid program (`fn get() -> fn(i64) -> i64 { }`)
+  failed with an internal LLVM error ("ret i0 0") instead of compiling. The
+  terminator now uses the null value OF THE RETURN TYPE. **A new type can
+  invalidate code that predates it** -- the fix was to look for every use
+  of the return type, not just the new one.
+- **DEFECT 2 (fdbf119): copying a function value lost its fn type.**
+  `h = inc; g = h; g(5)` failed with "undefined function 'g'". Three
+  sites answered "is this binding a function value?" with three different
+  rules; the binding site used the one that predates named-function
+  values. There is now ONE predicate, `Symbol::isFunctionValue`.
+- **One error per program, codegen side (660fab3).** After a codegen
+  error the emitter kept going and LLVM's verifier printed a second
+  message about the compiler's internals. emitStmt/emitExpr now stop after
+  the first error, and `tests/test_one_error.sh` enforces it.
+- **Codegen diagnostics now carry a location (26920a8):**
+  `codegen: 9:12: cannot return a function value: ...`, matching the parse
+  errors, which always had one.
+
+# Addendum (2026-10-20, later still) — `--unsafe` implemented, and a diagnostic that was lying
+
+- **`--unsafe` now does what the spec says (ea9e312).** It previously
+  disabled ONLY the overflow checks: bounds checks could never be turned off,
+  so a system programmer who had proven an index in range had no way to say
+  so. Now it removes the overflow AND the bounds checks — the two
+  *performance* checks — while ownership, borrow/lease, escape, null and
+  divide-by-zero rules still apply. It is manual and terminal-only (no
+  domain, profile, package or tool can enable it), VISIBLE (every unsafe
+  build prints what is disabled and what still applies), and AUDITABLE (the
+  artifact carries `flint:safety=unsafe` or `flint:safety=safe`, kept alive
+  through `--gc-sections` via `llvm.used`, so an unsafe binary identifies
+  itself later). New gate: `tests/test_unsafe_flag.sh` (6 checks).
+- **`--check-bce` was SILENT on a cache hit (ea9e312).** The module cache
+  stores the ALREADY-OPTIMIZED module, so on a cache hit the "checks
+  emitted" count was gone and the diagnostic printed nothing. A diagnostic
+  whose output depends on cache state is not a diagnostic: the flag now
+  bypasses the cache and reports the same numbers every time. (Found by
+  writing the unsafe gate, which compiled the same file twice.)
+
+# Addendum (2026-10-20, Phase 2 starts) — research, red team, and the first slice
+
+- **Phase 2 was REVISED before any code was written** (STATE.md §6.10 has
+  the full record). The first draft said "add a typed HIR/MIR"; the
+  research and a red-team pass found it too vague to start: Flint has no
+  type checker (types are guessed in ~6 places), the self-host pipeline
+  cannot express generics at all (0 `typeParams` in stage2) so it cannot
+  consume such an HIR, the LSP is in Rust while the compiler is in C++
+  (Rust's own answer was shared libraries + an `Interner` trait, after
+  four years of "unextractable" parser code), checks are CODE today and
+  must become DATA to be removable per profile, and a full SSA MIR is a
+  backend rewrite. The revised plan is staged: 2A a real type checker →
+  2A.1 facts → 2B checks as IR operations → 2C analyses → 2D regions.
+- **Slice 2A.1 landed (42b3a04): types carry facts.** An array value's
+  EXACT length becomes an SSA value on the binding: a constant for a
+  literal initializer, the `flint_array_alloc` argument otherwise. The
+  bounds check then compares against the same value the user's loop uses,
+  and LLVM folds it away — a literal array goes from 4 surviving checks
+  to 0, and a runtime array via `arr[i]` produces 0 bounds-check calls
+  in the final IR. Safety: the fact is used only where its value
+  DOMINATES (DominatorTree check), the R2 BCE-lite proof is implemented
+  for real (a literal index into a literal-length array), the fact is
+  cleared on assignment, and an out-of-range literal index still traps
+  (`tests/test_bounds_safety.sh`).
+- **What the slice does NOT do (measured):** the benchmark `sum_array`
+  uses the BUILTIN `flint_array_get(arr, i)`, whose check is emitted at
+  the call site against the loaded length, and the runtime's own check
+  still applies. Removing that needs RANGE analysis (step 2C) plus an
+  unchecked runtime variant. The 13 % still needs 2C.
+- **Dead ends recorded:** the `IndexExprAST::unchecked` flag existed for
+  years and was never set (a dead field claiming to implement BCE);
+  the `--check-bce` COUNT is confounded by LLVM cloning loops (the
+  "surviving" count can exceed the "emitted" one) — measure the final
+  IR and the runtime instead.
+
+# Addendum (2026-10-20, later) — the length fact reaches the array builtins
+
+- **The win (commit 2b45516)**: the length fact existed but never reached
+  the array ACCESSORS (the shared cores take values, not symbols). The AST
+  call site now looks the argument up and passes the fact along, so the
+  check compares the index against the same value the user's loop
+  compares against and LLVM folds it:
+  - sum_array 10M: **19.1 ms -> 12.0 ms (-37 %)**, the gap to C 1.89x ->
+    1.44x;
+  - primes 10M: 495 ms -> 451 ms (-9 %);
+  - bounds-check calls in sum_array's final IR: 3 -> 0.
+  - The safety direction is unchanged: an out-of-range access on a
+    runtime array still traps ("PANIC: index 5 out of bounds for length
+    3"), and the sum is exact (99999990000000).
+  - primes improves much less because its bound is not provable the same
+    way (`while i * i <= limit` does not give LLVM `i <= limit + 1`).
+    That is a RANGE-ANALYSIS limit (step 2C), not a length-fact limit.
+  - The measurement baseline was re-taken: the old one would have read
+    this improvement as a regression.
+
+- **The vectorization question, measured**: after the length fact reached
+  the array builtins, `sum_array`'s final IR has 0 bounds-check calls and
+  STILL 0 vector operations (C's has 16) -- the loop is unrolled 2x
+  instead. With the checks gone the blocker is LLVM's cost model and the
+  pointer's provenance, not what Flint emits. Numbers: safe 12.0 ms (1.44x
+  C), `--unsafe` 9.9 ms (1.19x C), C -O2 8.3 ms. Do NOT hand-write a
+  vectorizer (the roadmap rejects that); the next step is to see whether
+  LLVM's own vectorizer can be nudged, and otherwise to accept ~1.2x here.
+
+- **Step 2A.0 — the type audit (b75e4c7).** Flint has TWO inference
+  engines (the parser's `inferType` and the codegen's `exprFlintType` +
+  declaration ladder) and nothing compared them. `flintc --type-audit`
+  compares them at every declaration: an ANNOTATED declaration is a
+  contract (a disagreement is a bug), an INFERRED one is a guess (a
+  disagreement is drift). Measured over the corpus (123 files): **0
+  contract violations**, **135 inferred declarations with drift** — and the
+  drift has one shape: the parse-time engine answers i64 (its default)
+  where the codegen engine knows str or f64. The parse-time engine is the
+  weak one, and it is the one a future LSP or type checker would inherit.
+  Gate: `tests/test_type_audit.sh`.
+
+- **Step 2A — ONE inference engine, and three real bugs (`f0441df`).** The
+  two engines (the parser's `inferType` and the codegen's) are now ONE by
+  construction: the compiler derives each builtin's Flint type at
+  REGISTRATION and the parser reads that map, so a builtin's type cannot
+  drift; the parser also learned the shapes it was missing (a call to a
+  user function, a field access, float arithmetic); a declaration PRE-PASS
+  records the file's signatures so a forward reference resolves.
+  **Drift over the corpus (123 files): 178 -> 21, contracts 0.** The 21
+  left are forward references to functions whose return type is INFERRED
+  (single-pass parsing cannot know those).
+  **Three valid programs that failed to compile with an internal LLVM
+  error are now fixed**: a forward reference with an implicit return, the
+  same with an explicit return, and `fn f() { return "hi" }` (a return
+  type inferred from a RETURN STATEMENT — there was no path for it at
+  all). Fixture: `tests_manual/t_return_inference.fl`.
+  **The audit was silent on a cache hit** (the cached module skips
+  codegen, so no audit data) — the same trap as `--check-bce`; both now
+  bypass the cache.
+
+- **Step 2C — the loop-range analysis (a7c6e2b).** A recognised loop
+  hands the optimizer a RANGE fact about its induction variable as an LLVM
+  assumption: `i < n` / `i <= n` give the condition itself; `i * c <= n`
+  gives the DERIVED `i <= n` (LLVM cannot derive that itself — the
+  multiply may overflow in its reasoning — and the derivation is sound for
+  negative i too). Measured: `primes` goes from 7 bounds-check calls in
+  the final IR to 1. The fact is emitted only when the shape is recognised
+  exactly, the variable is not assigned before the access, its address is
+  not taken, and the access reads the variable itself; the gate pins the
+  dangerous case (a loop `while i <= limit` over an array of length
+  `limit`, where the fact must NOT excuse the check — it traps).
+- **Methodological finding: absolute timings on this device are not
+  comparable across runs** — the same C binary measured 11.5/15.4/23.7 ms
+  in three consecutive runs while the agent's runtime used ~46 % of a
+  core. Measure the RATIO to an interleaved control, and report IR/check
+  counts for anything the optimizer decides.
+
+- **Step 2D — capture-less function values may escape (57db1a4).** The rule
+  follows the box's lifetime: a closure that captures nothing has a
+  module-level constant box, a named function's value has one too, and such
+  a value may be returned, stored in a global, or handed to a callee that
+  keeps it. A closure that CAPTURES keeps its frame-bound box and is still
+  refused (pinned by tests_manual/t_capturing_escape.fl).
+- **Step 2B — the safety checks are ONE policy (37d9b8b).**
+  `Codegen::SafetyPolicy` decides what is inserted (bounds, overflow,
+  div-zero) and counts it exactly; the posture used to be two switches that
+  could disagree. `--unsafe` removes the two PERFORMANCE checks only. The
+  gate checks that the policy's counts equal the compiler's
+  pre-optimization IR count.
+- **Step 2E — the pipeline gap, measured and specified (66f85ae).** The
+  stage2 parser ALREADY accepts generic functions (it emits
+  `(fn idc (tparams T) ...)`); the stage3 emitter refuses them ("generics
+  need G6"); the parser does not accept traits at all (a method signature
+  has no body and the grammar has no form for it). The implementation is
+  specified in docs/PIPELINE-GENERICS.md (S-expression contract, the
+  by-parameter inference rule, the instantiation steps, the C++-compatible
+  mangled names so the differential gate compares the two frontends symbol
+  for symbol, the M3 trait-resolution rule, and the order of work). It is
+  NOT implemented — a half-implemented monomorphizer in a 7.6k-line Flint
+  emitter would break the bootstrap fixed point.
+- **Infrastructure lesson: the self-host artifacts in tmp are cleaned** by
+  the system, which made the differential gate fail twice for a reason that
+  had nothing to do with the code. The gate now falls back to the stable
+  artifacts in ~/flintwork/self, but only if they are NEWER than the
+  pipeline sources — stale artifacts produce FALSE divergences, which look
+  like a compiler bug and hide real ones.
+- **Step 2E.1 — the pipeline files are renamed to their stage roles
+  (16adde0).** `stage1/flint_lex.fl` -> `stage1/lexer.fl`,
+  `stage2/flint_parse.fl` -> `stage2/parser.fl`,
+  `stage3/flint_emit.fl` -> `stage3/emitter.fl`. 31 referencing files
+  updated, including the two `import "../stage1/..."` statements (the only
+  hard coupling in the tree), 17 gate/script files, CI, and BOTH SBOM
+  oracles (the tools gate compares the Python and the Rust output
+  byte-for-byte, so they have to move together). Two gates needed a real
+  fix, not a text swap: the parse-golden glob `stage2/p*.fl` collided with
+  the new `stage2/parser.fl` (now digit-anchored: `p[0-9]*.fl`), and the
+  errors catalog was one message behind the emitter (66f85ae added the G6
+  variant without regenerating docs/errors.md). The bootstrap gate A/B/C
+  passes with a byte-identical fixed point.
+- **Step 2E.2 — the monomorphizer (the pipeline compiles generics).**
+  The emitter now turns a generic function into one instance per type
+  argument tuple, and the instance names are the C++ compiler's own
+  (`idc.i64`, `idc.f64`, `idc.str`, `@"idc.s:Inner"`, `pair.f64.str`) --
+  verified symbol for symbol against the C++ IR, not just output for
+  output. The mechanism, in the emitter's own idiom: a template is
+  registered in a new table (`ETPLMAP`) with its type-parameter NAMES and
+  its parameters' type WORDS; a call infers the type arguments by the
+  by-parameter rule (the C++ compiler's rule, so the two frontends agree);
+  the instance is synthesized as text, registered in the signature table
+  BEFORE its body is emitted (the C++ compiler's recursive-generic bug),
+  and emitted after the main sweep -- the same shape as the lambda
+  mechanism, with a TYPE ENVIRONMENT instead of capture slots. The
+  environment is the point: a textual substitution over the body would
+  also rewrite a string literal or a variable spelled `T`.
+  Four bugs, all found by the first end-to-end run and all fixed:
+  (1) the template spans were read from the swapped `ESRC` during the
+  instance drain (fixed with a dedicated `ESRC0`); (2) the argument
+  scratch was global, so a NESTED generic call clobbered the outer call's
+  arguments (fixed with a per-call window, `argbase`); (3) `main` ending
+  with a void expression emitted `ret i64 0` in an `i32` function --
+  PRE-EXISTING, and the differential corpus had dodged it by ending
+  every main with `0`; (4) a struct-typed fall-through return emitted
+  `ret {i64} 0` instead of `zeroinitializer` -- also pre-existing. One
+  deliberate restriction: a generic call must pass every argument, because
+  the C++ compiler does not fill a generic's defaults either.
+- **The lesson of 2E.2: the two frontends are the oracle for each
+  other.** Every disagreement found here (the missing arguments, the
+  un-inferrable type parameter) was a case where the pipeline would have
+  been MORE permissive than the C++ compiler. The pipeline is the second
+  implementation, so "the C++ compiler accepts/rejects this" is the
+  specification; a divergence in either direction is a defect.
+- **Step 2E.3/2E.4 — the trait form and its resolution.** The pipeline
+  now compiles trait programs (the C++ compiler is the oracle; the
+  differential gate is 13/13 with `tests/differential/t_trait.fl`).
+  A trait carries SIGNATURES only — the parameter and return types are
+  parsed and then dropped, exactly as the C++ does (`if (match(COLON))
+  parseType();` — signatures only) — and the parser emits
+  `(trait NAME ( (method arity) ... ))`. `trait` is a contextual keyword
+  (an identifier to the lexer), the same as in the C++ compiler. In the
+  emitter a trait emits no IR; it only records the method names, so a
+  call to an unimplemented one can say "no type in scope implements
+  'm'". A method call on a user type resolves by NAME + ARITY: the
+  implementation's first parameter is the receiver, so the
+  implementation must take exactly one more parameter than the call has
+  arguments, and the receiver is converted to that parameter's type.
+  LIMITATION (recorded): the pipeline's function table holds ONE entry
+  per name, so two implementations of the same method name cannot
+  coexist (the C++ keeps a multimap and filters on the receiver's
+  type). The fix is a table change, not an algorithm change.
+- **The lesson of 2E.3: a contextual keyword is not a keyword.** The
+  parser's first attempt failed in a confusing way — the trait text was
+  mis-parsed as a top-level `fn-decl`, and the error pointed at the
+  `{`. The cause was a token consumed twice (the name), not the
+  grammar. The diagnostic that helped: printing the branch taken.
+- **The 2026-10-21 research pass, turned into a plan (STATE.md §11).**
+  Four idea-clusters came in from outside the repo — a C/C++ → Flint
+  transpiler (c2rust-shaped), Rust-like diagnostics, the four "Flint
+  Twist" selling points, and two positioning questions — and the plan
+  maps every one of them onto what the repository already has, so that
+  nothing is left as an aspiration. The decisions recorded there:
+  - *Positioning*: Flint is a **systems language with an
+    application-language workflow** — a systems language by measurement
+    (12.0 ms vs C's 8.3 ms on sum_array, 4,536 B stripped hello, 0
+    bounds-check calls in the final IR) and an application language by
+    workflow (one binary, no build file, compile-and-run through the ORC
+    JIT in ~95 ms). The compromise to protect: the safety machinery may
+    never cost more than the measurement says it does.
+  - *Memory safety*: **leases + a runtime backstop** — deliberately
+    neither ARC (it would erode the 1.44× gap to C everywhere) nor a GC
+    (it would put a pause-latency and a footprint floor under the
+    embedded story and the 4,536 B hello). One ownership model, never
+    two.
+  - *The transpiler*: Clang LibTooling for the C++ front (never a
+    hand-written C++ parser), then pointer classification, then
+    ownership inference, then idiomatic Flint source so LLVM's O2 does
+    the "peak optimization". The valuable shippable subset is **C, not
+    C++**, and a transpiler that **refuses** what it cannot prove — the
+    same posture as the compiler's own one-error-per-input contract. It
+    needs the `[T]` containers (M7) as its safe target and an
+    `unsafe {}` block to say "I could not prove this".
+  - *Diagnostics*: the gap is precisely a single `line:col` and a free
+    string. The work: a Span (start+end+file id) on every AST node, a
+    structured Diagnostic (code, severity, title, labels, suggestion),
+    codes derived from the existing 273-message catalogue, a renderer
+    (LLVM's for the C++ compiler, a small one in the pipeline's idiom),
+    Levenshtein suggestions, and error poisoning. It is cheap because
+    the positions and the catalogue already exist; it is high-leverage
+    because the CLI, the LSP and the transpiler all consume the same
+    structure — the LSP currently *scrapes stderr text* and loses the
+    codegen positions because the text has no structure.
+  - *The four selling points*: instant ignition (needs the incremental
+    story and a measured budget), embedded/edge (needs the `[T]`
+    containers, a freestanding build, and the arena story to reach the
+    core language), data-streaming (needs async and the capability model
+    BEFORE any stream syntax), and interop (needs native `.c` import
+    and FFI contract checking — the lease model ends at the FFI
+    boundary). The order in each case is the type system first, the
+    syntax second.
+  - *What is not in the plan*: a vectorizer (LLVM does it), a second
+    ownership system, a semantics-changing dialect framework, and a
+    hand-written C++ parser.
+- **The peer-comparison plan (STATE.md §12): how Flint goes from 6.1/10
+  upward.** The comparison (the same 10 categories and the same
+  weighting as §28) puts Flint at **6.1/10** — at the Zig/TypeScript/
+  Python level and BELOW C++ (6.6), despite beating C++ on memory safety
+  (78 vs 15) and binary size (92 vs 70) and losing on runtime (70 vs
+  100), ecosystem (12 vs 90) and DX (66 vs 55). Rust 8.6, Swift 7.6,
+  Go 7.3, Kotlin 6.9, C++ 6.6, Zig 6.1, TypeScript 6.1, Python 6.0.
+  The one sentence: **Flint's language is competitive; Flint's adoption
+  is not** — and the two multipliers (ecosystem 10 %, tooling 6 %) are
+  what hold the total at 6.1.
+  - **The arithmetic (the part that decides the order):** weighted, a
+    point of ecosystem score is worth +4.8, the capability model +3.3,
+    the type system +3.0, the diagnostics+LSP together +3.8, the region
+    work +2.1, the range analysis +2.3. The biggest line is the one
+    that CANNOT be worked on directly — the ecosystem is the *output*
+    of what other people do with the language.
+  - **The adoption ladder (why the order is not arbitrary):** type
+    system + capability model → diagnostics + compiler-backed LSP →
+    package manager + registry → the ecosystem score moves. It is the
+    §28 weighting's own logic ("ecosystem follows the rest; a package
+    manager without a sound compiler and a fast compiler just distributes
+    bugs").
+  - **Per category, what moves the number and what would falsify it:**
+    runtime 70→85 (the range analysis for `i*i <= limit`; falsifier:
+    sum_array must not regress from 12.0 ms), memory safety 78→92 (the
+    regions, the capturing closures, the FFI contracts — the FFI one is
+    the cheapest and the most valuable, because the lease model ENDS at
+    the FFI boundary), type system 55→80 (async, assoc types, `dyn`,
+    nullable, operator overloading — each feature must come with the
+    semantics the pipeline can also implement, which the monomorphizer
+    and the trait resolution just proved), maturity 76→90 (the rest of
+    D5, the never-compared JIT path, the C++ query mode), concurrency
+    42→75 (the capability model — the single highest-value engineerable
+    line), LSP 42→80 (the nine missing builtins, the diagnostic
+    positions, the import false all-clear, then the compiler-backed
+    server), DX 66→85 (the diagnostics, the `flt_` naming, the docs),
+    ecosystem 12→60 (the first milestone is NOT a package manager — it
+    is the binary registry that already exists, made to work and
+    documented), cross-platform 58→80 (actually run the battery on
+    Windows/macOS in CI — claimed but never executed from this device),
+    binary size 92→96 (the 72 MB of arenas, the monolithic flint_std.o).
+  - **Three strengths to protect, with the thing that would erode each:**
+    the self-hosting pipeline with a byte-identical fixed point (Rust,
+    Swift and Go do not self-host; Zig's self-hosted backend is still in
+    development) — every pipeline change must keep Phase C byte-identical
+    and must not gain a dependency the C++ compiler lacks; the binary
+    size (4,536 B vs Rust's 339,656 B measured here) — the ecosystem and
+    transpiler work must not add a runtime dependency or a GC; the
+    deterministic memory model — the capability model must not become a
+    second ownership system.
+  - **The targets:** 6.6 (the diagnostics + the LSP's cheap items) =
+    C++ today; 7.3 (the type system + the capability model) = Go today;
+    8.0 (the compiler-backed LSP + the runtime work + the cross-platform
+    runs); 8.6+ (the package manager, the registry, the resolver) = Rust
+    today — and that last row is not engineerable by us alone: it needs
+    people writing Flint programs.
+
+
+---
+
+## The 2026-10-21 research pass + peer-comparison plan (full text)
+
+This is the DETAIL that STATE.md §11 and §12 now point at. Kept here so
+STATE.md stays the short entry point.
+
+## 11. The plan from the 2026-10-21 research pass (every idea, one place)
+
+This section takes the four idea-clusters that came out of the research
+(C→Flint transpilation, Rust-like diagnostics, the "Flint Twist" selling
+points, and the positioning question) and turns each into work items
+that are grounded in **what the repository actually has today**. Nothing
+here is aspirational: every "has" line is a file or a measurement, every
+"needs" line is a gap with a named owner in the phase list.
+
+### 11.0 The positioning answer (the question the research asked)
+
+> *Is Flint a high-performance systems language (like C/Rust) or a fast,
+> productive application language (like Go/TypeScript)?*
+
+**Both, in that order — a systems language with an application-language
+workflow.** The evidence is the whole point:
+
+- it is a systems language by *measurement*: sum_array 10M is 12.0 ms
+  against C's 8.3 ms (1.44×) with **0 bounds-check calls** in the final
+  IR (§28), a stripped hello of **4,536 B** against C's 4,368 B, and a
+  deterministic memory model (leases + a runtime backstop);
+- it has an application-language *workflow*: one binary, no build file,
+  `./flintc main.fl` compiles **and runs** through the ORC JIT
+  (`src/main.cpp:13791`), and the compile takes ~95 ms
+  (`tools/bench_baseline.json`).
+
+A systems language that needed a build system would lose the "instant
+ignition" identity; an application language that could not be measured
+against C would lose the credibility. The compromise to protect: **the
+safety machinery may never cost more than the measurement says it does**
+(§6.2: the checks are 13 % of the integer-loop gap at most).
+
+### 11.1 The memory-safety answer (the other question the research asked)
+
+> *What strategy does the language use — a borrow checker, ARC, or a GC?*
+
+**Leases + a runtime backstop** — the Rust-like answer, deliberately
+neither ARC nor a GC:
+
+- **not ARC**: ARC's cost is a refcount on every pointer, and Flint's
+  measured 1.44× gap to C is a *runtime-performance* claim that ARC
+  would erode everywhere;
+- **not a GC**: a GC would put a pause-latency and a footprint floor
+  under the embedded/edge story (§11.3) and under the 4,536 B hello;
+- **leases**: the ownership is *visible in the source* (`moved`,
+  `borrowCount` — `src/main.cpp:2463-2464`), so the compiler can prove
+  the use-after-free away at compile time, and the runtime backstop
+  catches what the source does not express (FFI, the runtime's own
+  structures).
+
+This is the decision the whole safety story rests on, and §6.11 records
+it as "leases + regions, not Rust's borrow checker" — **one** ownership
+model, never two.
+
+### 11.2 The C/C++ → Flint transpiler (the c2rust-shaped project)
+
+**The shape:** `[C/C++ source] → (Clang LibTooling) → [Clang AST] →
+(translation engine: pointer classification + ownership inference) →
+[Flint source] → (flintc) → [LLVM IR] → [optimized binary]`.
+
+**The parts, and what each one needs from Flint first:**
+
+| part | what it needs from Flint | Flint's state |
+|---|---|---|
+| parse C/C++ | nothing — use Clang LibTooling (or Tree-sitter) | n/a — **do not write a C++ parser** ✓ |
+| classify pointers | a target type model: safe reference, bounded array, raw | **needs** the `[T]` container work (M7, deferred) — a transpiler without a bounded array type has nothing safe to map an array onto |
+| infer ownership | the lease model, expressed as an analysis the transpiler can *emit* | leases exist ✓; the *region* work (2D.3) is what would make the inference decidable |
+| escape hatch | an `unsafe` region in the source | `--unsafe` (a build flag ✓) exists; `unsafe {}` blocks are a *decision* (the decision log ✓) — the transpiler needs the **block** form |
+| "peak optimization" | clean LLVM IR + idiomatic output | the compiler already emits LLVM IR ✓ and runs LLVM O2 in-process (`src/main.cpp:14517`) ✓ — so the *optimization* half is free once the *source* is idiomatic ✓ |
+| idiomatic loops | iterators that let the length fact remove the bounds checks | the length fact exists (2A.1 ✓) — the transpiler must emit `for i in 0..len(a)`-shaped loops, not `for i in 0..n` with a manual check ✓ |
+
+**The order (this is a Phase 8 project, not a Phase 2 one):**
+
+1. **the target type model** — the `[T]` containers (M7) and the
+   nullable story (a `?T` or a result type) — without them the
+   transpiler has no safe target ✓;
+2. **an `unsafe {}` block in the source** (a small language change ✓)
+   so the transpiler can say "I could not prove this" instead of
+   failing ✓;
+3. **a Clang LibTooling front-end** that emits Flint source for the
+   *easy* subset (plain functions, structs, loops, no pointers) — a
+   **subset transpiler that refuses what it cannot prove** ✓, the same
+   posture as the compiler's own "one error per input" contract ✓;
+4. **the pointer/ownership passes** on top;
+5. **a differential gate**: the transpiled program and the original must
+   agree on the same corpus — the differential gate already exists ✓
+   (`tests/test_differential.sh`) and is the right oracle ✓.
+
+**The honest scope note:** a full C++ → Flint transpiler is a
+multi-year project (c2rust is a research effort ✓). The *valuable,
+shippable* subset is: **C** (not C++), no templates, no operator
+overloading, no exceptions — and a transpiler that **refuses** the rest
+loudly ✓. A tool that quietly mistranslates is worse than no tool ✓
+(this project's own rule, §3.1 ✓).
+
+### 11.3 The four "Flint Twist" selling points, made concrete
+
+**1. Instant ignition (instant compilation, zero config).**
+*Has:* one binary, no build file ✓, compile-and-run via the ORC JIT ✓
+(`src/main.cpp:13791`), ~95 ms for the benchmark program ✓, and a
+`--fast` path ✓.
+*Needs:* (a) the **incremental** story — the compiler caches whole
+modules by source hash ✓ and has no per-file invalidation ✓ (§3.4
+weakness 3 ✓); (b) a *measured* cold-start budget kept in CI ✓
+(`tools/bench_gate.sh` ✓ — the compile time is already a gate ✓ ✓);
+(c) the JIT path and the AOT path must produce the **same** behaviour
+✓ — the differential gate compares the AOT pipeline today ✓, and the
+JIT is the untested twin ✗.
+
+**2. Embedded & edge (micro-footprint, no GC).**
+*Has:* 4,536 B stripped hello ✓, 24 B of `.bss` ✓, one dependency (libc)
+✓, a deterministic memory model ✓, and an arena allocator in the AI
+runtime ✓ (`runtime/flint_ai.c:71`).
+*Needs:* (a) the `[T]` containers (M7 ✓ — deferred by maintainer
+decision ✓, and this is the strongest argument to revisit it ✓);
+(b) a **no-stdlib / freestanding** build target ✓ (the runtime is
+currently mandatory ✓); (c) the arena story must reach the *core*
+language, not only the AI runtime ✓; (d) the cross-platform score (58
+✓) — "runs on the bare metal" is a claim that needs a target ✓.
+
+**3. Data-streaming & event-driven.**
+*Has:* threads and channels ✓ (§28's concurrency 42 ✓).
+*Needs:* (a) **async/await in the type system** (the type system is 55
+✓ — no async, no associated types, no `dyn` ✓) — this is the single
+biggest language gap for this pitch ✓; (b) the **capability model**
+(the concurrency score is 42 ✓ — "no static race freedom" ✓) — a
+first-class `Send`/`Sync`-equivalent ✓ (§4.5 ✓); (c) a *stream*
+syntax is a *syntax* question, and syntax without the type system behind
+it is a trap ✓ — the order is (a) then (b) then (c) ✓.
+
+**4. Flawless interoperability (the "glue" for legacy code).**
+*Has:* `extern "C" { ... }` blocks ✓ (`src/main.cpp:3164` ✓), the
+runtime's C ABI ✓, the Rust stdlib linking in ✓, and the differential
+gate's `-lsqlite3 -lcurl` link line ✓ (a real FFI surface ✓).
+*Needs:* (a) **native `.c`/`.cpp` import** — the user drops a C file in
+and Flint compiles and links it ✓ (today the C file must be compiled
+separately ✓ and the build.sh links it ✓ — the *user* has to do that
+✗); (b) a **Python FFI** story ✓ (the runtime has `flint_py_*` ✓); (c)
+the FFI **contract** checking (the memory safety is 78 ✓ and the gap
+is named in §28: "FFI contracts unchecked" ✓) — an FFI boundary is
+where the lease model ends ✓, so it needs its own gate ✓.
+
+### 11.4 The diagnostics overhaul (Rust-like errors)
+
+**The target:** `error[E0032]: mismatched types` with a source snippet,
+a caret, a label and a `help:` — not `codegen: 42:20: <sentence>`.
+
+**The gap today, exactly:**
+
+| piece | Flint today | the target |
+|---|---|---|
+| positions | a single `line:col` (`cgCurLine/cgCurCol`, `src/main.cpp:5369`) ✓ | a **span** (start *and* end, with a file id) |
+| structure | a string message ✓ | a `Diagnostic` with a code, a severity, a title, labels, a suggestion |
+| labels | none ✓ | several labelled spans (the primary + the secondary) |
+| codes | none ✓ — 139 emitter + 134 C++ messages, all free text ✓ | stable codes (`E0032`) so docs and tools can link to them |
+| suggestions | none ✓ | "did you mean …?" (Levenshtein) + a `help:` with a fix |
+| cascades | the compiler reports several errors ✓ | **poisoning**: one root error, the rest suppressed |
+| rendering | a bare line ✓ | a snippet with carets and a `|` gutter |
+
+**The work, in order (each step is small and gate-able):**
+
+1. **a `Span` in the AST** — the C++ compiler has *one* `SourceLoc`-ish
+   hit today ✓; the AST nodes need start+end ✓. The pipeline's parser
+   already tracks line/col per token ✓ (`stage1/lexer.fl` keeps
+   `TLINE`/`TCOL` ✓), so the *self-host* side has a head start ✓.
+2. **a structured diagnostic type + a code per message** — the 273
+   catalogued messages become the codes ✓ (`docs/errors.md` is already
+   the catalogue ✓, and `tools/errors_cpp.py` generates it ✓ → the code
+   can be *derived* from the catalogue ✓).
+3. **the renderer** — LLVM's own diagnostic printer is available to the
+   C++ compiler ✓ (clang's `DiagnosticBuilder` ✓); the *pipeline*
+   (Flint) needs its own text renderer ✓ (the emitter prints to stdout
+   ✓ — a small renderer in the pipeline's idiom ✓, ~150 lines ✓).
+4. **the suggestions** — Levenshtein over the visible names (the
+   compiler already has the scope tables ✓ — `PDECL`/`PTOP` in the
+   pipeline ✓, `symTable` in the C++ ✓).
+5. **the poisoning** — the "one error per input" contract ✓ already
+   exists for the *pipeline* ✓; generalizing it to "one *root* error
+   per input" is the C++ compiler's missing half ✓.
+
+**Why this is high-leverage and cheap:** the compiler already has the
+positions and the catalogue ✓; what is missing is the *structure* and
+the *renderer* ✓. The LSP (tooling 42 ✓) consumes exactly this data ✓ —
+one diagnostic structure serves the CLI, the LSP and the docs ✓.
+
+### 11.5 What the pieces share (why this is one plan, not four)
+
+- the **structured diagnostics** (§11.4) are the *interface* the LSP
+  needs ✓ (the LSP currently scrapes stderr text ✓ — `lsp/src/diagnostics.rs:75-107`
+  ✓ — and it loses the codegen positions ✓ because the text has no
+  structure ✓);
+- the **transpiler** (§11.2) needs the same structured diagnostics to
+  say "I could not prove this pointer safe" ✓, in the same format ✓;
+- the **type model** the transpiler targets (`[T]`, nullable) is the
+  same type model the diagnostics have to explain ✓ (§11.4 step 1 ✓);
+- the **C interop** story (§11.3.4) is the *other half* of the
+  transpiler: import the C you cannot translate ✓, translate the C you
+  can ✓.
+
+### 11.6 The order, and the honest priority
+
+```
+NOW   §11.4 step 1+2   spans + structured diagnostics + codes   (cheap, unblocks the LSP)
+NEXT  §11.3.1         the incremental story (keeps the instant identity honest)
+      §11.3.4a        native .c import (the cheapest "glue" win)
+      §11.2 step 1    the [T] containers (M7 revisited — the transpiler's target)
+      §11.3.2         a freestanding/no-stdlib build (the edge story)
+LATER §11.4 step 3-5  the renderer, the suggestions, the poisoning
+      §11.2 step 2-3  unsafe{} blocks, then the C subset transpiler
+      §11.3.3         async + capabilities (the type system's turn)
+      §11.2 step 4-5  the pointer/ownership passes + the differential gate
+```
+
+**What is explicitly NOT in this plan** (and why): a vectorizer (the
+roadmap rejects it ✓ — LLVM does it ✓), a second ownership system ✓
+(§6.11 ✓), a semantics-changing dialect framework ✓ (§6.11 ✓), and
+hand-written C++ parsing ✓ (Clang exists ✓).
+
+---
+
+
+## 12. The peer-comparison plan (how Flint goes from 6.1/10 upward)
+
+§11 planned the *work*. This section plans the *score*: the peer
+comparison (the same 10 categories, the same weighting as §28) says
+Flint is **6.1/10** — at the Zig/TypeScript/Python level, and **below
+C++ (6.6)**, despite beating C++ on safety (78 vs 15) and binary size
+(92 vs 70) and losing to it on runtime (70 vs 100), ecosystem (90 vs
+12) and DX (55 vs 66).
+
+**The baseline, as measured (2026-10-21; the peer scores are an
+assessment, Flint's are measurements):**
+
+| language (version) | runtime | mem-safety | types | maturity | ecosystem | concurrency | bin-size | DX | LSP | **weighted** |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Rust 1.99.1 | 85 | 95 | 90 | 90 | 95 | 88 | 35 | 85 | 90 | **8.6** |
+| Swift 6.3 | 75 | 80 | 85 | 85 | 70 | 85 | 45 | 75 | 75 | **7.6** |
+| Go 1.27.3 | 70 | 55 | 60 | 85 | 85 | 75 | 60 | 90 | 80 | **7.3** |
+| Kotlin 2.4 | 55 | 75 | 70 | 80 | 85 | 60 | 40 | 80 | 60 | **6.9** |
+| C++ (clang 21) | 100 | 15 | 65 | 90 | 90 | 25 | 70 | 55 | 75 | **6.6** |
+| Zig 0.17.0 | 90 | 70 | 65 | 45 | 35 | 40 | 80 | 55 | 45 | **6.1** |
+| TypeScript | 30 | 55 | 55 | 85 | 95 | 40 | 30 | 85 | 90 | **6.1** |
+| Python | 25 | 60 | 50 | 85 | 95 | 40 | 30 | 90 | 70 | **6.0** |
+| **Flint** | 70 | 78 | 55 | 76 | 12 | 42 | 92 | 66 | 42 | **6.1** |
+
+**The one sentence:** Flint's *language* is competitive (it beats C++ on
+safety, ties it on binary size, and is within 1.44× on integer loops);
+Flint's *adoption* is not (ecosystem 12, tooling 42), and the two
+multipliers — 10 % and 6 % of the weight — are exactly what holds the
+total at 6.1.
+
+### 12.1 The arithmetic: where a point of work actually pays
+
+The weighting (runtime 15, memory safety 15, type system 12, maturity
+12, ecosystem 10, concurrency 10, binary size 8, DX 8, LSP 6,
+cross-platform 4) turns each category into a **price per point of
+score**:
+
+| category | now | realistic target | points of score | what it costs |
+|---|---|---|---|---|
+| **ecosystem** | 12 | 60 | **+4.8** | a package manager, a registry, a resolver, a lockfile — §4.6 — but it *follows* the rest (§28: "a package manager without a sound compiler and a fast compiler just distributes bugs") |
+| **concurrency safety** | 42 | 75 | **+3.3** | the capability model (Send/Sync-equivalent) — §4.5 — plus async in the type system |
+| **type system** | 55 | 80 | **+3.0** | async, associated types, `dyn`, nullable types, operator overloading — §4.8 |
+| **memory safety** | 78 | 92 | **+2.1** | the precise regions and the FFI contracts — §4.4 |
+| **LSP/tooling** | 42 | 80 | **+2.3** | the compiler-backed LSP, rename, refactor, incremental analysis — §4.7 |
+| **runtime performance** | 70 | 85 | **+2.3** | the range analysis that removes the last checks — §4.3 (the 1.44× gap) |
+| **developer experience** | 66 | 85 | **+1.5** | the naming inconsistencies, the docs, the error messages — §11.4 |
+| **compiler maturity** | 76 | 90 | **+1.7** | the two-frontends drift (D5 — now much smaller ✓), the untested platforms |
+| **cross-platform** | 58 | 80 | **+0.9** | the untested Windows/macOS runs, the freestanding target — §11.3.2 |
+| **binary size** | 92 | 96 | **+0.3** | the 72 MB of arenas in library-heavy programs — §6.3 |
+
+**Read the table twice.** The biggest single line is the ecosystem
+(+4.8) and it is the one that *cannot be worked on directly* — it is
+the sum of what other people do with the language ✓. The three
+highest-value *engineerable* lines are the **capability model**
+(+3.3), the **type system** (+3.0) and the **diagnostics/LSP**
+(+2.3 + +1.5 = +3.8 together ✓) — and all three are the same work seen
+from three sides ✓ (§11.4 ✓, §11.5 ✓).
+
+### 12.2 The adoption ladder (the order that is not arbitrary)
+
+```
+  type system + capability model  ──►  can a team write safe concurrent code?
+        │                                    (concurrency 42, types 55)
+        ▼
+  diagnostics + compiler-backed LSP ──►  can a team SEE the code they write?
+        │                                    (LSP 42, DX 66)
+        ▼
+  package manager + registry        ──►  can a team share what they wrote?
+        │                                    (ecosystem 12)
+        ▼
+  ecosystem score moves              ──►  6.1 -> 7.x
+```
+
+The ladder is not a preference — it is the §28 weighting's own logic
+("ecosystem follows the rest") ✓. A package manager that ships a
+language with a line-scanning LSP and no static race freedom would
+distribute the *problems* ✓.
+
+### 12.3 The per-category plan (what moves each number)
+
+**Runtime performance 70 → 85 (§4.3, §6.2).**
+The remaining gap is *integer-specific* (the f64 loop is at C parity
+✓) and the remaining checks need **range analysis** — `primes`'s
+`i*i <= limit` does not give LLVM `i <= limit+1` ✓. The 2C slice
+(`llvm.assume`, with its soundness conditions) exists ✓; the next piece
+is the analysis over the loop's induction variable ✓. *Falsifier:*
+`sum_array` must not regress from 12.0 ms ✓ (the bench gate ✓).
+
+**Memory safety 78 → 92 (§4.4).**
+The named gaps: no precise regions ✓, closures that capture cannot
+escape ✓ (2D.2 ✓), FFI contracts unchecked ✓. The FFI one is the
+cheapest and the most valuable — it is where the lease model *ends* ✓,
+so it needs its own gate (the same shape as `tests/test_bounds_safety.sh`
+✓). *Falsifier:* the safety gates must stay green ✓.
+
+**Type system 55 → 80 (§4.8).**
+async/await ✓, associated types ✓, `dyn` ✓, nullable types ✓,
+operator overloading ✓. The rule that keeps this honest: **each
+feature must come with the semantics the pipeline can also implement**
+✓ (the monomorphizer and the trait resolution just proved the
+discipline ✓ — the C++ compiler is the oracle ✓ and the differential
+gate is the check ✓). The *ordering* rule from §11.3.3: the type system
+before any stream syntax ✓.
+
+**Compiler maturity 76 → 90.**
+D5 shrank this session (the pipeline now compiles generics and traits
+✓, with the C++ compiler's own symbol names ✓) ✓. What is left: the
+remaining frontends' drift (`::<T>` ✓, the fn-value surface ✓, the
+enum equality ✓), the **JIT path** (never compared against the AOT
+path ✓ — a real hole ✓), and the C++ query mode (§11 ✓) that would
+make the drift *impossible* rather than *detected* ✓.
+
+**Concurrency safety 42 → 75 (§4.5).**
+Threads and channels exist ✓; what does not exist is **static race
+freedom** ✓. The plan: a capability model (a `Send`/`Sync` equivalent
+✓) on top of the lease model ✓, then async ✓, then the runtime's
+channel implementation checked against it ✓. *This is the single
+highest-value engineerable line in the table (+3.3) ✓.*
+
+**LSP/tooling 42 → 80 (§4.7, §11.4).**
+The three cheap items the review found ✓: the nine missing builtins
+(`print` among them ✓), the codegen diagnostic positions ✓, the import
+diagnostic (a false all-clear ✓). Then the real fix: **serve the LSP
+from the compiler's own semantic model** ✓ — which needs the structured
+diagnostics (§11.4 ✓) and the type checker (2A ✓). The
+TypeScript-7 precedent applies: make the *checker* fast, not the
+server ✓.
+
+**Developer experience 66 → 85.**
+The one-error-per-input contract already exists ✓ (and the pipeline
+extends it ✓); the diagnostics overhaul (§11.4 ✓) is the biggest item
+✓; then the `flt_` naming inconsistencies ✓, the docs ✓, and the
+tutorial ✓.
+
+**Ecosystem 12 → 60 (§4.6).**
+Not engineerable directly ✓ — it is the *output* of the ladder ✓. The
+engineering is the *infrastructure*: a package manager, a registry, a
+resolver, a lockfile, signing, an audit trail ✓ (§4.6 ✓) and the
+"binary registry" that already exists ✓. The first milestone is
+**not** a package manager — it is a *binary registry that works* ✓
+(the repository already has one ✓) and the documentation of the
+publishing contract ✓.
+
+**Cross-platform 58 → 80.**
+The honest state: Linux/Android verified here ✓, Windows/macOS
+*claimed but never executed from this device* ✓. The plan: run the
+gate battery on the other two platforms in CI ✓ (the workflows exist ✓
+— they have never run here ✓), and the freestanding/no-stdlib target
+(§11.3.2 ✓) for the embedded claim ✓.
+
+**Binary size 92 → 96.**
+Already excellent ✓ (4,536 B ✓). The remaining 72 MB of arenas in
+library-heavy programs ✓ (§6.3 ✓) and the monolithic `flint_std.o` ✓ —
+per-subsystem stdlib objects ✓, profile-driven arenas ✓ (Phase 6 ✓).
+
+### 12.4 The strengths to protect (three things that are genuinely rare)
+
+1. **The self-hosting pipeline with a byte-identical fixed point.**
+   Rust, Swift and Go do not self-host ✓; Zig's self-hosted backend is
+   still in development ✓. *Protect it:* every pipeline change must
+   keep Phase C byte-identical ✓ (the gate ✓) — and the pipeline must
+   not gain a dependency the C++ compiler does not have ✓.
+2. **The binary size.** 4,536 B stripped hello against C's 4,368 B and
+   Rust's 339,656 B (measured on this device ✓). *Protect it:* the
+   ecosystem work must not add a runtime dependency ✓, and the
+   transpiler (§11.2 ✓) must not pull in a GC ✓.
+3. **The deterministic memory model with a runtime backstop.** *Protect
+   it:* the capability model (§4.5 ✓) must not become a second
+   ownership system (§6.11 ✓).
+
+### 12.5 The targets (what "better" means, in numbers)
+
+| milestone | the score | what has to be true |
+|---|---|---|
+| **today** | 6.1 | — |
+| **the first honest move** | **6.6** (= C++ today) | the diagnostics + the LSP's cheap items (+0.6) |
+| **the language catches up** | **7.3** (= Go today) | the type system + the capability model (+1.3) |
+| **a credible language** | **8.0** | the compiler-backed LSP + the runtime work + the cross-platform runs (+0.7) |
+| **the ecosystem moves** | **8.6+** (= Rust today) | the package manager, the registry, the resolver — the *output* of everything above ✓ |
+
+**The honest caveat, once:** the last row is not engineerable by us
+alone ✓ — it needs people writing Flint programs ✓. Every row before it
+is ✓.
+- **Phase 2 step 11.4.1+2 LANDED: the structured diagnostics (the C++
+  compiler's side).** The compiler now has ONE diagnostic structure —
+  a span (start/end line+col, a file id), a stable code, labels
+  (primary + secondary), a help line and notes — and TWO renderings of
+  it: the terminal window (rustc's shape: the `error[E0042]: message`
+  header, the `--> file:line:col`, the gutter, the source line and the
+  `^^^` / `---` underlines) and a JSON STREAM (`--error-format json`,
+  one object per line, flushed as it arrives — rustc's `--error-format
+  json` shape).
+  - **The codes**: every one of the 218 diagnostic call sites now carries
+    a code, assigned per diagnostic PATTERN (the literal parts of the
+    message with the interpolations collapsed — the same normalization
+    the catalogue uses), so 142 codes cover them. The codes live IN THE
+    SOURCE, next to the diagnostic (Clang's DiagnosticIDs.td model), which
+    is what makes them stable: a new message takes the next free code and
+    an old one never changes meaning. `docs/error-codes.csv` is the table
+    and `tests/test_diagnostic_codes.sh` is the gate: every call site has
+    a code, a code maps to exactly one pattern, the table matches the
+    source, the rendered form carries the code/location/source line/
+    underline, the JSON is well-formed, and an unknown `--error-format`
+    is refused.
+  - **One printer**: the diagnostic is printed once, by `emitDiagnostic`;
+    the parser's old "the caller prints errorMsg()" path was a second
+    copy (the gate caught it as a duplicate error line). The parser's
+    message is now a one-line SUMMARY for the import chain.
+  - **The LSP reads the JSON**, not the text. That is what makes the
+    editor's positions correct: the old text form carried the codegen
+    errors WITHOUT a position, so the server had to invent one (it
+    reported them at line 0). And the "never fake an all-clear" rule
+    survived the change: if the compiler fails and produces nothing
+    readable, the server says so.
+  - **The cost**: the compiler's own binary grew ~22 KB (the renderer,
+    the JSON writer and the code table); the COMPILED program's size is
+    unchanged (8,048 B raw ✓ — the size story is about the artifact,
+    not the compiler ✓).
+  - **What is left in 11.4**: the suggestions (Levenshtein over the
+    visible names), the error poisoning, and the PIPELINE's side — the
+    parser's diagnostics can have a span ✓ (it knows the token's
+    position), but the emitter's cannot, because the S-expression carries
+    no positions. Putting them in the S-expression is the honest fix and
+    is a format change (both frontends, the goldens, the ladder).
+- **Phase 2 steps 11.4.1-4 LANDED (the diagnostics overhaul).** The
+  compiler has ONE diagnostic structure — a span (start/end, a file id), a
+  stable code, labels (primary + secondary), a help line and notes — and
+  TWO renderings of it: the terminal window (rustc's shape) and a JSON
+  stream (`--error-format json`, one object per line, flushed as it
+  arrives). 144 codes for the C++ compiler, 139 for the self-hosted
+  emitter, in ONE space (no two diagnostics in the project share a code);
+  the codes live in the source next to the diagnostic (Clang's
+  DiagnosticIDs.td model), which is what makes them stable.
+  The gate (tests/test_diagnostic_codes.sh, 16 checks) keeps the promise:
+  every call site has a code, a code maps to exactly ONE message, the
+  tables match the source, the rendered form carries the code, the
+  location, the source line and the underline, the JSON is well-formed, a
+  typo gets a suggestion and an unrelated name does not.
+  The LSP reads the JSON instead of scraping the text — which is what
+  makes the editor's positions correct (the old text form carried the
+  codegen errors WITHOUT a position, so the server invented one and
+  reported them at line 0) — and it still never fakes an all-clear.
+  The suggestions are Levenshtein over the names in scope, worded as
+  rustc words them ("there is a name with a similar spelling: `x`" —
+  a statement, not a question).
+  Two things this work found: the duplicate print (the diagnostic was
+  printed by the emitter AND by the caller — the one-error gate caught
+  it as a duplicate error line), and a bug in my own code migration (the
+  catalogue's pattern extraction collapsed a `std::string("literal")`
+  wrapper, so three different diagnostics shared one pattern and one
+  code — the gate could not see it because it used the same flawed
+  extraction; the extractor now unwraps the wrapper, the codes are
+  re-assigned per the corrected patterns, and the catalogue is more
+  readable as a side effect).
+  The cost, measured: the compiler's own binary grew ~22 KB; the
+  COMPILED program's size is unchanged (8,048 B raw).
+  Still open in 11.4: the error poisoning, the `help:` with a suggested
+  FIX, and the pipeline's SPANS — the emitter's diagnostics can name the
+  construct but not the LINE, because the S-expression carries no
+  positions. Putting them in is the honest fix and it is a format change
+  (both frontends, the goldens, the ladder).
+
+## 2A landing addendum (2026-10-24) — the checker phase, the facts, zero drift
+
+**What landed.**
+
+1. **The checker** (`TypeChecker`, `src/main.cpp`) runs after imports +
+   declaration generation and **before** `emitFunctionBodies`. A provable
+   error stops the compile with a span, a stable code and a `help` line:
+   `E0290` declaration/global initialiser, `E0291` return, `E0292`
+   assignment, `E0293` call argument, `E0294` mixed `i64`/`f64`
+   comparison. `--no-type-check` is the differential oracle, and the cache
+   salt includes it so a checked and an unchecked build cannot collide.
+2. **Compatibility is the backend's compatibility**, not a stricter rule.
+   `compatibleStore` relaxes exactly one case: a `ptr` destination accepts
+   an `i64`/`bool` value. That is the FFI handle convention —
+   `cell: ptr = flint_atomic_new(0)` is correct today (opaque-pointer alloca,
+   `store i64`, SROA `inttoptr`). The reverse is a bug: `x: i64 = "hi"`
+   compiles and silently retypes the binding, so the annotation is a lie and
+   `E0290` reports it. `f64`↔`i64` stays strict everywhere, including
+   comparison, where codegen emitted `fcmp olt i64, double` and LLVM's
+   verifier rejected the module.
+3. **The facts** (`2A.1`): `CallExprAST::instantiatedTypeArgs` and
+   `resolvedImpl` are recorded by codegen and printed by `--type-audit`.
+   The impl fact names the receiver type (`area for Circle`) because the
+   function name alone does not identify an impl.
+4. **Drift is zero** across the whole tree. The last four shapes:
+   - a named function used as a value (`h = inc`) had no parser signature
+     table. `fnSignatures` (name → `fn(params) -> ret`) is filled by
+     `recordFnSignature` at the end of both definition paths; `inferType`,
+     `inferCallType` and the checker's `typeOf(Variable)` read it. Generic
+     and void functions are deliberately absent: codegen's `namedFnThunk`
+     has no value for them, so a guess would be wrong.
+   - `readTypeFromTokens` (the declaration pre-pass) did not accept
+     `KW_PTR`, so it could not see `fn f() -> ptr`.
+   - the pre-pass for a bodyless declaration ran past the newline into the
+     next declaration, recording its return type under the wrong name and
+     consuming that declaration's signature. It now stops at a newline or
+     semicolon at depth 0.
+   - `parseExternBlock` never recorded `fnReturnTypes`, so the last
+     `-> ptr` extern in `examples/ai_arch_bench.fl` was invisible.
+5. **The gates**: `tests/test_type_check.sh` (8 rejection fixtures with
+   their own code and no artifact, 4 acceptance fixtures, and one
+   differential pair for every `.fl` in the tree = 174 checks) and
+   `tests/test_type_audit.sh` (whole tree; any `parse=` drift or
+   `CONTRACT VIOLATED` fails; the facts fixture pins `[i64]`, `[f64]`,
+   `area for Circle`). Both are in `v1_gate_check.sh --full`; docs,
+   errors-cpp and diagnostic-codes are in the default battery.
+
+**Measured (2026-10-24).**
+
+- `v1_gate_check.sh ./flintc --full`: **24/24**.
+- type-check: **174 passed, 0 failed** (12 fixtures + 162 corpus files).
+- type-audit: **139 files clean, 23 skipped** (the deliberate
+  borrow/move/aegis error demos), **0 failed, 74 call facts**.
+- differential 13/13 (0 known divergences), driver 6/6, parse-gate 146/146,
+  fixpoint 146/146, errors-cpp 141/141, diagnostic-codes 16/16, docs
+  32 links / 15 documents.
+- bootstrap A/B/C: Phase C fixed point **byte-identical**.
+
+**What the work found (the traps).**
+
+- The first differential corpus omitted stage1-3, driver, tools and
+  agent-bench. The pipeline gates caught what that gap hid: new fixtures
+  under `tests/` are parsed by the self-host parser, and `facts.fl`'s
+  `::<f64>` is syntax the pipeline does not implement yet. The fixture now
+  uses inference; explicit `::<T>` coverage lives in
+  `tests_manual/t_explicit_targs.fl` (7 facts). Both corpora now walk the
+  whole tree, so a checker false positive on a pipeline source fails
+  type-check before it can break the bootstrap.
+- `tests/test_selfhost.sh` takes the PHASE as `$1` and the compiler from
+  `$FLINTC`: `bash tests/test_selfhost.sh ./flintc` silently runs no phase.
+  Use `FLINTC=./flintc bash tests/test_selfhost.sh`.
+- The gates' tmp root is `${TMPDIR:-/data/data/com.termux/files/usr/tmp}`,
+  not `.../tmp/opencode`. The differential and driver gates need the
+  self-host artifacts there; when the system cleans them, they fail for an
+  environmental reason. Run `test_selfhost.sh` first, then the battery.
+
+**Deliberately not here.** The typed HIR, regions, capabilities and the
+pipeline's shared semantics. 2A delivered the checker and the facts; the
+HIR consumes them later.
+
+---
+
+## 2E.5 — the C++ query mode and the pipeline's signature overlay (2026-10-24)
+
+**What it is for.** The self-hosted pipeline re-derived every function
+signature from the S-expression, and an untyped parameter has NO type
+there (`fn show(x)` is `(x - -)`). The emitter defaulted it to i64. The
+C++ compiler resolves it from the call sites (`inferUntypedParams`), so
+the two frontends disagreed measurably:
+
+    fn show(x) -> i64 { print(x) return 0 }
+    fn main() -> i64 { show("hi") return 0 }
+
+C++ prints `hi`; the pipeline printed `379811845520` (the pointer as i64)
+and its IR said `define i64 @show(i64 %x.arg)`. This closes that drift by
+making the pipeline READ the compiler's answer.
+
+**The producer.** `flintc --emit-signatures in.fl out.sig` (a mode next to
+`--emit-interface`, in `src/main.cpp`): parse the WHOLE file (the fixpoint
+needs call sites), run `Codegen::generateDeclarations` (the exact view
+codegen uses), print `prog.functions`. Format v1:
+
+    flint-signatures 1
+    fn show () (str) -> i64
+    fn main () () -> i64
+
+`fn NAME (TPARAMS) (PARAM_TYPES) -> RET`; comma-separated type words
+(`i64 f64 str bool void ptr map [T]`, a struct/enum name, a type
+parameter); `()` empty; `#` comments. Definitions win over forward
+declarations; one line per name in first-occurrence order. `ref` and
+first-class `fn` types print as `ref`/`fn` and `[f64]` prints its element:
+the pipeline rejects those words loudly rather than silently pretending.
+
+**The consumer.** `emit.0 prog.sexp out.ll --signatures FILE`, passed
+through by `driver/flintc.fl ... --signatures FILE`. The file is an
+OVERLAY: an unlisted function keeps its scanned signature, so a partial
+file is safe (verified). Overrides: the param words
+(`e_scan_param`), the return word (`e_scan_fn`), and a template's
+parameter words + return (`e_scan_template`). Shape mismatches are loud:
+`E0287` parameter count, `E0288` type parameters, `E0289` unsupported
+type word; `E0284` unreadable, `E0285` bad header, `E0286` malformed line.
+A `void` return maps back to the source's `-` so the existing `E0241`
+(the pipeline cannot compile void helpers) is unchanged.
+
+**The gate.** `tests/test_signatures.sh` (14 checks): the query file's
+exact content for the untyped fixture and a generic/trait-shaped fixture,
+determinism, the end-to-end fix (`define i64 @show(ptr %x.arg)`, prints
+`hi`), the NO-FILE CONTROL (still `@show(i64 ...)` and a pointer — proof
+the overlay changes the answer), a partial overlay, a C++-vs-pipeline
+differential pair (5/3/7), and one loud failure per E0284-E0289. The
+driver gate gained a `--signatures` case.
+
+**Measured (2026-10-24).**
+
+- `flintc --emit-signatures tests/signatures/untyped.fl` → `fn show () (str) -> i64`.
+- pipeline with the file: `define i64 @show(ptr %x.arg)`, runs `hi`;
+  without it: `define i64 @show(i64 %x.arg)`, prints the pointer.
+- generic fixture: both frontends print 5/3/7; the pipeline emits
+  `@idc.i64` and `@idc.str`.
+- signatures gate 14/14; driver 7/7; errors catalog 145/145 (six new
+  codes); diagnostic-codes 16/16.
+- bootstrap A/B/C after the emitter changes: Phase C fixed point
+  **byte-identical** (the old emitter compiles the new emitter to the same
+  IR — the reader uses only syntax/API the old one knows: nested ifs, no
+  `&&`/`||`, no `::<T>`).
+
+**The traps and the decisions.**
+
+- The C++ compiler's `print` path mis-types a generic call's RESULT:
+  `print(idc("s"))` prints a pointer, and `b = idc("s"); print(b)` does
+  too. That is a separate C++ defect, older than this work; the fixture
+  instantiates `idc("s")` without printing it and the comparison stays
+  about signatures. Do not "fix" the pipeline to match it.
+- `e_scan_prog` used to keep scanning after a form failed, producing
+  `E0167` cascades from the wreckage. It now stops at the first bad form;
+  all six new codes print cleanly.
+- The signature reader scans characters itself instead of using
+  `flint_str_index_of`/`split`: the file must stay compilable by the OLD
+  emitter, whose runtime table has no `split` and only a fixed set of
+  string helpers.
+- A file can only describe the functions of the file passed to the
+  producer. Multi-file builds pass the main file's signatures; imported
+  functions keep scanned signatures (safe by the overlay, but their own
+  untyped params can still drift). Recorded in
+  `docs/PIPELINE-GENERICS.md` §5.1; the fix is to query per file or merge
+  before querying.
+- The driver does NOT auto-run the C++ query mode: `--signatures` is an
+  explicit input, so the driver keeps no new hard dependency on `flintc`.
+
+
+---
+
+## 2026-10-25 — Phase 2D.2 and 2E.6, and the documentation-authenticity pass
+
+**Scope.** Finish the two open Phase 2 items (escaping capturing closures,
+explicit `::<T>` call syntax), then audit the documentation against the tree
+after readers compared the project to the "Goose" incident: a README whose
+claims had drifted from what the code does.
+
+### 2E.6 — explicit `::<T>` in the self-host pipeline
+
+**Decision: no lexer change.** `::` is already two `:` tokens (kind 58).
+stage2 parses `f::<T>(args)` into
+
+    (call-t NAME (targs T*) ARGS...)
+
+and stage3 resolves the list through the ANNOTATION mapping
+(`e_ann_code_plain`) instead of running inference. The plain mapping matters:
+a type parameter written as an explicit concrete type must be REFUSED
+(`E0117`), and the inference mapping would have accepted it. The pipeline may
+never be more permissive than the C++ compiler.
+
+New codes: `E0295` missing `(targs ...)`, `E0296` count disagrees, `E0297`
+not a type, `E0298` non-generic callee. Gate:
+`tests/test_explicit_targs.sh` 6/6 (fixture output, mangled names, the four
+refusals). Differential fixture `tests/differential/t_explicit_targs.fl`
+prints 5/3/7/2.5/42 from both frontends; the suite is **14/14**.
+
+### 2D.2 — escaping capturing closures
+
+**The representation.** A closure value is an env box `{fnptr, caps...}` in
+the defining frame; captures are snapshotted BY VALUE. Before this, every
+function value was refused at a return boundary or a global store. 2D.1
+(`57db1a4`) allowed capture-less values (their box is a module constant).
+
+**The design actually implemented: intraprocedural lazy heap promotion.**
+There is no whole-program escape pre-pass. The escape sites are:
+
+1. `return <closure>`;
+2. storing a closure into a global;
+3. passing a closure as a call argument (the callee may retain it).
+
+A closure LITERAL created at an escape site allocates its box with
+`flint_malloc` directly (`ScopedEscape`). A binding that reaches an escape
+site is promoted by `promoteLambdaBox()`: copy the box to the heap, then
+repoint EVERY visible symbol that names the old box (`forEachSymbol`), so an
+alias cannot keep the stack copy. `h = |...|` copies the box metadata onto
+`h` (the literal itself does not escape), and a later return of `h` promotes
+it like any other binding.
+
+**Why the copy is sound.** Captures are by value, not by reference, so a
+byte copy of the box preserves the closure exactly. Nothing in the box points
+back into the frame.
+
+**The cost, stated rather than hidden.** The escaped box is never freed:
+there is no closure destructor yet. A loop that creates escaping closures
+grows the heap. This is recorded in `STATE.md` §4.4 and
+`docs/DESIGN-PHILOSOPHY.md`, and it is the next piece of work if escaping
+closures become common.
+
+**The gate.** `tests/test_closure_escape.sh` (7/7): the five escape shapes
+(return a literal, return an alias, global store, call argument, local assign
+then return) each print `42`, the escaped module contains `flint_malloc`, and
+a non-escaping closure's module contains none. The `flint_malloc` check is on
+the emitted IR, not the source, so the gate cannot pass on a comment.
+
+The old `tests_manual/t_capturing_escape.fl` was a REJECTION fixture; it is
+now a positive fixture, and its line was removed from `test_one_error.sh`.
+`tests_manual/t_static_fn_value.fl`, `t_named_fn_escape.fl` and
+`t_named_fn_value.fl` had comments saying captures still cannot escape; the
+comments were corrected.
+
+### The diagnostic catalogs after 2D
+
+Retiring the four closure-escape refusals created a discrepancy the gates
+caught: `docs/error-codes.csv` still had `E0041`–`E0044`, so
+`test_diagnostic_codes.sh` reported "TABLE 145 in the source, 149 in the
+table". The four rows were removed; the codes are NOT reused (a code is a
+promise).
+
+A second, older inconsistency surfaced: `docs/errors-cpp.md` claimed 141
+entries while `tools/errors_cpp.py` found **137 fixed patterns**. The missing
+four are the `<variable message>` codes (`E0137`–`E0144`, eight codes) that
+build their text at runtime. The catalog now states the distinction:
+
+- **137 fixed patterns** (`docs/errors-cpp.md`, generated);
+- **145 stable codes** (`docs/error-codes.csv`);
+- **149 emitter codes** (`docs/errors.md`).
+
+`tests/test_errors_cpp.sh --fix` now writes the total with both numbers, and
+`test_diagnostic_codes.sh` is 16/16. `docs/errors-cpp.md` also names the
+retired codes so a search for `E0041` finds the explanation rather than
+nothing.
+
+### The documentation-authenticity pass
+
+The audit found contradictions, not just stale dates:
+
+- **Binary size.** README's feature list said 4,536 B stripped while the
+  same README's old benchmark section said 141 KB raw. Neither matched the
+  tree: `./flintc examples/hello.fl -o hello` produces **8,048 B raw /
+  4,160 B stripped** (2026-10-25), `.text` 320 B, `.bss` 24 B, `libc` only.
+  The 141 KB/111 KB figure is the pre-`--gc-sections` snapshot (the 743 KB
+  regression in `STATE.md` §6.1). The 4,536 B figure was an older
+  post-fix measurement; the current one is 4,160 B. The README now reports
+  the current number and labels the 141 KB line as history.
+- **Packages were described as a subcommand.** There are no
+  `flintc <subcommand>` verbs; `--offline` is a flag and dependency fetch is
+  a build step. README now has a `## Packages` section that says so.
+- **Cross-target was described twice, in opposite directions.** One README
+  line used `--target`; a "not available" section said no `--target` existed.
+  `--target` does exist for `.ll`/`.o` (a real `wasm32-unknown-wasi` object
+  was checked with `file`), but cross-target LINKING fails in the host
+  linker. README now has one `## Cross-target output (emit-only)` section
+  that states both halves.
+- **Counts with no home.** The testing table, the diagnostic counts, and the
+  27-gate claim were repeated in several documents with different values.
+  `docs/INDEX.md` now assigns each fact to one owner, and
+  `tools/docs_check.sh` checks the derived counts (it caught `run.sh`
+  109→116 lines after the new fixtures). `STATE.md` owns the live counts.
+- **Provenance was implicit.** AI assistance was not disclosed anywhere a
+  reader would find it. `CREDITS.md` now names the maintainer, OpenCode, and
+  what the maintainer owns; `docs/DESIGN-PHILOSOPHY.md` records the
+  non-goals and the trade-offs (including the un-freed escaped box);
+  `benchmarks/README.md` records the device, the harness, and the
+  reproduction commands. README links all three.
+
+**What the audit taught (reusable).**
+
+- A number repeated in prose and in a table will drift; generate one from the
+  other (`tools/docs_check.sh`) or delete one.
+- A cache can hide a measurement: `--print-size` prints nothing on a cache
+  hit, and the cache is keyed by source *content*, so a fresh output path or
+  an identical copy still hits. Change the source bytes (a unique comment per
+  run) to force a miss. The old 141 KB number survived partly because the
+  benchmark section was never re-run after the link fix.
+- "Count" is ambiguous. Fixed patterns, stable codes, and emitter messages
+  are three different numbers; a catalog must say which one it lists.
+- A design note and a status document look alike after a few weeks. The
+  pipeline note (`docs/PIPELINE-GENERICS.md`) still said "stage3 does not
+  accept generics" after 2E.2 landed; it now has a status header with the
+  date and its §1 is evidence, not a plan.
+
+### The fixpoint gap that 2E opened
+
+The 2E fixture `tests/differential/t_explicit_targs.fl` joined the corpus, and
+`tests/test_fixpoint.sh` immediately failed:
+
+    fixpoint pass=148
+    nonzero: tests/differential/t_explicit_targs.fl(1)
+
+Root cause: the parser emits `(call-t NAME (targs T*) ARGS...)`, but the
+pretty-printer's `pp_tagged` had no `call-t` case. The printer therefore
+dropped the node, the re-lexed token stream differed, and the round trip
+failed. A new S-expression node is only half-landed until the printer that
+consumes it knows the node.
+
+Fix: `pp_call_t` prints `NAME::<T*, ...>(ARGS)` and `pp_tagged` dispatches
+`call-t` to it. `::` is two `:` tokens, so printing it verbatim keeps the
+token stream identical. Verified three ways: `parse.0 --fixpoint` prints
+`MATCH` on the fixture, the corpus gate prints `fixpoint pass=149`, and a
+probe with two type arguments and a nested `[i64]` type also prints `MATCH`.
+
+**Lesson:** the fixpoint gate is the detector for a new node that the
+printer cannot round-trip; run it as soon as a parser node is added, not
+after the self-host rebuild.
+
+### The slice drift that the example edit exposed
+
+`examples/slice_demo.fl` had been edited (by the maintainer) to replace the
+unimplemented `for v in sliced` with an index loop. The file now compiles,
+so the type audit stopped skipping it and reported:
+
+    FAIL ./examples/slice_demo.fl: 1 inferred declaration(s) still drift
+    type-audit:   line 8: 'sliced' parse=i64 codegen=str
+
+Root cause: `Parser::inferType` had no `NodeKind::Slice` case, so the parse
+engine guessed i64; codegen types the `flint_array_slice` result (a
+FlintVec*) as `str` through the pointer rule. Fix: a `NodeKind::Slice` case
+returning `Type::str()`, with the same reasoning as the existing Tensor
+case. Re-measured: `type-audit: 156 checks passed, 16 file(s) skipped,
+0 failed`, 82 call facts.
+
+**Lesson:** the audit's "skipped" set is not a clean set — a file that fails
+to compile for an unrelated reason can hide a real drift. Fixing the first
+bug can reveal the second; the gate is only as strong as the set it audits.
+
+### The benchmark protocol that the cache invalidated
+
+While rewriting `benchmarks/README.md` I found the documented compile-speed
+recipe was wrong in three ways:
+
+1. `cp stage2/parser.fl "$T/parser.fl"` broke the relative import
+   (`../stage1/lexer.fl`) and failed with `E9001`. The recipe now copies
+   within `stage2/`.
+2. `$$` in the unique comment is constant across a loop, so runs 2–3 were
+   cache hits. The recipe now appends `$$-$i`.
+3. "Cold" was defined as `rm -rf ~/.cache/flintc`, but imports are inlined
+   into the one cached module, so clearing the cache does not change the
+   compile work once the source bytes differ. The 3,201 ms "cold" number
+   was the first compile of the session (CPU ramp/page cache), not a
+   separate build mode; repeated cache-miss runs measured 841–930 ms.
+
+Verified the cache key directly with `FLINT_LOG_CACHE=1`: identical bytes at
+a new source path or a new output path both print `cache: hit binary`.
+Only changed bytes (or a compiler/flag/runtime change) miss. `--print-size`
+prints nothing on a hit.
+
+The README table is now one same-session set: `flintc` cache-miss medians
+(parser 896 ms, lexer 328 ms) and single `clang` runs (O2 79,700 ms, O0
+32,373 ms, runtime 1,447 ms). A hotter earlier run measured 103,939 /
+43,935 / 1,710 ms; the spread is thermal, so the docs label the session and
+do not mix rows.
+
+**Lesson:** a benchmark's cache story is part of its protocol. Test that the
+"fresh" run is actually fresh (`FLINT_LOG_CACHE=1`), and never call a
+first-run number "cold" without repeating it on a settled device.
+
+### Verification at the end of the session
+
+- `tests/run.sh` 60/60; `test_one_error.sh` 5/5;
+  `test_closure_escape.sh` 7/7; `test_explicit_targs.sh` 6/6;
+  `test_differential.sh` 14/14; `test_errors_cpp.sh` 137/137;
+  `test_diagnostic_codes.sh` 16/16; `test_docs.sh` 64 links / 16 documents;
+  `tools/docs_check.sh` 0 failures; `test_fmt.sh` 0 failures.
+- type-check: **181 passed, 0 failed** (12 fixtures + 169 corpus files).
+- type-audit: **156 checks passed, 16 skipped, 0 failed, 82 call facts**.
+- Self-host A/B/C was rebuilt after the final formatting of
+  `stage2/parser.fl` and `stage3/emitter.fl` (and again after the
+  `call-t` printer fix); the fixed point is byte-identical.
+- The full battery (`tests/v1_gate_check.sh ./flintc --full`) is the release
+  claim; it printed **27 passed, 0 failed** (`RC=0`). Its per-gate counts
+  live in `STATE.md` §2.2, not here.
+
+**The lesson that cost the most time:** formatting the stage sources AFTER
+Phase A invalidates the self-host binaries. Format first, then build, then
+bootstrap. A gate that uses `parse.0` (explicit-targs, fmt) fails with
+"MISSING self binaries" if the order is wrong — that message is informative,
+not a bug. The compiler build itself was about **3 minutes** on 2026-10-25
+(06:34:08 → ~06:37 UTC, warm module cache); the earlier 12–15 minute figure
+was measured under load and is the worst case, not the norm.
+
+## 2026-10-26 — secure line input, the CQMA false-clean fixes, and the honest-docs pass
+
+This session had three jobs: finish the phase-by-phase audit of what the plan
+still has not delivered, add the language's missing line-input primitive, and
+fix the external review of `~/Flint/cqma_tool/cqma-rs` without letting any of its
+"could not finish" paths look like "found nothing". The audit result is the
+report that follows this entry; the code and the measurements are below.
+
+### Secure line input (`flint_input*`)
+
+The gap was the one every systems language has to fill: `scanf("%s")` cannot
+be bounded and leaves the rest of the line in the stream, `fgets` silently
+splits a long line into two reads, and neither says whether EOF happened or
+whether the number parsed. The new API is deliberately small:
+
+| call | result |
+|---|---|
+| `flint_input(prompt)` | one line as a heap `str`; caller frees with `flint_str_free` |
+| `flint_input_i64(prompt)` | whole line as `i64`; `0` on any error |
+| `flint_input_f64(prompt)` | whole line as `f64`; `0.0` on any error |
+| `flint_input_status()` | status of the most recent input call |
+
+Status codes: `0` ok, `1` EOF before any byte, `2` line longer than 1 MiB
+(first 1 MiB returned, rest drained), `3` read error, `4` OOM, `5` not a
+number / trailing junk, `6` out of range (`ERANGE`), `7` embedded NUL bytes
+were skipped (Flint strings are NUL-terminated). The buffer grows
+exponentially only up to the cap; every call consumes exactly one line, so a
+short buffer cannot desynchronise the next call. CRLF and a lone trailing CR
+are stripped. The numeric helpers require the *whole* line to parse: `"12abc"`
+is status 5, not `12`. A failed parse never returns a partial value.
+
+Implementation: `runtime/runtime.c` lines ~322–449, registered in
+`src/main.cpp` at ~6298–6304 next to `flint_stderr`. `tests/test_input.sh`
+is the gate (8/8: values, CRLF, EOF, invalid/overflowing numbers, the 1 MiB
+cap plus drain, embedded NUL). An ASan+UBSan harness in
+`~/.flint-tmp/input-asan/` ran normal, invalid, 1.1 MB, NUL, and CRLF inputs
+with no sanitizer report; the long-line case observed status 2 and a returned
+length of exactly 1,048,576, and the NUL case observed status 7. The README
+now has a **Reading input** section with the verified transcript
+(`Alice`/`21`/`0.5` → `hello Alice`, `42`, `0.5`; invalid i64 exits 2) and
+the contract table.
+
+Design choice worth recording: `flint_input` is total — on EOF/OOM it returns
+an empty string (or NULL only when even that allocation fails) and reports the
+reason through the status, so a caller that ignores the status can still
+print and free the result. The status is the source of truth; the return value
+is never a partial line.
+
+### The README claims, checked
+
+The syntax-section program compiles and runs (`rc=0`). Bare `len()` works for
+an array, a str and a map (`3`, `5`, `1`). All 23 explicit `flint_*` names in
+the README are registered in the compiler. So the two claims that prompted
+this pass — "we do not have a native `len()`" and "the README lists functions
+that do not exist" — are false as stated; the README was right.
+
+The verification did find one real C++ bug: a generic call's result assigned
+to an untyped binding is mis-typed. Repro:
+
+```flint
+fn idc<T>(x: T) -> T { return x }
+fn main() -> i64 {
+    print(idc("s"))     # s
+    b = idc("s")
+    print(b)            # 423738332544 (a pointer decimal), not s
+    0
+}
+```
+
+`print(idc("s"))` prints the string; `b = idc("s"); print(b)` prints the
+pointer as an integer. `memory.md` already recorded this as an older C++
+defect (the pipeline fixture deliberately does not print the result). It is
+**not fixed**; it is listed in the audit report as an open compiler bug.
+
+### The documentation-authenticity pass
+
+`REQUIREMENTS.md` still said v0.0.17, "Cross-compilation is not implemented.
+There is no `--target` flag", and "~7600 lines". All three were false:
+`--target` exists and is **emit-only** (it produces a target-specific `.ll`
+or `.o`; linking/running a cross-target executable and JIT are host-only and
+refused loudly), `src/main.cpp` is ~16.2K lines, and the compiler is ~1.2 MB
+on this device. The document now says v0.0.22 and links the self-host
+limitation to `COMPATIBILITY.md` D5.
+
+The README's memory-safety bullet now says "Memory safety mechanisms" and
+lists the limits instead of claiming a blanket guarantee: an escaped closure
+box is allocated with `flint_malloc` and never freed (no destructor yet),
+Aegis is a runtime backstop not a static race-freedom proof, regions and
+capabilities are future work, and FFI/`--unsafe` are outside the model. The
+**Honest gaps** bullet names the full self-host pipeline gap (one method name
+per table, partial lambda-as-value, absent enum equality, absent named
+function values) and links D5. The status date is now 2026-10-26.
+
+The gate count moved from 27 to **28** (19 fast + 9 slow) when the input gate
+was added. That number now has one home (`STATE.md` §2.2) and is repeated in
+`REQUIREMENTS.md` and the roadmap only as a pointer to that table.
+
+### CQMA: the external review's false-clean findings
+
+`~/Flint/cqma_tool/cqma-rs` is a separate Rust analyzer, not part of Flint. The review
+found that it could print a clean verdict when it had not actually finished
+checking. The fixes, in the order the review listed them:
+
+- **False clean / coverage.** Every stage now carries `files_total`,
+  `files_failed`, `truncated` and `coverage_note`. A failed file, a skipped
+  input (`--max-files`/`--exclude`), a stage that did not run, truncated
+  output, an unavailable Clang analyzer, a valgrind log without a summary,
+  a leak tracker that wrote no report, and a valgrind summary whose detail
+  was not parsed all become entries in `coverage_gaps`; `complete` is
+  `gaps.is_empty()`.
+- **Exit status.** `0` only when every requested stage completed and no
+  finding was reported; `1` when completed with findings; `2` for a
+  configuration/toolchain error; `3` when analysis is incomplete. An
+  incomplete run has `score: null`, `grade: INCOMPLETE`, and exits `3` even
+  if it also found real defects.
+- **Clang analyzer selection.** `--analyze` is Clang's driver flag; GCC's
+  `-fanalyzer` is a different engine. If `--cc`/`--cxx` is not Clang, cqma
+  looks for `clang`/`clang++`; if neither exists the stage is `unavailable`
+  and the run is incomplete. It never passes `--analyze` to GCC and calls
+  the failure clean.
+- **Leak dedup.** The key includes the allocation site and the symbolized
+  stack, not just the byte count, so two equal-sized leaks at different
+  sites stay separate; LSan's `SUMMARY` total is not double-counted when
+  per-leak findings exist.
+- **Scoring.** Operational warnings (timeouts, failed commands, truncated
+  pipes, unparsed valgrind summaries) are marked `"operational": true`,
+  stay visible, and are excluded from the defect score. A complete run with
+  zero confirmed findings is `100/CLEAN`; any confirmed finding caps the
+  score at `99`, so a large tree cannot round a real warning up to a perfect
+  score. Runtime defects keep their hard ceilings (1–2 → 69, 3+ → 49).
+- **Output cap.** Child output is retained up to 8 MiB per stream, but the
+  pipe is drained after the cap so a chatty compiler cannot deadlock; the
+  stage is marked truncated and the run incomplete.
+
+Verification: `cargo test` **10/10** (all-disabled, skipped files, failed
+stage, a coverage note with no stage note, operational warnings do not lower
+the score, incomplete has no score, a confirmed warning cannot score 100,
+same-size leaks at different sites, dedupe stack, pipe cap).
+`~/Flint/cqma_tool/cqma-tests/test_regressions.sh` **12/12**: all-disabled, max-files,
+failed analyzer, valgrind timeout, valid valgrind, and a valgrind summary
+that says `ERROR SUMMARY: 2` while the detail is unparsed (the new case;
+before the fix it exited 1 with score 100).
+
+A subtle bug found while adding that last regression: the coverage-note
+dedup condition used `coverage_note.contains(&stage.note)`, and every string
+contains `""`, so a stage with an empty note silently lost its coverage gap.
+The condition now treats an empty note as "no duplicate" and a unit test
+pins it. Lesson: **a dedup predicate must never treat the empty string as a
+match**; that is exactly how a coverage gap disappears.
+
+### CQMA on the real tree
+
+Full run (`cqma ~/Flint --cppcheck-level normal`): 42 files, 30,847 lines,
+**1,502 findings (1,501 confirmed)**, `complete=false`, `score=null`,
+`grade=INCOMPLETE`, exit 3. The gaps are real: `src/main.cpp` exceeded the
+300 s analyzer timeout (1 of 42 files) and the runtime stage refused a
+multi-translation-unit project without `--binary`/`--build-cmd`. Breakdown:
+compiler 293, cppcheck 1,180 (1,002 style / 144 warning / 27 info / 7
+performance), clang analyzer 29 (28 findings + 1 timeout). There is **no
+confirmed `error`-severity finding**.
+
+Targeted analyzer on `src/main.cpp` (`--no-compile --no-cppcheck
+--no-runtime --timeout-analyzer 900`): complete, **2 confirmed warnings**,
+score **99/A** (it was 100/A before the cap), exit 1. The two findings are
+`src/main.cpp:1339` `unix.Malloc` "Potential memory leak" in
+`ArenaAllocator` (the destructor frees every block; likely a false positive)
+and `src/main.cpp:8391` `cplusplus.NewDeleteLeaks` "Potential leak of memory
+pointed to by 'box'" (the box is an LLVM `GlobalVariable` owned by the
+module; a false positive). Artifacts: `~/Flint/.audit/cqma-fixed.*` and
+`~/Flint/.audit/cqma-main-analyzer.*`.
+
+### The battery, and the TMPDIR trap
+
+The fast battery initially failed four gates (`differential`, `signatures`,
+`driver`, `explicit-targs`) with "MISSING self binaries". The cause was not
+a compiler regression: the self-host binaries live in
+`$TMPDIR/slipstream/self`, and `$TMPDIR` had been cleaned. `bash
+tests/test_selfhost.sh A` rebuilt `lex.0`/`parse.0`/`emit.0` and printed
+`Phase A OK`; the fast battery then passed 19/19 and the full battery
+**28/28, RC=0** (2026-10-26). Counts: parse/fixpoint 149/149, type-check
+181/181, type-audit 156 checks / 16 skipped / 0 failed / 82 facts,
+differential 14/14, explicit-targs 6/6, closure-escape 7/7, input 8/8,
+errors 149/149, errors-cpp 137/137, diagnostic-codes 16/16, docs 66 links /
+17 indexed / 16 live, LSP 31/31 protocol + 5/5 model (590 builtins, 30
+keywords).
+
+**Lesson:** a gate whose inputs live under `$TMPDIR` is not reproducible
+after a cleanup; the "MISSING self binaries" message is the diagnostic, not
+a compiler bug. Rebuild Phase A before believing a red differential gate.
+
+### What this session did NOT close
+
+The phase-by-phase list is in the report delivered with this session; the
+short version is: typed HIR, full NLL regions, an escaped-closure
+destructor, per-thread arenas, capability types, range analysis/BCE beyond
+the length and loop-range facts, `T?`, associated types/`dyn`/operator
+overloading/const generics/async, the compiler-backed LSP and
+rename/incremental analysis, the package manager/registry/lockfile/signing,
+`@domain`, the Phase 0 dashboard/history and extra workloads, M7 `[T]`,
+B8 type-level generic enums, diagnostic patches (`help:` names a fix but
+does not emit one), pipeline spans, per-file incremental invalidation,
+native `.c` import, a freestanding build, `unsafe {}` source blocks, the
+C-subset transpiler, FFI contract checking, and the pipeline's `-O2` gates
+plus its length fact/literal BCE.
+
+Two items are blocked on the maintainer, not on engineering:
+
+- `tools/docs_check.sh` reports four failures because `benchmarks/fib.fl`
+  was deleted (and `benchmarks/fib.py` rewritten) in the working tree. The
+  README Testing table still counts the old workload set. `tests/test_docs.sh`
+  is green; the numbers should be reconciled only after the maintainer
+  decides whether `fib.fl` is gone for good.
+- The C++ generic-print bug above is an open compiler defect; it is not
+  part of the pipeline's D5 gap and was deliberately not papered over.
+
+
+## 2026-10-26 — bounded range facts: `fib` at C speed, and two soundness bugs
+
+### The gap was a branch, not an instruction
+
+The user's measurement was `fib(45)` at 11.6–12.6 s against C/C++/Rust at
+8.1–8.7 s. `--unsafe` ran at 8.58–8.61 s, so the checks were the whole gap.
+The IR showed something sharper than "one extra instruction": LLVM already
+removes the `n-1`/`n-2` checks, but the `sadd.with.overflow` on
+`fib(n-1) + fib(n-2)` survived, and its branch is what stops LLVM's
+accumulator-recursion transform. The function stayed a tree of calls.
+Patching that one check to a plain `add` in the IR restored the loop and
+8.59 s; a C mirror with the same `__builtin_add_overflow` shape stayed
+tree-shaped. So a *provably safe* check can cost far more than its own
+instructions by blocking a transform.
+
+### The analysis
+
+`BoundedRangeAnalysis` (`src/main.cpp`) evaluates the whole-program call
+graph of eligible functions — one i64 parameter, i64 return, non-generic —
+at every constant call root, memoized by argument. A `[lo,hi]` fact proves
+an add/sub/mul fits, so codegen emits the plain operation. It is
+deliberately closed-world and fails closed:
+
+- loops, match/destructure, unknown value nodes, and unmodeled containers
+  abort the function's analysis;
+- a global store, a non-self call, a function value, or a name-based
+  dispatcher (`flint_thread_spawn`, `py_eval*`, a string literal naming the
+  function) rejects it;
+- self-calls must be `param - positive-constant`; other functions' calls
+  must have constant arguments;
+- facts are enabled only for whole-program executables. `.ll`, `.o`,
+  interface, `--link`, `--target`, and `--check-bce` keep every check, and
+  the mode is part of the module-cache key so an optimized executable
+  module cannot satisfy an emit-only request.
+
+`--check-bce` now prints a third line, `bce: bounded-range facts prove N
+arithmetic overflow checks safe`, from a facts-disabled diagnostic pass.
+
+### Two real soundness bugs, found by probing
+
+1. **Environment copied at a block boundary.** `evalBlock` took `Env` by
+   value, so `mut x = 0; if n > 0 { x = MAX }; x + n` was "proved" [1,1]
+   and the check was removed; the executable wrapped to INT64_MIN instead
+   of trapping. Fixed by taking `Env&` (only the proven-taken branch is
+   ever evaluated, so mutating the caller's env is correct).
+2. **`returned`/`returnVal` leaked across self-calls.** An explicit
+   `return` in the callee truncated the caller's evaluation, memoized the
+   callee's value as the caller's, and fed a wrong fact upward. Fixed by
+   saving and restoring both around `evalFunction`.
+3. **Root collection missed map literals and default arguments.** A call
+   hidden in `map {...}` was not a root, so a narrow fact from another call
+   could elide the check on the overflowing call. Fixed by indexing every
+   call site once, including map values and defaults; the index replaced a
+   per-candidate full-program walk that cost ~0.65 s on the stage3 emitter.
+
+All three are pinned by `tests/test_range_facts.sh` (19 checks): elision,
+constant/dynamic/branch/map overflow traps, emit-mode retention, and the
+bail cases. The gate also disassembles `fib` and asserts no panic branch.
+
+### Verification
+
+- Fast battery **22/22** (~2m24s) with `bounds-safety`, `unsafe-flag`, and
+  `range-facts` added to the default set; full battery run separately.
+- `fib(45)`, same session, three alternating runs: Flint 8.60/9.17/8.76 s
+  vs `clang -O2` 8.54/8.76/8.55 s. Thermal drift moves absolute times; the
+  ratio is the signal. Pre-change default was 11.6–12.6 s.
+- Safety probes: `inc(INT64_MAX)` and a recursive overflow panic with
+  `PANIC: integer overflow` (rc 134); `inc(42)` = 43; `sum_to(100)` = 5050;
+  dynamic and increasing roots keep their checks.
+- `.o`/`.ll` after an executable build keep `sadd.with.overflow` (cache
+  isolation verified); `--check-bce fib` reports 3/1/3.
+
+### The middle end had no TargetMachine (the "Flint cannot vectorize" bug)
+
+The `fib` work left one number unexplained: `--unsafe sum_array` was still
+10.1 ms against C's 8.8–9.6 ms, even with every check gone. The IR showed
+no vector operations at all. `opt -O2` on the *same* module vectorized it,
+which pointed at the pipeline, not the language.
+
+`runLLVMOptimizations` built `PassBuilder PB;` with no `TargetMachine`.
+`TargetTransformInfo` therefore reported no vector registers, and the loop
+vectorizer declined every loop in every build — safe and unsafe. The fix
+passes a TM for the module's triple (the module already carries the triple,
+and the object emitter already creates the same TM). The verification was
+a 60-line standalone program that runs the same pipeline with and without
+a TM: 27 vector lines vs 0 on the same input.
+
+Measured, same session, `sum_array` 10M, four alternating runs:
+
+| | before | after | C |
+|---|---|---|---|
+| `--unsafe` | 10.1 ms | **7.49–7.88 ms** | 7.60–7.91 ms |
+| default | 12.3 ms | 11.0–11.1 ms | 7.60–7.91 ms |
+
+So `--unsafe` is at C parity. The default still pays for the accumulator's
+overflow check: a checked reduction cannot be reassociated, so the
+vectorizer leaves it scalar. That is a semantic trade-off, not a missing
+pass. `fib(45)` is unchanged (8.59–8.81 s in this session; the C mirror's
+later runs throttled to 13.9 s, so only the first pair is comparable).
+
+A sound fix for the checked reduction was prototyped: a fused
+`sum` + `max(|x|)` pass, then `maxAbs <= INT64_MAX / n` (the triangle
+inequality proves every prefix fits). Clang vectorizes it and it runs at
+10.7 ms — only ~3 % over the current safe loop (11.0 ms), still 1.4× C,
+because the max/abs work eats the vectorization gain. A wrapping operator
+(`+%`) is the explicit alternative. Both are recorded in `STATE.md` §4.3
+as the decision, not silently "fixed".
+
+Cost: the stage3 emitter `.o` compile went from ~3.0–3.5 s to ~3.9–4.3 s.
+That is the price of actually running the vectorizer and the target cost
+model; it is recorded rather than hidden.
+
+`tests/test_vectorize.sh` is the gate (3 checks): the check-free loop
+carries `llvm.loop.isvectorized`, the default build still carries
+`sadd.with.overflow`, and the unsafe sum is exact. The fast battery is
+23/23 with it; the full battery is run separately.
+
+### The pipeline's consumers were compiling at -O0
+
+The surface review (§4.7.1) found that the C++ compiler runs LLVM O2
+in-process, while the self-hosted pipeline writes text IR and every
+consumer compiled it with plain `clang` — **-O0**. The self-hosted
+`driver/flintc.fl` did the same, so a program built by the pipeline was
+unoptimized even though the same IR optimizes better than the C++ post-O2
+IR (50,944 B vs 62,432 B linked).
+
+Fixed 2026-10-26: `tests/test_differential.sh`, `tests/test_selfhost.sh`,
+`tests/test_emit_stage3.sh` and `driver/flintc.fl` now pass `-O2`. The
+differential compiles both sides at `-O2` (the C++ side's IR is already
+post-O2, so the comparison is now symmetric at the machine-code level).
+
+Measured, same session, on the self IR (`emit_self.ll`):
+
+| emitter build | time on the merged 331-form sexp |
+|---|---|
+| pipeline IR, `clang` (-O0) | 0.452 / 0.454 / 0.450 s |
+| pipeline IR, `clang -O2` | 0.191 / 0.190 / 0.191 s |
+| C++-compiled `emit.0` | 0.193 / 0.193 / 0.195 s |
+
+So the pipeline-compiled emitter is **2.37× faster** and matches the
+C++-compiled one. The two emitters produce **byte-identical IR**, and the
+binary shrinks 280,192 → 252,632 B. A pipeline-built 5M-iteration loop
+goes from 0.096–0.127 s to 0.059–0.068 s (~1.7×) with the same output;
+its binary shrinks 65,304 → 52,440 B. The loop gains less than the
+emitter because its overflow/div guards block vectorization — the same
+semantic cost recorded in §4.3.
+
+Correctness: differential 14/14 (30 s → 42 s, the price of optimizing 28
+small binaries), ladder 21/21, driver 6/6, self-host Phase B/C green with
+the fixed point **byte-identical** under `-O2`.
+
+The next IR-quality gap is the pipeline's array length fact and
+literal-index BCE, not the optimizer level.
+
+### The primes "gap" was 8 bytes per element
+
+The headline `primes 10M` row compared Flint's `[i64]` sieve (80 MB) with
+the C/C++/Rust 1-byte mirrors (10 MB) and read as a 2.4–3.3× compiler
+gap. It is not. Same-representation control, same session, medians of
+three alternating runs (`tools/bench_primes_i64.sh`):
+
+| implementation | sieve element | median |
+|---|---|---|
+| Flint | i64 | 422.5 ms |
+| C | i64 | 399.3 ms |
+| C++ | i64 | 396.6 ms |
+| Rust | i64 | 408.5 ms |
+| C | char | 183.0 ms |
+
+Flint is within 7% of C/C++/Rust when the element size matches. The
+remaining factor is the missing byte-array type: the same algorithm with
+1-byte elements is 2.3× faster in C. That is a language/representation
+feature (roadmap §5.2/M7), not check elimination or codegen.
+
+The control lives in `benchmarks/controls/primes_i64.{c,cpp,rs}` and
+`tools/bench_primes_i64.sh`; the README and benchmarks README carry the
+dated note. This is the third measurement in the P1 work that corrected
+the *question* rather than the compiler (after the fib check and the
+missing TargetMachine).
+
+Also recorded: with the pipeline's consumers at `-O2`, its literal-array
+IR (`for_array`) has 0 surviving bounds and overflow checks, while the
+C++ post-O2 IR keeps 2. So the planned pipeline length fact/literal BCE
+is redundant for the subset the pipeline can compile; the runtime-array
+case is blocked on the pipeline's missing array builtins. Do not add the
+fact without a surviving check to remove.
+
+---
+
+## 2026-10-27 — the ordered backlog
+
+**Why this exists.** Unfinished work is described in a dozen places
+(`STATE.md` §4, `ROADMAP.md` Phases G–J, `docs/LANGUAGE-ROADMAP.md`
+Phases 0–10, `docs/IMPROVEMENT-PLAN.md`, `docs/tiers.md`,
+`COMPATIBILITY.md` D5, `REQUIREMENTS.md`). This section is the single
+ordered queue. It does not replace those documents: every row cites its
+source, and the source keeps the design detail. A row is finished only
+when its **gate** passes and the commit is on the branch.
+
+### How to use it
+
+1. Read `STATE.md` §0.1 first (build/gate recipes, current position).
+2. Pick the first `ready` row in the global order below.
+3. When the user says **"finish the <category> update"**, do that
+   category's rows in ID order, skipping `blocked` / `needs decision`
+   rows. When the category is exhausted, continue with the next category
+   in the global order **without asking** — that is what "and the updates
+   below it" means. Stop only when (a) a row is blocked and no ready row
+   remains in the category, (b) a gate fails and cannot be fixed in the
+   same step, or (c) a decision is genuinely the maintainer's.
+4. Every row is one commit unless marked *large*: gate green, a
+   `CHANGELOG.md` entry if user-visible, and the status updated here.
+5. A row is `done` only when its gate command passes from a clean tree.
+   "Code written" is not done.
+
+**Status vocabulary:** `ready` = can start now; `blocked: <reason>` =
+needs something outside the compiler; `needs decision` = maintainer call;
+`done` = gate green + commit.
+
+**Global order (the default when no category is named):**
+
+```
+PERF -> SAFE -> LANG -> PORT -> TOOL -> ECO -> DOMAIN -> DOC -> LONG
+```
+
+Rationale: measure first (PERF owns the measurement infrastructure), then
+soundness (SAFE), then language surface (LANG), then reach (PORT), then
+the developer surface (TOOL), then distribution (ECO), then the
+differentiator (DOMAIN), then the record (DOC), then the long bets
+(LONG). Blocked rows are skipped, never silently reordered.
+
+**Command mapping (the contract):**
+
+| the user says | do, in this order | then continue with |
+|---|---|---|
+| "finish the performance update" | PERF-1 … PERF-16, skipping blocked | SAFE-1 … |
+| "finish the safety update" | SAFE-1 … SAFE-11, skipping blocked | LANG-1 … |
+| "finish the language update" | LANG-1 … LANG-13, skipping blocked | PORT-1 … |
+| "finish the portability update" | PORT-1 … PORT-7, skipping blocked | TOOL-1 … |
+| "finish the tooling update" | TOOL-1 … TOOL-14, skipping blocked | ECO-1 … |
+| "finish the ecosystem update" | ECO-1 … ECO-6, skipping blocked | DOMAIN-1 |
+| "finish the domain update" | DOMAIN-1 | DOC-1 … |
+| "finish the docs update" | DOC-1 … DOC-5, skipping blocked | LONG-1 … |
+| "finish the long bets" | LONG-1 … LONG-4 | — |
+| "finish the next item" | first ready row in global order | — |
+| "finish everything" | global order, pausing at each blocked/decision row | — |
+
+A category request never crosses a `needs decision` row silently: report
+it, do the next ready row in the same category, and leave the decision in
+the table.
+
+**Phase map** (the roadmap phase that owns each row):
+
+| roadmap phase | rows |
+|---|---|
+| Phase 0 — measurement | PERF-6, PERF-7, PERF-8 |
+| Phase 1 — recover regressions | PERF-3, PERF-4, PORT-1 … PORT-7 |
+| Phase 2 — compiler unification | SAFE-1, SAFE-8, LANG-9, LANG-10, LANG-11 |
+| Phase 3 — static safety | SAFE-2 … SAFE-7, SAFE-10, SAFE-11 |
+| Phase 4 — type system | LANG-1 … LANG-7, LANG-13 |
+| Phase 5 — optimization | PERF-1, PERF-2, PERF-9 … PERF-12, PERF-14 … PERF-16 |
+| Phase 6 — binary size | PERF-3, PERF-4, PERF-5 |
+| Phase 7 — LSP/tooling | TOOL-1 … TOOL-5, TOOL-9 … TOOL-14 |
+| Phase 8 — package ecosystem | ECO-1 … ECO-5 |
+| Phase 9 — domain-aware compilation | DOMAIN-1 |
+| Phase 10 — differentiation | LONG-1 … LONG-4 |
+| release / hygiene | DOC-1 … DOC-5, TOOL-6, TOOL-7 |
+
+### Already done — do not redo
+
+Several docs still call these open. Verified in the tree on 2026-10-27;
+where a doc disagrees, the doc is stale and DOC-1 fixes it.
+
+- 38-gate battery (29 fast + 9 slow), `tests/v1_gate_check.sh`.
+- High-level `flint run` / `flint build` driver (`f585eb2`), 78 checks.
+- CQMA analyzer moved in-tree (`284e321`), 12/12 regressions.
+- Warning-free LLVM 21 build (`b7f096d`), 0 warnings.
+- `AegisChecker` restored (`tests/test_aegis.sh` 16/16); `BorrowChecker`
+  covers all node kinds and the loop fixpoint.
+- PGO / ThinLTO opt-in recipes in `build.sh`; cold panic attributes in
+  `runtime/runtime.c`; `LICENSE` exists.
+- Date/time parse and format (`flint_time_parse`, `flint_time_format`).
+- `--target` emits `.ll` / `.o` with the target's canonical triple and
+  datalayout (`tests/test_target.sh`).
+- `bytes` type, native string methods, `W0001`/`W0002` unused warnings,
+  bounded-range facts, middle-end `TargetMachine`, pipeline `-O2`
+  consumers, escaping closures, secure line input.
+- `verifyFunction` gate in codegen (the old "verifyModule gate" item).
+
+---
+
+### PERF — performance update
+
+Phase 0/1/5/6. **Category exit:** safe integer loops within 1.3× of C,
+the dashboard reports every commit, hello-world within 5 % of C's
+stripped size, the monomorphization share is measured, and the PGO /
+allocator decisions are recorded (keep or revert, with numbers).
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| PERF-1 | Wrapping-operator opt-in (`+%` / `-%` / `*%`, exact syntax a design choice) — the only sound route to a vectorized checked reduction; measured 1.45× on reductions. Default stays checked. [STATE §4.3; IMPROVEMENT-PLAN Tier 2 #8] | 5 | ready | — | new `tests/test_wrapping.sh`: opted-in `sum_array` ≤1.05× C, default IR unchanged, overflow still traps by default |
+| PERF-2 | Native `split()` plus the hot string builtins. `flint_str_split` is already in the pointer-returning builtin set but has no runtime implementation — a latent gap. Inline `flint_str_length` / `char_at` / `substring` where measured. [IMPROVEMENT-PLAN Tier 2 #6] | 5 | ready | — | `flint_str_split` runs; `tests/test_string_methods.sh` extended; the hot string loop IR has no opaque call |
+| PERF-3 | Split `flint_std.o` (~880 KB monolithic) into one object per subsystem so `--gc-sections` can drop whole subsystems. [LANGUAGE-ROADMAP §24; Phase 1] | 1, 6 | ready | — | `flint_std_*.o` set; hello artifact not larger than today's 8,088 B; `--print-size` attributes each subsystem; `tests/test_print_size.sh` 11/11 |
+| PERF-4 | Profile-sized / lazy arenas: 48 MB + 16 MB + 4 MB + 1 MB reserved in `.bss`. Add a `tiny` profile without changing the default. [LANGUAGE-ROADMAP §24; Phase 1/6] | 1, 6 | ready | — | `tiny` hello runs with `.bss` < 1 MB; default unchanged; `--print-size` reports the profile; gate |
+| PERF-5 | Monomorphization share in `--print-size` (twiggy's `monos` idea) — the one size contributor still unmeasurable. [STATE §4.1; LANGUAGE-ROADMAP §24] | 6 | ready | — | `--print-size` and `--print-size-json` report duplicated generic bytes; `tests/test_print_size.sh` extended |
+| PERF-6 | Per-commit benchmark history plus a dashboard page (runtime, compile time, RSS, binary size, checks emitted/elided). [LANGUAGE-ROADMAP §21; Phase 0] | 0 | ready | — | `tools/bench_gate.sh` appends JSONL; a renderer produces the page; `tests/test_bench_history.sh` |
+| PERF-7 | Per-runner baselines so the measurement CI job can become required. [LANGUAGE-ROADMAP §21.2; Phase 0] | 0 | ready | PERF-6 | a baseline recorded on the CI runner; the measurement job is required, not advisory |
+| PERF-8 | Workload coverage: allocation, strings, collections, channels/threads, networking, and one realistic application, each with a C/Rust mirror. [LANGUAGE-ROADMAP §21.1; Phase 0] | 0 | ready | PERF-6 | six workloads with baselines; the dashboard shows all of them |
+| PERF-9 | Measure PGO and ThinLTO on the compiler; keep only a ≥5 % win. The opt-in recipes already exist in `build.sh`. [ROADMAP J-C3] | 5 | ready | — | compile-time corpus before/after; keep or revert recorded; default unchanged unless it wins |
+| PERF-10 | Allocator A/B (arena vs the current path); kill if <5 % on peak RSS or runtime; never a default switch without numbers. [ROADMAP J-C3] | 5 | ready | — | measured A/B table; keep or revert; peak RSS < 3.6 GB on Termux |
+| PERF-11 | Interface-cache remainder plus process-init timing (the open half of J-B3). [ROADMAP J-B3] | 5 | ready | — | hit rate and init time logged; no cold-build slowdown; 38 gates green |
+| PERF-12 | CGU auto-tune. [ROADMAP J non-goal] | 5 | blocked: needs PERF-11 data and the CGU code is absent | PERF-11 | data first; re-implement only if it beats the current split |
+| PERF-13 | BOLT. [ROADMAP J-C3] | 5 | blocked: no `llvm-bolt` on this device | — | measured on a host that has it; never shipped as default |
+| PERF-14 | TPDE-LLVM spike: evaluate it as a drop-in for `addPassesToEmitFile` (claimed 13× over LLVM -O0, ±9 % code quality). Timeboxed. [ROADMAP H3] | 5 | ready | — | reject if <10 % total compile-time win or any codegen regression; record the number |
+| PERF-15 | LRU eviction for the module/function cache (today it grows without a size policy). [ROADMAP F3] | 5 | ready | — | a size cap evicts least-recently-used entries; `tests/test_cache.sh` extended; a warm rebuild stays fast |
+| PERF-16 | Parallel function-body emission (G3e). Deferred because single-pass emit mode makes per-thread parsers impractical. [ROADMAP G3e] | 5 | blocked: needs an AST or per-thread parser design | — | a design decision first; then 2× on multicore or reject with numbers |
+
+---
+
+### SAFE — correctness / safety update
+
+Phase 2/3. **Category exit:** the safe build is within 1.2× of `--unsafe`
+on the suite, a data race in a test program is a compile error, escaped
+closure boxes are freed, and D5 is closed.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| SAFE-1 | Typed HIR: introduce HIR/MIR alongside the current path and migrate codegen to consume it incrementally. The precondition for range analysis, escape analysis, capabilities, and the LSP. *Large.* [STATE §4.2; LANGUAGE-ROADMAP §13.3] | 2 | ready | — | codegen consumes HIR; 181/181 type-audit corpus and 14/14 pipeline differential; 0 drift / 0 contract violations; `--emit-hir` dump; no behavior change |
+| SAFE-2 | Full NLL region inference from the CFG (the current escape analysis is intraprocedural and syntactic, not a region solver). [STATE §4.4; Phase 3] | 3 | ready | SAFE-1 | conditional-borrow corpus accepted/rejected correctly; no false rejects over the 181-file corpus |
+| SAFE-3 | Free an escaped closure box. There is no closure destructor, so a loop that creates escaping closures grows the heap. [STATE §4.4] | 3 | ready | — | loop creating escaping closures has bounded RSS; IR shows the free; `tests/test_closure_escape.sh` extended |
+| SAFE-4 | Capability markers (Send/Sync-like) on leases plus a check where a value crosses a thread boundary. [STATE §4.5; Phase 3] | 3 | ready | — | a data-race test is a compile error; valid parallel code still compiles |
+| SAFE-5 | Typed channels as the safe way to share mutable state. [STATE §4.5] | 3 | ready | SAFE-4 | send/recv type-checked; a race through a channel is rejected |
+| SAFE-6 | Safe parallel loops as reductions with an explicit result channel and capability-checked closures (capture-free builtins, not syntax sugar). [STATE §4.5; memory.md B6] | 3 | ready | SAFE-4, SAFE-5 | parallel sum equals serial; a capturing closure is rejected |
+| SAFE-7 | Atomics. [STATE §4.5] | 3 | ready | SAFE-4 | atomic ops exposed; stress test clean under sanitizers |
+| SAFE-8 | Close D5: enum equality by per-variant payload compare and a named function used as a value in the self-host pipeline. [COMPATIBILITY D5; STATE §4.9] | 2 | ready | — | both features compile and run in stage2/stage3; differential manifest extended; D5 table closed |
+| SAFE-9 | AEGIS lease coverage for `str` / `map` / `chan` (today they are covered by the quarantine backstop, not by leases). [runtime/flint_aegis.h] | 3 | needs decision: hot-path tax vs quarantine | — | decision recorded; if yes, a UAF through each is a compile-time reject or a trap |
+| SAFE-10 | UBSan/ASan sweep of the runtime and generated IR; fix what it finds. [ROADMAP J-B1; IMPROVEMENT-PLAN Tier 1] | 3 | ready | — | `tests/test_sanitizers.sh` green over the corpus; findings fixed or recorded |
+| SAFE-11 | General value escape analysis, precise lifetimes, and const/alias qualifiers on leases (the non-closure half of §8.4; the optimizer needs the alias facts). [LANGUAGE-ROADMAP §8.4] | 3 | ready | SAFE-2 | stack promotion for provably local values; `&T`/`&mut T` non-alias facts visible in IR; no false promotion |
+
+---
+
+### LANG — language update
+
+Phase 2/4. **Category exit:** a third-party package can implement a trait
+and return it polymorphically; `T?` works; const generics work; the
+pipeline deviations are gone.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| LANG-1 | Associated types / generic traits. [LANGUAGE-ROADMAP §11 #2; Phase 4] | 4 | ready | — | a trait with an associated type compiles; package-style example; gate |
+| LANG-2 | `dyn`-style trait objects (vtable dispatch, representation documented). [LANGUAGE-ROADMAP §11 #3] | 4 | ready | — | polymorphic return plus vtable dispatch; ABI recorded; gate |
+| LANG-3 | Operator overloading (requires the trait system). [ROADMAP I-E; LANGUAGE-ROADMAP §11 #5] | 4 | ready | LANG-1 | `+` on a user struct; builtin operators unchanged |
+| LANG-4 | Nullable types `T?` — cheap and high value. [LANGUAGE-ROADMAP §11 #7] | 4 | ready | — | null-safe access checked; no UB; gate |
+| LANG-5 | Const generics (last of the type-system features). [LANGUAGE-ROADMAP §11] | 4 | ready | LANG-1 | `[T; N]`-style parameter; monomorphized; gate |
+| LANG-6 | Async/await. [LANGUAGE-ROADMAP §11 #4; Phase 4] | 4 | blocked: needs SAFE-4 … SAFE-7 | SAFE-7 | async fn + await; `Send` checked; gate |
+| LANG-7 | Type-level programming. [LANGUAGE-ROADMAP §30.2] | 4 | blocked: low immediate value (maintainer call) | — | only after the cheaper type features ship |
+| LANG-8 | M7 `[T]` containers (generic element-size arrays). [STATE §4.10; LANGUAGE-ROADMAP §5.2] | 3/4 | blocked: ABI decision on `{length, elem_size, ptr}` | — | generic element-size array; `primes` char parity; gate |
+| LANG-9 | Pipeline `bool` type code (it mangles as `.i64` today). [STATE §4.9.1] | 2 | ready | — | symbol matches the C++ `.bool`; differential |
+| LANG-10 | Pipeline function table becomes a multimap (two implementations of one method name cannot coexist). [STATE §4.9.1] | 2 | ready | — | two impls of one method name coexist; differential |
+| LANG-11 | Per-file query in multi-file builds (today the main file's signatures are passed to imports). [STATE §4.9.1] | 2 | ready | — | imported functions get their own query; differential |
+| LANG-12 | Date/time arithmetic (parse, format, diff). [ROADMAP I-D] | 4 | done — stale doc | — | `flint_time_parse` / `flint_time_format` exist; DOC-1 corrects the row |
+| LANG-13 | Safe FFI wrapper types: owned/borrowed/unsafe handles, explicit `take`/`borrow`, null via `T?`, error-code conversion, capture rules for callbacks. [LANGUAGE-ROADMAP §25.2] | 4 | ready | LANG-4 | a C resource is owned by a Flint type with a destructor; a borrowed handle cannot outlive its region; gate |
+
+---
+
+### PORT — portability update
+
+Phase 1/C2. **Category exit:** a WASI hello executes end-to-end, macOS is
+T1, MinGW is T2, and `--static` produces a working binary.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| PORT-1 | WASM/WASI execution: `_start`, WASI sysroot + libc + crt1.o linkage, and a runner. Emit already works. [docs/tiers.md; ROADMAP J-C2] | 1 | blocked: no WASI sysroot or runner here; policy forbids vendoring SDKs | — | hello runs under wasmtime/node; execution test per triple |
+| PORT-2 | macOS T2 → T1: run the full gate list on macOS hardware and record it. [docs/tiers.md] | 1 | blocked: needs macOS hardware | — | recorded full-gate green run; row flipped |
+| PORT-3 | MinGW T3 → T2: confirm the native `windows-2025` CI job is fully green. [docs/tiers.md] | 1 | blocked: needs native Windows CI | — | build + smoke + registry green; row flipped |
+| PORT-4 | MSVC native thread shim (the pthreads path only covers MinGW). [docs/tiers.md] | 1 | blocked: needs a Windows host | — | MSVC build plus threads; gate |
+| PORT-5 | `--static` linking mode. [ROADMAP I-A] | 1 | ready (may fail loud if static libs are absent) | — | `--static` hello runs; `ldd` shows no dynamic deps; a missing static lib is a loud error, not a silent fallback |
+| PORT-6 | `--target` execution tests per triple (emit is tested; execution is not). [docs/tiers.md] | 1 | blocked: runners/sysroots per target | — | `tests/test_target_exec.sh` per triple |
+| PORT-7 | Hermetic temp-path audit: no hardcoded `/tmp` left in the harness; `$TMPDIR` honored everywhere. [docs/tiers.md C2] | 1 | ready | — | grep finds no hardcoded scratch path; the gate runs under a custom `$TMPDIR` |
+
+---
+
+### TOOL — tooling update
+
+Phase 7. **Category exit:** the LSP's diagnostics are byte-identical to
+the CLI's over the corpus; rename and per-file incremental analysis work;
+the `flint` driver covers the everyday subcommands.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| TOOL-1 | Compiler-backed LSP: serve diagnostics from the compiler's own type checker instead of the Rust reimplementation. *Large.* [STATE §4.7; Phase 7] | 7 | ready | SAFE-1 | LSP diagnostics byte-identical to the CLI over the corpus; a test compares them |
+| TOOL-2 | Rename/refactor in the LSP (needs the symbol table). [STATE §4.7] | 7 | ready | TOOL-1 | rename across files; references updated; gate |
+| TOOL-3 | Per-file incremental analysis (the compiler caches whole modules by source hash today). [STATE §4.7] | 7 | ready | TOOL-1 | editing one file reanalyzes only it; latency measured |
+| TOOL-4 | `flint fmt` / `doc` / `lsp` / `test` / `new` subcommands that delegate to the existing tools. [README known tooling gaps] | 7 | ready | — | each subcommand works; `tests/test_flint_cli.sh` extended |
+| TOOL-5 | Auto-docs: generate the reference pages from the source instead of hand-maintaining them. [ROADMAP J-A1 "auto-docs open"] | 7 | ready | — | generated docs match the source; `tools/docs_check.sh` green |
+| TOOL-6 | `flintc api` plus `llms.txt` (stable, machine-readable surface). [README known gaps] | 7 | needs decision: shape of the manifest | — | a versioned manifest parses; one source of truth |
+| TOOL-7 | Signed tags plus SBOM automation. [docs/RELEASE.md] | release | blocked: needs a GPG key | — | `git tag -v vA.B.C` passes; SBOM version equals the tag |
+| TOOL-8 | Per-PR fuzz smoke (nightly 100-seed fuzzing already runs; a PR can merge before it). [LANGUAGE-ROADMAP §14.2] | 7 | ready | — | a fast fuzz smoke gates PRs; the nightly 100-seed job stays |
+| TOOL-9 | Property-based tests: optimized vs unoptimized output identical; safe vs `--unsafe` output identical; random programs from `fuzz/generate.py`. [LANGUAGE-ROADMAP §14.3 layer 2] | 7 | ready | — | "semantics preserved: N/N" and "check equivalence: N/N" gates |
+| TOOL-10 | Negative/compile-fail corpus asserting invalid programs are rejected, not merely that messages match. [LANGUAGE-ROADMAP §14.3 layer 4] | 7 | ready | — | every documented error code has a compile-fail case; gate |
+| TOOL-11 | Per-pass golden IR tests (optimizer bugs are only visible end-to-end today). [LANGUAGE-ROADMAP §14.3 layer 1] | 7 | ready | — | one golden IR test per optimizer pass; `tests/test_opt_identity.sh` extended |
+| TOOL-12 | ABI/versioning test for the `.flint.bc` interface format (golden interface plus a compatibility matrix). [LANGUAGE-ROADMAP §14.3 layer 5] | 7 | ready | — | old and new compilers read the golden interface; version mismatch is loud |
+| TOOL-13 | Extend the differential gate from 14 fixtures to the whole corpus, both directions (C++ vs pipeline, O0 vs O2, safe vs unsafe). [LANGUAGE-ROADMAP §14.3 layer 3] | 7 | ready | — | the whole corpus is in the manifest; both directions green |
+| TOOL-14 | Reproducible-build check: the same source compiled twice in different directories is byte-identical. [LANGUAGE-ROADMAP §26.4] | 7 | ready | — | a gate builds in two directories and compares hashes |
+
+---
+
+### ECO — ecosystem update
+
+Phase 8. **Category exit:** a package can be published by one user and
+installed by another from a lockfile, reproducibly.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| ECO-1 | `flint add` / `build` / `publish` / `audit` / `search` package subcommands. [STATE §4.6; Phase 8] | 8 | ready | — | publish and install from a lockfile |
+| ECO-2 | Static, self-hostable registry. [STATE §4.6] | 8 | ready | ECO-1 | the registry serves a package; an offline mirror works |
+| ECO-3 | Resolver: minimal-version selection with a published deterministic algorithm, semver enforcement, `flint.lock` with content hashes. [STATE §4.6] | 8 | ready | ECO-1 | resolution is deterministic; the lockfile reproduces byte-for-byte |
+| ECO-4 | Content-addressed cache, signing, advisories, provenance on publish. [STATE §4.6] | 8 | ready | ECO-3 | tamper detected; an advisory blocks; provenance verified |
+| ECO-5 | Ten good packages plus discovery (quality over count). [STATE §4.6] | 8 | ready | ECO-2, ECO-3 | ten packages install and build from a lockfile |
+| ECO-6 | HTTP server API (listen + respond). TCP primitives exist; the server API does not. [ROADMAP I-D] | 8 | ready | — | a server listens and responds; gate |
+
+---
+
+### DOMAIN — domain-aware update
+
+Phase 9. **Category exit:** `@domain(ai)` measurably improves the AI
+benchmark suite and the "identical output with and without the domain"
+gate passes for every domain.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| DOMAIN-1 | `@domain(...)` syntax, the data-driven policy table, safety separation enforced by construction and by a test, LSP and build integration. *Large.* [LANGUAGE-ROADMAP §15–19; Phase 9] | 9 | ready | SAFE-1 | the AI benchmark improves; the identical-output gate passes for every domain |
+
+---
+
+### DOC — docs / release update
+
+Release hygiene. **Category exit:** no stale claim in the audited docs; a
+signed release with a matching SBOM.
+
+| ID | item | phase | status | depends on | gate (done when) |
+|---|---|---|---|---|---|
+| DOC-1 | Correct the stale claims: `AegisChecker` restored, `BorrowChecker` node kinds + loop fixpoint, PGO/ThinLTO opt-in, cold panic attributes, `LICENSE`, date/time, `--target` `.ll`/`.o`, `verifyFunction`, the ROADMAP "Planned" markers that already shipped. [audit 2026-10-27] | release | ready | — | `tools/docs_check.sh` failures=0; every corrected claim re-verified against the code |
+| DOC-2 | Refresh README "Honest gaps", REQUIREMENTS platform rows, and the tier matrix so they match `--help` and the code. [README; REQUIREMENTS; docs/tiers.md] | release | ready | DOC-1 | the statements match `--help`/code; docs gate green |
+| DOC-3 | Release checklist: signed tag, SBOM version, CHANGELOG section, migration note. [docs/RELEASE.md] | release | blocked: needs a GPG key | TOOL-7 | the checklist runs end to end on a dry run |
+| DOC-4 | Error-catalog drift gate: `docs/errors-cpp.md` must match the compiler's codes. [README diagnostics section] | release | ready | — | a script compares codes; CI fails on drift |
+| DOC-5 | Migration/versioning notes for the 0.0.x line (semver freeze rules). [docs/RELEASE.md] | release | ready | — | a migration note exists for every breaking change since 0.0.20 |
+
+---
+
+### LONG — long-term differentiation
+
+Phase 10, ongoing. These are not "finish and close"; they are the claims
+the project is betting on. Each needs evidence, not a feature count.
+
+| ID | item | phase | status | depends on | evidence that it is working |
+|---|---|---|---|---|---|
+| LONG-1 | Safety with no borrow-checker tax: leases + regions + backstop, with Rust-level ergonomics and no false rejects. [LANGUAGE-ROADMAP §30.4] | 10 | ongoing | SAFE-2, SAFE-4 | the corpus has no false rejects; a user study or a documented ergonomics comparison |
+| LONG-2 | Deterministic memory with a runtime backstop — the niche Go/Python cannot enter and Rust declines. [LANGUAGE-ROADMAP §0.2] | 10 | ongoing | SAFE-3 | a long-running server is leak-free with bounded RSS; the backstop catches a seeded UAF |
+| LONG-3 | Agent-native toolchain: stable tokens, machine-readable diagnostics, one binary. [LANGUAGE-ROADMAP §30.4] | 10 | ongoing | TOOL-6 | a machine-readable diagnostic stream; stable tokens documented; one binary |
+| LONG-4 | Domain-aware specialization without unsafe escape hatches, if the safety/optimization separation holds. [LANGUAGE-ROADMAP §17] | 10 | ongoing | DOMAIN-1 | DOMAIN-1's identical-output gate plus a measured win |
+
+---
+
+### Blocked and decision register
+
+Everything here is outside the compiler's control or is a maintainer
+call. A blocked row is skipped, never silently reordered.
+
+| item | blocked on | unblocks when |
+|---|---|---|
+| PERF-12 | PERF-11 data; CGU code absent since the 09-14 wipe | PERF-11 lands |
+| PERF-13 | no `llvm-bolt` on this device | a host with BOLT |
+| PERF-16 | single-pass emit mode makes per-thread parsers impractical | an AST or per-thread parser design |
+| SAFE-9 | hot-path tax of leases on `str`/`map`/`chan` | maintainer decision |
+| LANG-6 | SAFE-4 … SAFE-7 | capabilities, channels, atomics land |
+| LANG-7 | low immediate value | the cheaper type features ship |
+| LANG-8 (M7) | ABI decision on `{length, elem_size, ptr}` | maintainer decision |
+| PORT-1 | WASI sysroot + runner; no-vendoring policy | a sysroot/runner is available off-device |
+| PORT-2 | macOS hardware | a full-gate run is recorded there |
+| PORT-3 | native Windows CI | the `windows-2025` job is green |
+| PORT-4 | a Windows host | MSVC build + threads |
+| PORT-6 | per-target runners | each target has a runner |
+| TOOL-6 | shape of the API manifest | maintainer decision |
+| TOOL-7, DOC-3 | GPG key | a signing key is configured |
+| DOMAIN-1 | SAFE-1 (typed HIR) | typed HIR lands |
+
+### Measured and rejected — do not re-litigate without new numbers
+
+| idea | why it is not on the queue |
+|---|---|
+| A hand-written vectorizer | LLVM's vectorizer does the work once checks are gone; `--unsafe` is already at C parity and the IR has zero `vector.body` on the checked path [STATE §4.3] |
+| The max-abs guard for the safe reduction | 10.7 ms vs 11.0 ms safe and 7.6 ms C — the guard's own max/abs work eats the gain (~3 %) [STATE §4.3] |
+| The pipeline length fact / literal-index BCE for the supported subset | the pipeline's `for_array` IR already has 0 surviving bounds/overflow checks at `-O2`; the runtime-array case is blocked on missing builtins [memory.md, bounded-range facts] |
+| QBE as a compile-speed path | ~2.6 s vs LLVM -O0 ~0.9 s on a 3.5k-line program; process spawn + IL bloat [ROADMAP H2] |
+| H4 custom ARM64 emission | no measured headroom over LLVM; enormous surface [ROADMAP H4] |
+| Region-based memory management | conflicts with deterministic free; escape analysis gets most of the benefit [LANGUAGE-ROADMAP §30.2] |
+| A custom register allocator / instruction selection | LLVM is at C parity for this code; no measured headroom [LANGUAGE-ROADMAP §30.2] |
+| Rewriting the compiler in Flint | the ladder should converge on the shared HIR, not become a second authoritative compiler [LANGUAGE-ROADMAP §30.2] |
+| A second ownership system (Rust's borrow checker on top of leases) | two competing systems; leases are the user-visible model [STATE §4.8] |
+| BOLT as a default | no `llvm-bolt` here; never shipped as default [ROADMAP J-C3] |
+| CGU auto-tune now | cache-split is done; the CGU code is absent and the fit is low until PERF-11 data exists [ROADMAP J non-goal] |
+
+### Per-category exit criteria (what "finished" means)
+
+- **PERF:** safe integer loops ≤1.3× C; the dashboard reports every
+  commit; hello-world ≤ C + 5 % stripped; monomorphization share measured;
+  PGO and allocator decisions recorded.
+- **SAFE:** safe build ≤1.2× `--unsafe`; a data race is a compile error;
+  escaped boxes are freed; D5 closed.
+- **LANG:** a third-party package implements a trait and returns it
+  polymorphically; `T?` and const generics work; pipeline deviations gone.
+- **PORT:** a WASI hello executes; macOS T1; MinGW T2; `--static` works.
+- **TOOL:** LSP diagnostics identical to the CLI; rename and per-file
+  incremental analysis work; the driver covers everyday subcommands.
+- **ECO:** publish and install from a lockfile, reproducibly.
+- **DOMAIN:** the AI benchmark improves; the identical-output gate passes.
+- **DOC:** no stale claim in the audited docs; a signed release with a
+  matching SBOM.
+- **LONG:** ongoing; each row has evidence, not a feature count.
+
+### The next three actions, concretely
+
+1. **PERF-1** (wrapping-operator opt-in) — the highest-value ready row:
+   it closes the last measured safe-performance gap without weakening the
+   default. If the syntax decision is unwelcome, **PERF-2** (`split()` +
+   hot string builtins) is the other ready row.
+2. Then PERF-3 (stdlib split) and PERF-4 (arena profiles) — the two
+   binary-size items that also make the size report honest.
+3. Then PERF-5/6/8 (monos share, history/dashboard, workload coverage) so
+   every later category is measured by the same instrument.
+
+If the user says "finish the performance update", run PERF-1 … PERF-16 in
+order, skip PERF-12/13/16 with a one-line report, then continue to SAFE-1
+without asking. That is the contract this section exists to make
+unambiguous.

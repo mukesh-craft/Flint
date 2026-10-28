@@ -1,0 +1,6 @@
+# LLVM has no FCmp for mixed i64/f64 operands; the compiler crashed with
+# "Both operands to FCmp instruction are not of the same type".
+fn main() -> i64 {
+    if 1 < 2.5 { return 1 }
+    return 0
+}

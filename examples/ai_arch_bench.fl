@@ -39,9 +39,17 @@ extern "C" {
     fn flt_relu(a: ptr) -> ptr
 }
 
+# A shape is two i64s handed to the tensor API, which wants a raw pointer.
+#
+# This used to allocate a FlintArray, return only its data pointer, and then
+# main called `flint_array_free(s)` on that pointer. That is a type error --
+# flint_array_free takes the array handle, not a pointer -- and the handle was
+# lost inside make_shape, so nothing could be freed correctly.
+#
+# A plain malloc keeps the pointer type the tensor API wants and pairs with
+# flint_free, so the cleanup below is actually well-typed.
 fn make_shape(d0: i64, d1: i64) -> ptr {
-    s = flint_array_alloc(2)
-    sd = flint_array_data(s)
+    sd = flint_malloc(16)
     flint_array_write_i64(sd, 0, d0)
     flint_array_write_i64(sd, 1, d1)
     return sd
@@ -87,9 +95,9 @@ fn main() -> i64 {
 
     # Demo 3: Cleanup
     farena_destroy(arena)
-    flint_array_free(s)
-    flint_array_free(sb)
-    flint_array_free(s2)
+    flint_free(s)
+    flint_free(sb)
+    flint_free(s2)
 
     flint_print("\nDone.\n")
     return 0

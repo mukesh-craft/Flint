@@ -1,0 +1,76 @@
+fn main() -> i64 {
+    # Gradient correctness against analytically-known derivatives. Each case
+    # states the true value so a regression is visible rather than plausible.
+    #
+    # The tape used to return the seed for every rule, so these all read 1.0.
+    ag_init()
+
+    # --- mul: d(x*x)/dx = 2x, at x=3 -> 6
+    x = flt_create_1d(1)
+    flt_set(x, 0, 3.0)
+    xid = ag_track_tensor(x)
+    a = ag_mul(x, x)
+    ag_backward(ag_grad_id(a))
+    print(ag_grad_at(xid, 0))          # 6
+
+    # --- relu: d/dx at x=-1 (clamped, true 0) and x=2 (true 1)
+    r1 = flt_create_1d(1)
+    flt_set(r1, 0, -1.0)
+    r1id = ag_track_tensor(r1)
+    b1 = ag_relu(r1)
+    ag_backward(ag_grad_id(b1))
+    print(ag_grad_at(r1id, 0))         # 0
+
+    r2 = flt_create_1d(1)
+    flt_set(r2, 0, 2.0)
+    r2id = ag_track_tensor(r2)
+    b2 = ag_relu(r2)
+    ag_backward(ag_grad_id(b2))
+    print(ag_grad_at(r2id, 0))         # 1
+
+    # --- sigmoid: s(0)=0.5, s'(0)=0.25
+    s1 = flt_create_1d(1)
+    flt_set(s1, 0, 0.0)
+    s1id = ag_track_tensor(s1)
+    c1 = ag_sigmoid(s1)
+    ag_backward(ag_grad_id(c1))
+    print(ag_grad_at(s1id, 0))         # 0.25
+
+    # --- exp: d(e^x)/dx = e^x, at x=1 -> e = 2.718281828
+    e1 = flt_create_1d(1)
+    flt_set(e1, 0, 1.0)
+    e1id = ag_track_tensor(e1)
+    d1 = ag_exp(e1)
+    ag_backward(ag_grad_id(d1))
+    print(ag_grad_at(e1id, 0))         # 2.718281828
+
+    # --- log: d(log x)/dx = 1/x, at x=4 -> 0.25
+    l1 = flt_create_1d(1)
+    flt_set(l1, 0, 4.0)
+    l1id = ag_track_tensor(l1)
+    f1 = ag_log(l1)
+    ag_backward(ag_grad_id(f1))
+    print(ag_grad_at(l1id, 0))         # 0.25
+
+    # --- tanh: d/dx = 1 - t^2, at x=0 -> 1
+    t1 = flt_create_1d(1)
+    flt_set(t1, 0, 0.0)
+    t1id = ag_track_tensor(t1)
+    g1 = ag_tanh(t1)
+    ag_backward(ag_grad_id(g1))
+    print(ag_grad_at(t1id, 0))         # 1
+
+    # --- add: d(a+b)/da = 1
+    p1 = flt_create_1d(1)
+    flt_set(p1, 0, 5.0)
+    p1id = ag_track_tensor(p1)
+    q1 = flt_create_1d(1)
+    flt_set(q1, 0, 7.0)
+    h1 = ag_add(p1, q1)
+    print(flt_get(h1, 0))              # 12
+    ag_backward(ag_grad_id(h1))
+    print(ag_grad_at(p1id, 0))         # 1
+
+    ag_cleanup()
+    0
+}

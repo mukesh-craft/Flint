@@ -1,0 +1,81 @@
+# Equality on aggregates: structs and enums.
+#
+# `==` on a struct or enum used to abort the compiler:
+#
+#     assertion "Invalid operand types for ICmp instruction" failed
+#
+# ICmp is invalid IR for a struct, so any `x == y` on an aggregate killed the
+# compiler instead of producing a diagnostic.
+#
+# The lowering is field-by-field and RECURSES. Recursion is the point: a struct
+# field that is itself a struct must be compared structurally, and comparing it
+# by pointer would be silently wrong rather than loudly broken. memcmp was
+# rejected for the same reason -- padding is indeterminate, so byte equality is
+# not value equality, and memcmp cannot order values.
+#
+# Arrays are compared element-wise. This is what enums need: an enum's LLVM type
+# is `{ i8, [N x i8] }`, a tag plus a PACKED payload array, so the scalar path
+# reached CreateICmpEQ on an array. Struct equality appeared to work while
+# enums died precisely because every struct field is a scalar and no enum field
+# is.
+
+struct Inner { a: i64 }
+
+struct Outer {
+    i: Inner,
+    b: i64,
+    f: f64,
+}
+
+struct Simple { x: i64, y: i64 }
+
+enum Color { Red, Green, Blue }
+
+enum Pair { None, Some2(i64, i64) }
+
+fn main() {
+    # --- structs -----------------------------------------------------------
+    a = Simple { x: 1, y: 2 }
+    b = Simple { x: 1, y: 2 }
+    c = Simple { x: 9, y: 9 }
+    print(a == b)
+    print(a == c)
+    print(a != c)
+
+    # Nested: compared structurally, not by pointer.
+    n1 = Outer { i: Inner { a: 5 }, b: 6, f: 1.5 }
+    n2 = Outer { i: Inner { a: 5 }, b: 6, f: 1.5 }
+    n3 = Outer { i: Inner { a: 7 }, b: 6, f: 1.5 }
+    n4 = Outer { i: Inner { a: 5 }, b: 6, f: 2.5 }
+    print(n1 == n2)
+    print(n1 == n3)
+    print(n1 == n4)
+
+    # --- enums ------------------------------------------------------------
+    # P0-NEW-2: enum equality compares the tag, then -- only when the tags
+    # match -- that one variant's payload FIELD by field. An enum's payload
+    # is a packed array sized to the widest variant, so bytes a variant never
+    # writes hold garbage: byte-comparing them reported two identical
+    # Some2(3, 4) values as UNEQUAL. Field-wise compares never read those
+    # tail bytes, so identical values compare equal and this fixture pins
+    # the regression.
+    p1 = Pair.Some2(3, 4)
+    p2 = Pair.Some2(3, 4)
+    p3 = Pair.Some2(3, 5)
+    p4 = Pair.None
+    p5 = Pair.None
+    print(p1 == p2)
+    print(p1 == p3)
+    print(p1 != p2)
+    print(p1 != p3)
+    print(p4 == p5)
+    print(p1 == p4)
+
+    color = Color.Green
+    print(color == Color.Green)
+    print(color != Color.Red)
+
+    # The remaining assertions below are scalars mixed into one `==`.
+    print(1 == 1)
+    print(2.5 == 2.5)
+}

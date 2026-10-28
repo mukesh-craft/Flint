@@ -1,0 +1,19 @@
+# Phase 2 / 2D: a capturing closure passed as a CALL argument.
+#
+# The callee may retain the value (here it stores it in a global), so every
+# closure argument is promoted before the call. This is the conservative
+# choice: an argument that is not retained pays one heap copy, but no callee
+# can make a stack box dangle.
+
+mut g: fn(i64) -> i64 = |x: i64| x
+
+fn store_it(f: fn(i64) -> i64) {
+    g = f
+}
+
+fn main() {
+    k = 35
+    cb = |x: i64| x + k
+    store_it(cb)
+    print(g(7))
+}

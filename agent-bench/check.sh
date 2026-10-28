@@ -3,7 +3,7 @@
 # expected.txt exactly (exit 0). Reports pass/fail + seconds per task.
 # Usage: bash agent-bench/check.sh [path/to/flintc]   (default: ./flintc)
 # Reference solutions (reference.fl) are NOT used by the checker — they only
-# validate the harness (see memory.md v0.21).
+# validate the harness (see memory.md v0.0.21).
 set -u
 FLINTC="${1:-./flintc}"
 pass=0; fail=0; skipped=0; total_sec=0

@@ -1,0 +1,4 @@
+# A return value must match the annotated return type.
+fn f() -> i64 { return "hi" }
+
+fn main() -> i64 { return f() }

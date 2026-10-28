@@ -7,7 +7,9 @@
 # Usage: bash tests/test_opt_identity.sh [path/to/flintc]   (default: ./flintc)
 set -u
 FLINTC="${1:-./flintc}"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/optident"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TMPD="$_TMPBASE/slipstream/optident"
 mkdir -p "$TMPD"
 pass=0; fail=0
 # Deterministic, quick corpus (no timing dependence; fib45 excluded: slow).
@@ -29,7 +31,7 @@ for src in $CASES; do
       unsafe) flag="--unsafe" ;;
     esac
     # shellcheck disable=SC2086
-    if ! timeout -s KILL 300 "$FLINTC" "$src" -o "$TMPD/p" $flag > /dev/null 2>&1; then
+    if ! timeout -s KILL 300 "$FLINTC" "$src" --no-run -o "$TMPD/p" $flag > /dev/null 2>&1; then
       echo "FAIL $b/$cfg (build)"; fail=$((fail+1)); ref_ok=0; continue
     fi
     out="$(timeout -s KILL 120 "$TMPD/p" 2>&1 | norm)"; rc=$?

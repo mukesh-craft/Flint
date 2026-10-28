@@ -1,0 +1,52 @@
+fn main() -> i64 {
+    # Optimizer reachability: Adam and SGD are constructed, given a parameter,
+    # stepped, and destroyed. Before the builtins were registered none of this
+    # was callable from Flint.
+    #
+    # A real training step: y = w*x with w=2, x=3, target 12 -> error 6,
+    # dL/dw = 2*x = 6. One Adam step should move w toward the target, so
+    # re-evaluating gives a value strictly between the old error and zero.
+    x = flt_create_1d(1)
+    flt_set(x, 0, 3.0)
+    tgt = flt_create_1d(1)
+    flt_set(tgt, 0, 12.0)
+    w = flt_create_1d(1)
+    flt_set(w, 0, 2.0)
+
+    wid = ag_track_tensor(w)
+    y = ag_mul(w, x)
+    loss = mse_loss(y, tgt)
+    flint_println("loss-before")
+
+    opt = adam_create(0.1)
+    adam_add_param(opt, wid, 1)
+
+    # Feed the gradient mse_loss produced, then step.
+    lg = mse_loss_grad(y, tgt)
+    aid = ag_track_tensor(lg)
+    ag_backward(aid)
+    ag_backward(ag_grad_id(lg))
+    adam_step(opt)
+
+    y2 = ag_mul(w, x)
+    loss2 = mse_loss(y2, tgt)
+    flint_println("loss-after")
+
+    adam_destroy(opt)
+
+    sgd = sgd_create(0.1, 0.9)
+    sgd_add_param(sgd, wid, 1)
+    sgd_step(sgd)
+    sgd_destroy(sgd)
+
+    flint_println("adam-sgd-ok")
+
+    ag_cleanup()
+    flt_destroy(lg)
+    flt_destroy(y2)
+    flt_destroy(y)
+    flt_destroy(w)
+    flt_destroy(x)
+    flt_destroy(tgt)
+    0
+}

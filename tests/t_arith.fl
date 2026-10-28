@@ -10,5 +10,17 @@ fn main() -> i64 {
     print(2 + 3 * 4)
     x = 1.5 + 2.5
     print(flint_f64_to_string(x))
+    # Phase-2 as-casts: i64<->f64 (f64->i64 truncates toward zero).
+    ci = 7
+    print(flint_f64_to_string(ci as f64))
+    print(7.9 as i64)
+    print(-7.9 as i64)
+    print(9 as f64 as i64)
+    print(4611686018427387904 as f64 as i64)
+    print(10 - 7.9 as i64)
+    mi = 257
+    print(flint_f64_to_string((mi % 100) as f64))
+    cf: f64 = ci as f64
+    print(flint_f64_to_string(cf))
     0
 }

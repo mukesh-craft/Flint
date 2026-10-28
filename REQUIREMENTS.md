@@ -1,6 +1,6 @@
 # Flint Compiler — Requirements & Setup
 
-## Platform Support (v0.17: any device)
+## Platform Support (v0.0.23: any device)
 
 | Tier | Platform | Status |
 |------|----------|--------|
@@ -8,15 +8,28 @@
 | 1 | Linux x86_64 | ✅ CI-tested |
 | 1 | Linux ARM64 | ✅ CI-tested |
 | 2 | macOS (Apple silicon + Intel) | 🟡 builds via Xcode CLT + brew LLVM (CI) |
-| 3 | Windows (MinGW/LLVM-MinGW) | 🟡 v0.20: all runtime + OS layer compile for x86_64; real `hello.exe` cross-linked from ARM; native CI runs tests |
+| 3 | Windows (MinGW/LLVM-MinGW) | 🟡 v0.0.20: all runtime + OS layer compile for x86_64; real `hello.exe` cross-linked from ARM; native CI runs tests |
 | 3 | Windows (MSVC) | 📋 needs native threads + full-toolchain CI run |
 
 Windows notes: link programs with `-lws2_32 -lpthread` (added automatically by
 `flintc` for Windows targets); `flint_regex_*` return err-flagged stubs
 (no POSIX engine); MSVC needs the remaining thread shim (PORT notes in code).
 
-Cross-compilation: `./flintc --target <triple> program.fl -o program.o`
-(e.g. `--target x86_64-unknown-linux-gnu` on ARM). JIT always runs host code.
+**Cross-target output is emit-only.** `--target <triple>` works for producing
+target-specific LLVM IR (`.ll`) or an object file (`.o`):
+
+```bash
+./flintc examples/hello.fl --target x86_64-pc-linux-gnu -o hello.ll
+./flintc examples/hello.fl --target x86_64-pc-linux-gnu -o hello.o
+```
+
+What is **not** implemented is linking and running a complete cross-target
+executable through the Flint toolchain: `-o <name>` still links for the host,
+and JIT mode (`--run`) is host-only (the ORC JIT is built for the native
+machine, so the combination is refused loudly). The Windows row in the table
+above is reached by cross-linking an emitted object with an external
+toolchain, not by `flintc` producing a runnable `.exe` itself. See README.md
+"Cross-target output (emit-only)" and "Honest gaps".
 
 ## Requirements
 
@@ -72,6 +85,7 @@ Expected output:
  profiled compiler: ./flintc_prof   (optional)
 === Build complete ===
  compiler: ./flintc
+ driver: ./flint
  profiled: ./flintc_prof
  runtime: ./runtime.o
  tensor: ./flint_tensor.o
@@ -85,13 +99,21 @@ Expected output:
 ## Build Details
 
 The build compiles:
-1. `src/main.cpp` → `flintc` (the compiler, ~575 KB)
-2. `runtime/runtime.c` → `runtime.o`
-3. Optional: `pyruntime.c` → `pyruntime.o` (if Python headers available)
-4. Optional: `ffi_helper.c` → `ffi_helper.o`
-5. Stdlib modules: `flint_serial.c`, `flint_crypto.c`, `flint_net.c`, `flint_tensor.c`, `flint_ai.c`, `flint_ai_opt.c`
+1. `src/main.cpp` → `flintc` (the compiler, ~1.2 MB on Termux AArch64)
+2. `src/flint_cli.cpp` → `flint` (the high-level `run`/`build` driver)
+3. `runtime/runtime.c` → `runtime.o`
+4. Optional: `pyruntime.c` → `pyruntime.o` (if Python headers available)
+5. Optional: `ffi_helper.c` → `ffi_helper.o`
+6. Stdlib modules: `flint_serial.c`, `flint_crypto.c`, `flint_net.c`, `flint_tensor.c`, `flint_ai.c`, `flint_ai_opt.c`
 
 ## Run
+
+### High-level driver (build and run)
+```bash
+./flint run examples/hello.fl    # build if needed, then run (.flint/bin/hello)
+./flint build examples/hello.fl  # build only
+```
+The modes below use the lower-level `flintc` interface directly.
 
 ### JIT Mode (default — no output file)
 ```bash
@@ -131,7 +153,7 @@ for f in examples/*.fl; do timeout 30 ./flintc "$f" 2>&1 | head -5; done
 Requires Python 3.x.
 
 ```bash
-python3 flint-lsp   # LSP server (stdio)
+lsp/target/release/flint-lsp   # Rust language server (stdio)
 python3 flint-fmt source.fl   # format to stdout
 python3 flint-fmt source.fl -o formatted.fl   # format to file
 python3 flint-doc source.fl   # extract docs to stdout
@@ -142,7 +164,7 @@ python3 flint-doc source.fl --output docs.md   # extract docs to file
 
 ```
 flint/
-├── src/main.cpp          # Main compiler (C++/LLVM, ~7600 lines)
+├── src/main.cpp          # Main compiler (C++/LLVM, ~16.2K lines)
 ├── runtime/
 │   ├── runtime.c         # C runtime library
 │   ├── pyruntime.c       # Python C-API wrapper
@@ -154,7 +176,7 @@ flint/
 │   └── flint_net.c       # Network functions
 ├── examples/             # 36 example programs
 ├── benchmarks/           # Performance benchmarks
-├── flint-lsp             # Python LSP server
+├── lsp/                  # Rust language server (cargo)
 ├── flint-fmt              # Python formatter
 ├── flint-doc              # Python documentation generator
 ├── build.sh              # Build script
@@ -170,4 +192,4 @@ flint/
 2. **`true`/`false` literals exist:** they evaluate to `1`/`0` (verified: `print(true)` → `1`). Older docs saying otherwise are stale.
 3. **strrev at n=100K: fixed 2026-09-13 (R5).** Rebuilt on the linear `flint_sb_*` builder; now passes with correct checksum (5044012, verified 2026-09-24).
 4. **LLVM ISEL edge cases:** Mixed i64/f64 arithmetic is mostly fixed but may still crash in rare unsupported cases on AArch64.
-5. **Self-hosting: done.** Lexer/parser/emitter are Flint programs (`stage1-3/*.fl`); bootstrap A/B/C + stable promotion green, V1 gate 17/17 (2026-09-24).
+5. **Self-hosting: done.** Lexer/parser/emitter are Flint programs (`stage1-3/*.fl`); bootstrap A/B/C + stable promotion green. The v1 battery is green (`bash tests/v1_gate_check.sh ./flintc --full`; the current gate counts live in `STATE.md` §2.2), and the self-host pipeline's fixed point is byte-identical. This is pipeline completeness, not full feature parity with the C++ compiler — see `COMPATIBILITY.md` D5 for the remaining constructs (partial lambda parsing, enum equality, named function values).

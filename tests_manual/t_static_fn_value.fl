@@ -1,0 +1,36 @@
+# Phase 2 / 2D: a function value that captures NOTHING may escape.
+#
+# Before this, EVERY function value was refused at a return boundary or in
+# a global, because the value was an env box in the defining frame. A
+# closure that captures nothing does not depend on that frame: its box is a
+# module-level constant, so it can be returned, stored in a global, or handed
+# to a callee that keeps it.
+#
+# A closure that DOES capture may also escape: at the escape site its box is
+# copied to the heap (Phase 2 / 2D; see t_capturing_escape.fl).
+
+fn make_adder() -> fn(i64) -> i64 {
+    # A capture-less closure, returned from a function: allowed now.
+    return |x: i64| x + 1
+}
+
+fn store_it(f: fn(i64) -> i64) -> fn(i64) -> i64 {
+    # A callee that KEEPS the value and hands it back: the point of the
+    # feature -- a function value that crosses a call boundary.
+    g = f
+    g
+}
+
+fn inc(x: i64) -> i64 { return x + 1 }
+
+fn main() {
+    a = make_adder()
+    print(a(5))                          # 6
+
+    b = store_it(|x: i64| x * 2)
+    print(b(5))                          # 10
+
+    # A named function as a value, returned: allowed (it captures nothing).
+    h = inc
+    print(h(5))                          # 6
+}

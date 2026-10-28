@@ -1,0 +1,22 @@
+[package]
+name = "flint-lsp"
+version = "0.0.23"
+edition = "2021"
+description = "Language server for the Flint programming language (LSP 3.17 over stdio)"
+license = "Apache-2.0"
+
+# serde_json only: JSON is the wire format and hand-building values with json!
+# avoids both a proc-macro dependency and any async runtime. A language server
+# that starts in milliseconds matters more here than type ergonomics, and the
+# protocol types are shallow objects anyway.
+[dependencies]
+serde_json = "1"
+
+# Phone-first build profile: the server ships inside a VS Code extension and
+# must start fast on a device. Release is size- and cold-start-optimized.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "unwind"
+strip = true

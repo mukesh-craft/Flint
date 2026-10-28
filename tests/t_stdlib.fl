@@ -1,0 +1,87 @@
+# Exercises the newly added standard library from Flint: complete maths,
+# descriptive statistics, printf-style formatting, and the three missing
+# collections (set, priority queue, deque).
+
+fn main() -> i64 {
+    # ---- maths: integer
+    print(flint_factorial(10))
+    print(flint_gcd_i64(12, 18))
+    print(flint_lcm_i64(4, 6))
+    print(flint_isqrt(50))
+    print(flint_comb(5, 2))
+    print(flint_fib(30))
+
+    # ---- maths: transcendentals + special functions
+    print(flint_degrees(flint_pi()))
+    print(flint_cbrt(27.0))
+    print(flint_hypot2(3.0, 4.0))
+    print(flint_erf(1.0))
+    print(flint_gamma(5.0))
+    print(flint_is_nan(0.0))
+    print(flint_is_close(1.0, 1.0000001, 0.00001, 0.000000001))
+
+    # ---- statistics over a vec
+    v = flint_vec_new()
+    flint_vec_push(v, 1)
+    flint_vec_push(v, 2)
+    flint_vec_push(v, 3)
+    flint_vec_push(v, 4)
+    print(flint_stat_mean(v))
+    print(flint_stat_median(v))
+    print(flint_stat_min(v))
+    print(flint_stat_max(v))
+    print(flint_stat_variance(v))
+    print(flint_stat_stdev(v))
+    print(flint_stat_percentile(v, 90.0))
+
+    # ---- streaming accumulator
+    acc = flint_accum_new()
+    flint_accum_push(acc, 2.0)
+    flint_accum_push(acc, 4.0)
+    flint_accum_push(acc, 4.0)
+    flint_accum_push(acc, 4.0)
+    flint_accum_push(acc, 5.0)
+    flint_accum_push(acc, 5.0)
+    flint_accum_push(acc, 7.0)
+    flint_accum_push(acc, 9.0)
+    print(flint_accum_mean(acc))
+    print(flint_accum_stdev(acc))
+
+    # ---- set: dedup and membership
+    s = flint_set_new()
+    flint_set_add(s, 1)
+    flint_set_add(s, 2)
+    flint_set_add(s, 2)
+    flint_set_add(s, 3)
+    flint_set_remove(s, 2)
+    print(flint_set_len(s))
+    print(flint_set_has(s, 3))
+    flint_set_free(s)
+
+    # ---- priority queue: pops in ascending order
+    h = flint_heap_new()
+    flint_heap_push(h, 5)
+    flint_heap_push(h, 3)
+    flint_heap_push(h, 9)
+    flint_heap_push(h, 1)
+    print(flint_heap_peek(h))
+    print(flint_heap_pop(h))
+    print(flint_heap_pop(h))
+    flint_heap_free(h)
+
+    # ---- deque: both ends
+    d = flint_deque_new()
+    flint_deque_push_back(d, 2)
+    flint_deque_push_back(d, 3)
+    flint_deque_push_front(d, 1)
+    flint_deque_push_front(d, 0)
+    print(flint_deque_front(d))
+    print(flint_deque_back(d))
+    print(flint_deque_pop_front(d))
+    print(flint_deque_pop_back(d))
+    flint_deque_free(d)
+
+    flint_vec_free(v)
+    flint_accum_free(acc)
+    0
+}

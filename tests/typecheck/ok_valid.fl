@@ -1,0 +1,15 @@
+# Types that agree must pass the checker unchanged.
+fn scale(x: f64) -> f64 {
+    y: f64 = x * 2.0
+    return y
+}
+
+fn main() -> i64 {
+    a: i64 = 3
+    b: f64 = 1.5
+    s: str = "ok"
+    print(scale(b))
+    print(a + 1)
+    print(s)
+    return 0
+}

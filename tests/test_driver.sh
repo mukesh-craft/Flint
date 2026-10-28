@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # Driver test: build driver/flintc.fl + matrix (single/multi/emit-llvm/errors).
 # Usage: bash tests/test_driver.sh [path/to/flintc]   (default: ./flintc)
-# Env: SELF_DIR with parse.0/emit.0 (default /tmp/slipstream/self).
+# Env: SELF_DIR with parse.0/emit.0 (default $TMPDIR/slipstream/self).
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
 set -u
 FLINTC="${1:-./flintc}"
-SELF_DIR="${SELF_DIR:-/data/data/com.termux/files/usr/tmp/slipstream/self}"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/driver"
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+SELF_DIR="${SELF_DIR:-$_TMPBASE/slipstream/self}"
+TMPD="$_TMPBASE/slipstream/driver"
 mkdir -p "$TMPD"
 pass=0; fail=0; skip=0
 [ -x "$SELF_DIR/parse.0" ] && [ -x "$SELF_DIR/emit.0" ] \
   || { echo "MISSING self binaries (build via tests/test_selfhost.sh A)"; exit 1; }
 
-if ! timeout -s KILL 600 "$FLINTC" driver/flintc.fl -o "$TMPD/driver.bin" > /dev/null 2>&1; then echo "FAIL driver (build)"; exit 1; fi
-if ! timeout -s KILL 600 "$FLINTC" tools/merge_sexp.fl -o "$TMPD/merge_sexp.bin" > /dev/null 2>&1; then echo "FAIL driver (merge build)"; exit 1; fi
+if ! timeout -s KILL 600 "$FLINTC" driver/flintc.fl --no-run -o "$TMPD/driver.bin" > /dev/null 2>&1; then echo "FAIL driver (build)"; exit 1; fi
+if ! timeout -s KILL 600 "$FLINTC" tools/merge_sexp.fl --no-run -o "$TMPD/merge_sexp.bin" > /dev/null 2>&1; then echo "FAIL driver (merge build)"; exit 1; fi
 D="$TMPD/driver.bin"; P="$SELF_DIR/parse.0"; E="$SELF_DIR/emit.0"; M="$TMPD/merge_sexp.bin"
 
 # 1. single-file build+run
@@ -34,5 +36,11 @@ if [ -x "$SELF_DIR/emit.1" ]; then
 else
   echo "SKIP driver (self-hosted; no emit.1)"; skip=$((skip+1))
 fi
+# 6. --signatures passes the C++ query file through to the emitter (2E.5).
+# Without it the pipeline defaults the untyped param to i64 and prints the
+# pointer; with it the same source prints the string.
+if timeout -s KILL 300 "$FLINTC" --emit-signatures tests/signatures/untyped.fl "$TMPD/untyped.sig" > /dev/null 2>&1 \
+   && timeout -s KILL 500 "$D" tests/signatures/untyped.fl --parse "$P" --emit "$E" --merge "$M" --rt runtime --signatures "$TMPD/untyped.sig" -o "$TMPD/sig.bin" --no-run > /dev/null 2>&1 \
+   && [ "$("$TMPD/sig.bin")" = hi ]; then pass=$((pass+1)); else echo "FAIL driver (signatures)"; fail=$((fail+1)); fi
 echo "driver: $pass passed, $fail failed, $skip skipped"
 [ "$fail" -eq 0 ]

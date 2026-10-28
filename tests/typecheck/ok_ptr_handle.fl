@@ -1,0 +1,9 @@
+# A `ptr` annotation is the FFI handle type: the runtime returns these
+# handles as i64 and the backend stores them in an opaque-pointer slot.
+# This is the one i64<->ptr case the checker must NOT reject.
+fn main() -> i64 {
+    cell: ptr = flint_atomic_new(0)
+    flint_atomic_set(cell, 7)
+    print(flint_atomic_get(cell))
+    return 0
+}

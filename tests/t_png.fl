@@ -1,0 +1,44 @@
+# The PNG codec and the DEFLATE codec behind it, called from Flint.
+# The fixture PNG was produced by Python's zlib, NOT by this codec, so decoding
+# it proves interoperability rather than self-consistency.
+# Binary data travels as a string literal with \xHH escapes: a Flint array is
+# one i64 per element, so it is not a byte buffer.
+
+fn main() {
+    png = flint_read_file("tests/fixtures/png_ref.bin")
+
+    # --- decode a foreign PNG ---------------------------------------------
+    print(flint_png_decode(png, 86) == 1)
+    print(flint_png_width())
+    print(flint_png_height())
+    print(flint_png_channels())
+    print(flint_png_pixel(0, 0, 0) == 0)
+    # Row 0 bytes are 0, 60, 120, 180, 240, 44, 104, 164, 224 and row 1 is
+    # each of those plus 20, so pixel (1,0) starts at byte 3 and pixel (2,1)
+    # ends at byte 8.
+    print(flint_png_pixel(1, 0, 0) == 180)
+    print(flint_png_pixel(2, 1, 2) == 244)
+    luma = flint_png_mean_luma()
+    print(luma > 0.0 && luma < 1.0)
+
+    # --- encode an image and read it back ---------------------------------
+    # 2x2 RGB: red, green, blue, white. Same rule as above: byte buffers are
+    # string literals, because a Flint array is one i64 per element.
+    pixels = flint_read_file("tests/fixtures/png_pixels.bin")
+    n = flint_png_encode(2, 2, 3, pixels, 12)
+    print(n > 60)
+
+    print(flint_png_decode(flint_png_encoded(), n) == 1)
+    print(flint_png_width() == 2)
+    print(flint_png_height() == 2)
+    print(flint_png_pixel(0, 0, 0) == 255)
+    print(flint_png_pixel(0, 0, 1) == 0)
+    print(flint_png_pixel(1, 1, 0) == 255)
+    print(flint_png_pixel(1, 1, 2) == 255)
+
+    # --- hostile and out-of-range input -----------------------------------
+    print(flint_png_decode(png, 4) == 0)
+    print(flint_str_length(flint_png_error()) > 0)
+    print(flint_png_pixel(99, 99, 0) == -1)
+    print(flint_png_encode(0, 2, 3, pixels, 12) == -1)
+}

@@ -1,0 +1,71 @@
+fn main() -> i64 {
+    # 2x3 @ 3x2 with small integers so every product is exact in f64.
+    # A = [[1,2,3],[4,5,6]]   B = [[7,8],[9,10],[11,12]]
+    # C = [[58,64],[139,154]], sum 415
+    #
+    # print() emits a trailing newline, so one value per line.
+    a = flt_create_2d(2, 3)
+    b = flt_create_2d(3, 2)
+
+    mut i: i64 = 1
+    while i <= 6 {
+        flt_set(a, i - 1, i * 1.0)
+        flt_set(b, i - 1, (i + 6) * 1.0)
+        i = i + 1
+    }
+
+    c = flt_matmul(a, b)
+    print(flt_size(c))
+
+    mut k: i64 = 0
+    while k < 4 {
+        print(flt_get(c, k))
+        k = k + 1
+    }
+
+    # The deterministic reference path must agree with the live one exactly.
+    d = flt_matmul_blas(a, b)
+    mut j: i64 = 0
+    while j < 4 {
+        print(flt_get(d, j))
+        j = j + 1
+    }
+
+    print(flt_sum(c))
+    print(flint_blas_available())
+
+    # ---- Phase-2 tensor literals: f64 rank<=2 desugar to flt_create_*+flt_set
+    t1 = [1.0, 2.0]
+    print(flt_size(t1))
+    print(flt_get(t1, 0))
+    print(flt_get(t1, 1))
+    t2 = [[1.0, 2.0], [3.0, 4.0]]
+    print(flt_size(t2))
+    print(flt_shape(t2, 0))
+    print(flt_shape(t2, 1))
+    print(flt_sum(t2))
+    # int elements promote; negated elements stay exact
+    tm = [1, 2.0]
+    print(flt_get(tm, 0))
+    tn = [-1.5, 2.5]
+    print(flt_sum(tn))
+    # the literal matches a hand-built tensor exactly
+    h = flt_create_2d(2, 2)
+    mut q: i64 = 0
+    while q < 4 {
+        flt_set(h, q, (q + 1) * 1.0)
+        q = q + 1
+    }
+    print(flt_sum(h))
+
+    flt_destroy(c)
+    flt_destroy(d)
+    flt_destroy(a)
+    flt_destroy(b)
+    flt_destroy(t1)
+    flt_destroy(t2)
+    flt_destroy(tm)
+    flt_destroy(tn)
+    flt_destroy(h)
+    0
+}

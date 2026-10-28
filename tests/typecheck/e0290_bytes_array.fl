@@ -1,0 +1,7 @@
+# `bytes` and `[i64]` share the runtime {ptr, i64} slice but have different
+# element widths. Initialising a byte buffer from an i64 array must be
+# rejected by the checker, not silently reinterpreted.
+fn main() -> i64 {
+    b: bytes = flint_array_alloc(4)
+    return 0
+}

@@ -7,7 +7,7 @@
 
 LLVM: 21.1.8
 CLANG: 21.1.8 (aarch64-unknown-linux-android24)
-FLINT: 0.22.0 (src/main.cpp reference)
+FLINT: 0.0.23 (src/main.cpp reference)
 
 Runtime sources linked into every Flint binary (runtime.c + -lm):
 - runtime/runtime.c (core: str/vec/sb/map/chan/IO/process/files)

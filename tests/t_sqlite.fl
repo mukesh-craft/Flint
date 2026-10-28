@@ -1,0 +1,40 @@
+# SQLite: a Rust wrapper over the system libsqlite3.
+#
+# Exercises create/insert/select, ordering, NULL handling, an out-of-range
+# access, and a failing statement — every one of which must be a value, not a
+# crash.
+
+fn main() {
+    print(flint_sqlite_version())
+
+    # A database under TMPDIR: no /tmp on Android, so honor the environment.
+    path = flint_temp_dir() + "/flint-gate.sqlite"
+    db = flint_sqlite_open(path)
+    print(db)
+
+    print(flint_sqlite_exec(db, "CREATE TABLE IF NOT EXISTS parts (name TEXT, qty INTEGER)"))
+    print(flint_sqlite_exec(db, "DELETE FROM parts"))
+    print(flint_sqlite_exec(db, "INSERT INTO parts VALUES ('bolt', 42), ('nut', 7), ('screw', NULL)"))
+
+    rows = flint_sqlite_query(db, "SELECT name, qty FROM parts ORDER BY qty DESC")
+    print(rows)
+    print(flint_sqlite_rows())
+    print(flint_sqlite_cols())
+
+    # Copy each cell out before the next query (results share one arena).
+    first = flint_str_concat(flint_sqlite_get(0, 0), "")
+    print(first)
+    print(flint_sqlite_get(0, 1))
+    print(flint_sqlite_get(2, 1))
+
+    # Out of range is null, not a read past the arena.
+    flint_str_free(flint_sqlite_get(99, 0))
+
+    # A failing statement reports instead of aborting.
+    print(flint_sqlite_query(db, "SELECT * FROM does_not_exist"))
+    print(flint_sqlite_error())
+
+    print(flint_sqlite_close(db))
+    flint_remove(path)
+    print("sqlite-ok")
+}

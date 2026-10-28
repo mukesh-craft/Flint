@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Self-host bootstrap Phase A/B/C (see memory.md STAGE 4 PLAN).
 # Phase A: C++ flintc AOT-builds the Flint pipeline (lex.0/parse.0/emit.0).
-# Phase B: pipeline self-compiles flint_emit.fl -> emit.1 (must run ladder).
+# Phase B: pipeline self-compiles emitter.fl -> emit.1 (must run ladder).
 # Phase C: emit.1 recompiles -> byte-identical .ll (fixed point).
 # Usage: bash tests/test_selfhost.sh [phase]   (default: all)
 # Phases: A (AOT builds) B (self-compile emit.1) C (fixed point)
 #         stable (verify + promote emit.1 to $STABLE_DIR)
 set -u
 FLINTC="${FLINTC:-./flintc}"
-OUT="/data/data/com.termux/files/usr/tmp/slipstream/self"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+OUT="$_TMPBASE/slipstream/self"
 mkdir -p "$OUT"
 PHASE="${1:-all}"
 
@@ -76,23 +78,23 @@ PYEOF
 
 if [ "$PHASE" = all ] || [ "$PHASE" = A ]; then
   echo "=== Phase A: AOT builds"
-  timeout -s KILL 1200 "$FLINTC" stage1/flint_lex.fl -o "$OUT/lex.0" || { echo "FAIL lex.0 build"; exit 1; }
-  timeout -s KILL 1800 "$FLINTC" stage2/flint_parse.fl -o "$OUT/parse.0" || { echo "FAIL parse.0 build"; exit 1; }
-  timeout -s KILL 1800 "$FLINTC" stage3/flint_emit.fl -o "$OUT/emit.0" || { echo "FAIL emit.0 build"; exit 1; }
+  timeout -s KILL 1200 "$FLINTC" stage1/lexer.fl --no-run -o "$OUT/lex.0" || { echo "FAIL lex.0 build"; exit 1; }
+  timeout -s KILL 1800 "$FLINTC" stage2/parser.fl --no-run -o "$OUT/parse.0" || { echo "FAIL parse.0 build"; exit 1; }
+  timeout -s KILL 1800 "$FLINTC" stage3/emitter.fl --no-run -o "$OUT/emit.0" || { echo "FAIL emit.0 build"; exit 1; }
   ls -la "$OUT"/lex.0 "$OUT"/parse.0 "$OUT"/emit.0
   # smoke: pipeline compiles g0_hello
   "$OUT/parse.0" stage3/ladder/g0_hello.sexp > /dev/null 2>&1 || true
-  timeout -s KILL 300 "$FLINTC" stage3/flint_emit.fl -- stage3/ladder/g0_hello.sexp "$OUT/smoke.ll" || { echo "FAIL smoke"; exit 1; }
+  timeout -s KILL 300 "$FLINTC" stage3/emitter.fl -- stage3/ladder/g0_hello.sexp "$OUT/smoke.ll" || { echo "FAIL smoke"; exit 1; }
   echo "Phase A OK"
 fi
 
 if [ "$PHASE" = all ] || [ "$PHASE" = B ]; then
   echo "=== Phase B: self-compile emit"
-  timeout -s KILL 900 "$OUT/parse.0" stage3/flint_emit.fl > "$OUT/emit.main.sexp" || { echo "FAIL parse emit"; exit 1; }
-  timeout -s KILL 900 "$OUT/parse.0" stage1/flint_lex.fl > "$OUT/lex.main.sexp" || { echo "FAIL parse lex"; exit 1; }
+  timeout -s KILL 900 "$OUT/parse.0" stage3/emitter.fl > "$OUT/emit.main.sexp" || { echo "FAIL parse emit"; exit 1; }
+  timeout -s KILL 900 "$OUT/parse.0" stage1/lexer.fl > "$OUT/lex.main.sexp" || { echo "FAIL parse lex"; exit 1; }
   merge_sexp "$OUT/emit.main.sexp" "$OUT/emit.merged.sexp" "$OUT/lex.main.sexp"
   timeout -s KILL 900 "$OUT/emit.0" "$OUT/emit.merged.sexp" "$OUT/emit_self.ll" || { echo "FAIL emit self"; exit 1; }
-  clang "$OUT/emit_self.ll" runtime/runtime.c -lm -o "$OUT/emit.1" || { echo "FAIL link emit.1"; exit 1; }
+  clang -O2 "$OUT/emit_self.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$OUT/emit.1" || { echo "FAIL link emit.1"; exit 1; }
   # emit.1 must compile the ladder
   timeout -s KILL 300 "$OUT/emit.1" stage3/ladder/g0_hello.sexp "$OUT/smoke1.ll" || { echo "FAIL emit.1 smoke"; exit 1; }
   echo "Phase B OK"
@@ -110,7 +112,7 @@ fi
 
 if [ "$PHASE" = all ] || [ "$PHASE" = stable ]; then
   echo "=== Stable promotion (flintc-stable)"
-  STABLE_DIR="${STABLE_DIR:-/data/data/com.termux/files/usr/tmp/slipstream/stable}"
+  STABLE_DIR="${STABLE_DIR:-$_TMPBASE/slipstream/stable}"
   mkdir -p "$STABLE_DIR"
   # Re-verify before promoting: fixed point + ladder smoke through emit.1.
   diff -q "$OUT/emit_self.ll" "$OUT/emit_self2.ll" > /dev/null \

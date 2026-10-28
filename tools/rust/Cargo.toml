@@ -1,0 +1,17 @@
+[package]
+name = "flint-tool"
+version = "0.1.0"
+edition = "2021"
+description = "Flint development tooling, ported from Python to Rust"
+
+# A build-time tool, so std. This is deliberately NOT part of runtime/rust,
+# which is #![no_std] and builds the staticlib linked into Flint programs.
+[[bin]]
+name = "flint-tool"
+path = "src/main.rs"
+
+[dependencies]
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 2
