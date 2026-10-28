@@ -1,5 +1,6 @@
 extern "C" {
     fn flt_create(ndim: i64, shape: str) -> str
+    fn flt_create_2d(r: i64, c: i64) -> str
     fn flt_destroy(t: str)
     fn flt_clone(t: str) -> str
     fn flt_size(t: str) -> i64
@@ -26,20 +27,11 @@ extern "C" {
     fn flt_print_shape(t: str)
 }
 
-fn make_shape(ndim: i64, d0: i64, d1: i64) -> str {
-    s = flint_array_alloc(ndim)
-    sd = flint_array_data(s)
-    if ndim >= 1 { flint_array_write_i64(sd, 0, d0) }
-    if ndim >= 2 { flint_array_write_i64(sd, 1, d1) }
-    return sd
-}
-
 fn train_linreg() -> i64 {
     flint_print("=== Linear Regression ===\n")
     n: i64 = 100
-    sd = make_shape(2, n, 1)
-    x: str = flt_create(2, sd)
-    y: str = flt_create(2, sd)
+    x: str = flt_create_2d(n, 1)
+    y: str = flt_create_2d(n, 1)
     flt_uniform(x, -1.0, 1.0)
     mut i: i64 = 0
     while i < n {
@@ -48,12 +40,11 @@ fn train_linreg() -> i64 {
         i = i + 1
     }
 
-    sd1 = make_shape(2, 1, 1)
-    w: str = flt_create(2, sd1)
-    b: str = flt_create(2, sd1)
+    w: str = flt_create_2d(1, 1)
+    b: str = flt_create_2d(1, 1)
     flt_fill(w, 0.0); flt_fill(b, 0.0)
 
-    pred: str = flt_create(2, sd)
+    pred: str = flt_create_2d(n, 1)
     flint_print("Training 100 epochs (lr=0.1)...\n")
     mut epoch: i64 = 0
     while epoch < 100 {
@@ -92,10 +83,8 @@ fn train_linreg() -> i64 {
 
 fn forward_xor() -> i64 {
     flint_print("\n=== XOR Forward Pass (autograd) ===\n")
-    sd = make_shape(2, 4, 2)
-    x = flt_create(2, sd)
-    sd1 = make_shape(2, 4, 1)
-    y = flt_create(2, sd1)
+    x = flt_create_2d(4, 2)
+    y = flt_create_2d(4, 1)
     flt_set(x, 0, 0.0); flt_set(x, 1, 0.0); flt_set(x, 2, 0.0)
     flt_set(x, 3, 1.0); flt_set(x, 4, 1.0); flt_set(x, 5, 0.0)
     flt_set(x, 6, 1.0); flt_set(x, 7, 1.0)
@@ -103,10 +92,10 @@ fn forward_xor() -> i64 {
     flt_set(y, 2, 1.0); flt_set(y, 3, 0.0)
 
     ag_init()
-    w1 = flt_create(2, make_shape(2, 2, 4)); gid1 = ag_track_tensor(w1)
-    b1 = flt_create(2, make_shape(2, 1, 4)); gid2 = ag_track_tensor(b1)
-    w2 = flt_create(2, make_shape(2, 4, 1)); gid3 = ag_track_tensor(w2)
-    b2 = flt_create(2, make_shape(2, 1, 1)); gid4 = ag_track_tensor(b2)
+    w1 = flt_create_2d(2, 4); gid1 = ag_track_tensor(w1)
+    b1 = flt_create_2d(1, 4); gid2 = ag_track_tensor(b1)
+    w2 = flt_create_2d(4, 1); gid3 = ag_track_tensor(w2)
+    b2 = flt_create_2d(1, 1); gid4 = ag_track_tensor(b2)
     flt_uniform(w1, -0.5, 0.5); flt_uniform(w2, -0.5, 0.5)
     flt_fill(b1, 0.0); flt_fill(b2, 0.0)
 

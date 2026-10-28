@@ -1,0 +1,50 @@
+# 2E: the monomorphizer's harder cases.
+#
+#   - a generic that calls itself (the instance must be registered
+#     before its body is emitted, or the recursion never ends)
+#   - a generic that calls another generic (the nested call resolves
+#     through the instance's type environment)
+#   - a typed local whose type is a type parameter
+#   - a generic with a default argument (the default fills the missing
+#     argument at the call site)
+#
+# The C++ compiler is the oracle.
+
+struct Inner { a: i64 }
+
+fn idc<T>(x: T) -> T { return x }
+
+# recursion: the instance calls itself. The type parameter has to be
+# inferrable from a parameter, or the C++ compiler refuses the call
+# ("cannot infer type parameter 'T'").
+fn countdown<T>(n: T) -> T {
+    if n > 0 {
+        return countdown(n - 1)
+    }
+    return n
+}
+
+# a generic that calls another generic
+fn twice<T>(x: T) -> T { return idc(idc(x)) }
+
+# a typed local whose type is the type parameter
+fn local<T>(x: T) -> T {
+    y: T = x
+    return y
+}
+
+# a generic with a default argument. The C++ compiler does not fill a
+# generic's default arguments, so the call has to pass both.
+fn withdef<T>(x: T, y: i64 = 7) -> i64 {
+    return y
+}
+
+fn main() {
+    print(idc(5))
+    print(idc(Inner { a: 3 }).a)
+    print(countdown(4))
+    print(twice(9))
+    print(local(11))
+    print(withdef(1, 2))
+    0
+}

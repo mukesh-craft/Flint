@@ -1,0 +1,8 @@
+{
+  "machine": "Linux_aarch64",
+  "sum_array_ns": 12042605,
+  "pi_ns": 784849739,
+  "hello_raw_bytes": 8088,
+  "hello_stripped_bytes": 4552,
+  "compile_ms": 95
+}

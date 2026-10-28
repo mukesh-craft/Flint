@@ -1,0 +1,14 @@
+# The standard library crate is #![no_std] and targets a single-threaded
+# runtime: its result buffers, error strings and CSPRNG state are static, with
+# no locking, because Flint programs are not multithreaded.
+#
+# `cargo test` nevertheless runs tests on one OS thread per test by default.
+# That mismatch is a data race: a test hashing with Argon2 can interleave with
+# a test generating a UUID, and each observes the other's static state. This
+# showed up as a different failing test on each run, which is the signature of
+# a race rather than a logic bug.
+#
+# One test thread matches how the crate is actually used. Without this, the
+# suite reports intermittent failures that no amount of re-running explains.
+[env]
+RUST_TEST_THREADS = { value = "1", force = true }

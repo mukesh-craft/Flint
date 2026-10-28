@@ -1,0 +1,12 @@
+# Rust build products: rebuild with `cargo build --release` in cqma-rs/.
+cqma-rs/target/
+
+# Test outputs from cqma-tests/test_regressions.sh and verify.py. The
+# committed reports (*.md/*.json) are evidence; these are regenerated.
+cqma-tests/scratch/hooks.o
+cqma-tests/flint/*.bin
+cqma-tests/flint/*.ll
+cqma-tests/flint/*.out
+cqma-tests/flint/*.err
+cqma-tests/flint/*.leaks
+cqma-tests/flint/*.link.log

@@ -1,0 +1,17 @@
+# Phase 2 / 2D: a capturing closure stored into a GLOBAL.
+#
+# A global outlives every frame, so the box is promoted before the store. The
+# capture-less initializer (`|x| x`) needs no promotion: its box is a
+# module-level constant.
+
+mut g: fn(i64) -> i64 = |x: i64| x
+
+fn install(k: i64) {
+    cb = |x: i64| x + k
+    g = cb
+}
+
+fn main() {
+    install(35)
+    print(g(7))
+}

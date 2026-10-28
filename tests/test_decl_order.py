@@ -5,7 +5,7 @@ used with a method inside fn F must be declared textually BEFORE F, else
 the call silently falls back to `fa_*` and fails closed at codegen
 ("undefined function"). This checker fails loudly on any violation.
 
-Usage: python3 tests/test_decl_order.py stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl [more...]
+Usage: python3 tests/test_decl_order.py stage1/lexer.fl stage2/parser.fl stage3/emitter.fl [more...]
 Exit 0 = all method receivers declared before first use.
 """
 import re

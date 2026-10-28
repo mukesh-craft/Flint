@@ -1,0 +1,25 @@
+fn fib_iter(n: i64) -> i64 {
+    if n == 0 { return 0 }
+    mut a: i64 = 0
+    mut b: i64 = 1
+    mut i: i64 = 2
+    while i <= n {
+        next = a + b
+        a = b
+        b = next
+        i = i + 1
+    }
+    b
+}
+
+fn main() -> i64 {
+    t0 = flint_time_ns()
+    result = fib_iter(45)
+    elapsed = flint_time_ns() - t0
+    flint_print("fib_iter(45) = ")
+    flint_println(flint_i64_to_string(result))
+    flint_print("time: ")
+    flint_print(flint_i64_to_string(elapsed))
+    flint_println(" ns")
+    0
+}

@@ -1,0 +1,26 @@
+# 2E: the self-host pipeline must monomorphize a generic function.
+#
+# The C++ compiler is the oracle: the pipeline (stage2 parser + stage3
+# emitter) must produce the SAME output for this program. The type
+# arguments are inferred by the by-parameter rule, so `idc` is
+# instantiated for i64, f64, str and a struct.
+#
+# This fixture lives in tests_manual/ because the pipeline's parser only
+# learned the `fn name<T>(...)` declaration form in 2E; the explicit
+# `::<T>` call syntax is a separate gap (see docs/PIPELINE-GENERICS.md).
+
+struct Inner { a: i64 }
+
+fn idc<T>(x: T) -> T { return x }
+
+fn pair<T, U>(a: T, b: U) -> T { return a }
+
+fn main() {
+    print(idc(5))
+    print(idc(2.5))
+    print(idc("hi"))
+    print(idc(Inner { a: 7 }).a)
+    print(pair(3, 9))
+    print(pair(2.5, "x"))
+    0
+}

@@ -18,10 +18,10 @@ expect() { # $1=desc $2=expected $3=actual
 printf 'fn main() -> i64 {\n    print(7)\n    0\n}\n' > "$T/app/main.fl"
 
 # 1. flags salt: safe and --unsafe builds must not share a cache entry.
-timeout -s KILL 300 "$FLINTC" "$T/app/main.fl" -o "$T/app/safe.bin" > /dev/null 2>&1
+timeout -s KILL 300 "$FLINTC" "$T/app/main.fl" --no-run -o "$T/app/safe.bin" > /dev/null 2>&1
 [ -x "$T/app/safe.bin" ] || { echo "FAIL: safe build"; fail=$((fail+1)); }
 nbin1="$(ls "$HOME/.cache/flintc/"*.bin 2>/dev/null | wc -l | tr -d ' ')"
-timeout -s KILL 300 "$FLINTC" --unsafe "$T/app/main.fl" -o "$T/app/unsafe.bin" > /dev/null 2>&1
+timeout -s KILL 300 "$FLINTC" --unsafe "$T/app/main.fl" --no-run -o "$T/app/unsafe.bin" > /dev/null 2>&1
 [ -x "$T/app/unsafe.bin" ] || { echo "FAIL: unsafe build"; fail=$((fail+1)); }
 nbin2="$(ls "$HOME/.cache/flintc/"*.bin 2>/dev/null | wc -l | tr -d ' ')"
 expect "safe/unsafe use distinct cache entries" "$((nbin1 + 1))" "$nbin2"
@@ -30,19 +30,19 @@ expect "unsafe runs" "7" "$("$T/app/unsafe.bin" 2>/dev/null | tail -n 1)"
 
 # 1b. cache-restored binaries stay executable (copy_file drops +x;
 # loadBinary must re-add it or every cached rebuild fails with 126).
-timeout -s KILL 300 "$FLINTC" "$T/app/main.fl" -o "$T/app/safe2.bin" > /dev/null 2>&1
+timeout -s KILL 300 "$FLINTC" "$T/app/main.fl" --no-run -o "$T/app/safe2.bin" > /dev/null 2>&1
 [ -x "$T/app/safe2.bin" ] || { echo "FAIL: restored binary not executable"; fail=$((fail+1)); }
 expect "restored binary runs" "7" "$("$T/app/safe2.bin" 2>/dev/null | tail -n 1)"
 
 # 2. import sidecar: editing an import must change the next build's output.
 printf 'fn helper() -> i64 {\n    40\n}\n' > "$T/app/helper.fl"
 printf 'import "./helper.fl"\nfn main() -> i64 {\n    print(helper() + 2)\n    0\n}\n' > "$T/app/use.fl"
-timeout -s KILL 300 "$FLINTC" "$T/app/use.fl" -o "$T/app/u1.bin" > /dev/null 2>&1
+timeout -s KILL 300 "$FLINTC" "$T/app/use.fl" --no-run -o "$T/app/u1.bin" > /dev/null 2>&1
 expect "import build v1 prints 42" "42" "$("$T/app/u1.bin" 2>/dev/null | tail -n 1)"
 [ "$(ls "$HOME/.cache/flintc/"*.imports 2>/dev/null | wc -l | tr -d ' ')" -ge 1 ] \
     && echo "ok: sidecar written" || { echo "FAIL: no .imports sidecar"; fail=$((fail+1)); }
 printf 'fn helper() -> i64 {\n    41\n}\n' > "$T/app/helper.fl"
-timeout -s KILL 300 "$FLINTC" "$T/app/use.fl" -o "$T/app/u2.bin" > /dev/null 2>&1
+timeout -s KILL 300 "$FLINTC" "$T/app/use.fl" --no-run -o "$T/app/u2.bin" > /dev/null 2>&1
 expect "edited import rebuilds (no stale reuse)" "43" "$("$T/app/u2.bin" 2>/dev/null | tail -n 1)"
 
 echo "cache: failures=$fail"

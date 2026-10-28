@@ -1,0 +1,41 @@
+# Generic ARGUMENT inference: the shapes that used to silently instantiate i64.
+#
+# A generic call infers each type parameter from the ARGUMENT that fills the
+# parameter mentioning it. Two argument shapes were not recognized, so the
+# inference fell through to i64:
+#
+#   * a CAST argument — its type is the cast TARGET;
+#   * a nested CALL argument — the callee's return type, resolved with the
+#     same by-parameter rule (recursively).
+#
+# Both were silently wrong: `idc(s as f64)` instantiated `idc.i64`, and the
+# call-signature guard then rejected the call with "expects i64" — a message
+# about the instantiation, not about the user's program. `idc(idc(Inner{a:1}))`
+# failed the same way. The program was right; the inference was not.
+#
+# The discriminating checks below: if T were i64, `idc(s as f64) / 2.0` would
+# print 1 (integer division) instead of 1.5.
+
+struct Inner { a: i64 }
+struct Mixed { f: f64, i: i64 }
+
+fn idc<T>(x: T) -> T { return x }
+
+fn main() {
+    p = Inner { a: 9 }
+    print(idc(Inner { a: 5 }).a)       # struct literal -> 5
+    print(idc(p).a)                    # variable -> 9
+    arr = [1, 2, 3]
+    print(idc(arr[1]))                 # index -> 2
+    s = 3
+    print(idc(s as f64) / 2.0)         # cast -> 1.5 (i64 would print 1)
+    print(idc(idc(Inner { a: 7 })).a)  # nested generic call -> 7
+    print(idc(idc(idc(4))))            # three levels deep -> 4
+
+    # M2c: an arithmetic expression with a float operand is f64, and a float
+    # field is f64. Both used to infer i64 -- a silently wrong
+    # instantiation that the call guard then rejected.
+    print(idc(1.5 + 2.5))             # -> 4
+    m = Mixed { f: 2.5, i: 7 }
+    print(idc(m.f))                   # -> 2.5
+}

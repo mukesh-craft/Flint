@@ -654,7 +654,9 @@ static JsonValue* jp_parse_string(JsonParser* p, JsonResult* r) {
                         utf8[3] = (char)(0x80 | (codepoint & 0x3F));
                         utf8_len = 4;
                     } else {
-                        codepoint = 0xFFFD;
+                        // Out of range (> 0x10FFFF): emit U+FFFD directly.
+                        // Assigning codepoint first would be a dead store --
+                        // the bytes below are already the replacement char.
                         utf8[0] = (char)(0xEF);
                         utf8[1] = (char)(0xBF);
                         utf8[2] = (char)(0xBD);

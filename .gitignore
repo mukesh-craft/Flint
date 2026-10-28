@@ -3,6 +3,8 @@
 *.bc
 *.bin
 flintc
+/flint
+/.flint/
 flintc_prof
 flintc_prof*
 flintc_bincache
@@ -19,7 +21,7 @@ profile_data.csv
 *_output.txt
 *_g3*
 flint-build
-flintc.fl
+/flintc.fl  # root artifact only -- driver/flintc.fl is SOURCE (test_driver, fmt, decl-order all read it)
 flint-test
 # Debug/ASan compiler binary (rebuildable, 16MB — never commit)
 /flintc_asan
@@ -35,3 +37,16 @@ flint-test
 /c_*.txt
 # Profiler output (generated in CWD by flintc_prof runs)
 profile_report.json
+compile_commands.json
+
+# External audit scratch (ultracode wave 2026-10-17: logs + probe artifacts)
+/.audit/
+/lsp/target/
+/editors/vscode/node_modules/
+/editors/vscode/bin/
+/editors/vscode/.keywords.json
+/runtime/rust/target/
+
+# benchmark scratch output (tools/bench_tooling.sh run artifacts)
+bench_out/
+tools/__pycache__/

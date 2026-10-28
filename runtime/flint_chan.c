@@ -1,4 +1,4 @@
-// flint_chan.c — v0.22: bounded MPMC channels for i64 messages.
+// flint_chan.c — v0.0.22: bounded MPMC channels for i64 messages.
 //
 // The safe handoff primitive behind Flint's concurrency story: share by
 // communicating instead of sharing memory. Blocking send/recv with close
@@ -15,8 +15,12 @@
 #include <string.h>
 #include <stdint.h>
 #include <pthread.h>
+#include "flint_aegis.h"
 
-extern void flint_panic(const char* msg);
+// noreturn must be visible here too: without it the compiler (and static
+// analyzers) assume control continues after a panic, which turns every
+// "free-then-panic" cleanup path into a phantom double free.
+extern void flint_panic(const char* msg) __attribute__((cold, noreturn));
 extern void flint_set_err(int64_t err);
 
 typedef struct {
@@ -59,11 +63,14 @@ void flint_chan_free(void* p) {
     pthread_mutex_destroy(&ch->mtx);
     pthread_cond_destroy(&ch->not_empty);
     pthread_cond_destroy(&ch->not_full);
-    free(ch->buf);
-    free(ch);
+    flint_aegis_quarantine_free(ch->buf, (size_t)ch->cap * sizeof(int64_t));
+    flint_aegis_quarantine_free(ch, sizeof(FlintChan));
 }
 
 int64_t flint_chan_send(void* p, int64_t v) {
+    // A freed channel is quarantined, so this traps instead of locking a
+    // destroyed mutex -- which is undefined behaviour, not an error return.
+    flint_aegis_check_live(p, "chan_send");
     FlintChan* ch = (FlintChan*)p;
     if (!ch) { flint_set_err(1); return -1; }
     pthread_mutex_lock(&ch->mtx);
@@ -83,6 +90,7 @@ int64_t flint_chan_send(void* p, int64_t v) {
 }
 
 int64_t flint_chan_recv(void* p) {
+    flint_aegis_check_live(p, "chan_recv");
     FlintChan* ch = (FlintChan*)p;
     if (!ch) flint_panic("chan_recv: null channel");
     pthread_mutex_lock(&ch->mtx);
@@ -102,6 +110,7 @@ int64_t flint_chan_recv(void* p) {
 }
 
 int64_t flint_chan_close(void* p) {
+    flint_aegis_check_live(p, "chan_close");
     FlintChan* ch = (FlintChan*)p;
     if (!ch) { flint_set_err(1); return -1; }
     pthread_mutex_lock(&ch->mtx);
@@ -113,6 +122,7 @@ int64_t flint_chan_close(void* p) {
 }
 
 int64_t flint_chan_len(void* p) {
+    flint_aegis_check_live(p, "chan_len");
     FlintChan* ch = (FlintChan*)p;
     if (!ch) { flint_set_err(1); return -1; }
     pthread_mutex_lock(&ch->mtx);

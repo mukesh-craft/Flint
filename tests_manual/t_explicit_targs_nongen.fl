@@ -1,0 +1,9 @@
+# M2b: explicit type arguments — a NON-generic callee rejects them.
+#
+# New syntax, so tests_manual/ (not in the self-host parse corpus).
+
+fn plain(x: i64) -> i64 { return x }
+
+fn main() {
+    print(plain::<i64>(5))
+}

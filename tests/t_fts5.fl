@@ -1,0 +1,40 @@
+# SQLite FTS5: full-text search through the stdlib wrapper.
+#
+# No new code is needed for this — Termux's libsqlite3 already has FTS5, rtree,
+    # The math functions (deterministic sqlite build): available, not assumed.
+# because "the library supports it" and "a Flint program can use it" are
+# different claims.
+
+fn main() {
+    db = flint_sqlite_open(flint_temp_dir() + "/flint-fts.sqlite")
+    print(db)
+
+    flint_sqlite_exec(db, "CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(title, body)")
+    flint_sqlite_exec(db, "DELETE FROM docs")
+    flint_sqlite_exec(db,
+        "INSERT INTO docs (title, body) VALUES ('Flint', 'a safe compiled language for every device'), ('Rust', 'ownership without garbage collection'), ('Curl', 'transfer data over the network')")
+
+    # A keyword search: rows come back ranked with the query terms highlighted.
+    print(flint_sqlite_query(db, "SELECT title FROM docs WHERE docs MATCH 'language'"))
+    print(flint_sqlite_get(0, 0))
+
+    # Two-term search, which must match the row containing both.
+    flint_sqlite_query(db, "SELECT title FROM docs WHERE docs MATCH 'compiled device'")
+    print(flint_sqlite_rows())
+
+    # A term that appears nowhere must return zero rows, not an error.
+    print(flint_sqlite_query(db, "SELECT title FROM docs WHERE docs MATCH 'kubernetes'"))
+    print(flint_sqlite_rows())
+
+    # Snippet(): FTS5 returns a highlighted excerpt, which is what a UI wants.
+    flint_sqlite_query(db, "SELECT snippet(docs, 1, '[', ']', '...', 6) FROM docs WHERE docs MATCH 'network'")
+    print(flint_sqlite_get(0, 0))
+
+    # The math functions (deterministic sqlite build): available, not assumed.
+    flint_sqlite_query(db, "SELECT CAST(round(sqrt(16.0)) AS INTEGER)")
+    print(flint_sqlite_get(0, 0))
+
+    flint_sqlite_close(db)
+    flint_remove(flint_temp_dir() + "/flint-fts.sqlite")
+    print("fts5-ok")
+}

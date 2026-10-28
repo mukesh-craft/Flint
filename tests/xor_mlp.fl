@@ -1,0 +1,103 @@
+# XOR with a 2-layer MLP, trained entirely in Flint against the project's own
+# tensor / autograd / optimizer runtime.
+#
+#     y = W2 @ sigmoid(W1 @ x + b1) + b2
+#
+# XOR is the standard check that a network is more than a perceptron: no
+# linear model can separate it, so a solution proves the hidden layer, the
+# nonlinearity and the backward pass all work together. Four samples, two
+# inputs, one hidden layer.
+#
+#   (0,0)->0  (0,1)->1  (1,0)->1  (1,1)->0
+#
+# After training each output should exceed 0.9, and the gate asserts it.
+# Run: ./flintc tests/xor_mlp.fl
+
+fn forward(x: ptr, w1: ptr, b1: ptr, w2: ptr, b2: ptr) -> ptr {
+    h1 = ag_matmul(w1, x)      # (2x2) @ (2x1) -> (2x1)
+    h2 = ag_add(h1, b1)        # hidden bias, broadcast down the column
+    h3 = ag_sigmoid(h2)        # nonlinearity: this is what makes XOR separable
+    o1 = ag_matmul(w2, h3)     # (1x2) @ (2x1) -> (1x1)
+    ag_add(o1, b2)
+}
+
+fn main() -> i64 {
+    # ---- the four samples as one (2 x 4) batch: column j is sample j
+    xs = flt_create_2d(2, 4)
+    flt_set(xs, 0, 0.0)   # x0 of each sample
+    flt_set(xs, 1, 0.0)
+    flt_set(xs, 2, 1.0)
+    flt_set(xs, 3, 1.0)
+    flt_set(xs, 4, 0.0)   # x1 of each sample
+    flt_set(xs, 5, 1.0)
+    flt_set(xs, 6, 0.0)
+    flt_set(xs, 7, 1.0)
+
+    ys = flt_create_2d(1, 4)
+    flt_set(ys, 0, 0.0)
+    flt_set(ys, 1, 1.0)
+    flt_set(ys, 2, 1.0)
+    flt_set(ys, 3, 0.0)
+
+    # ---- parameters, deliberately asymmetric so the two hidden units start
+    # ---- differently (identical units can settle into the same solution and
+    # ---- never separate the corners)
+    w1 = flt_create_2d(2, 2)
+    flt_set(w1, 0,  4.0)
+    flt_set(w1, 1, -4.0)
+    flt_set(w1, 2, -3.0)
+    flt_set(w1, 3,  3.0)
+    b1 = flt_create_2d(2, 1)
+    flt_set(b1, 0, -1.0)
+    flt_set(b1, 1, -1.0)
+    w2 = flt_create_2d(1, 2)
+    flt_set(w2, 0, 1.0)
+    flt_set(w2, 1, 1.0)
+    b2 = flt_create_2d(1, 1)
+    flt_set(b2, 0, 0.0)
+
+    w1id = ag_track_tensor(w1)
+    b1id = ag_track_tensor(b1)
+    w2id = ag_track_tensor(w2)
+    b2id = ag_track_tensor(b2)
+
+    opt = adam_create(0.05)
+    adam_add_param(opt, w1id, 4)
+    adam_add_param(opt, b1id, 2)
+    adam_add_param(opt, w2id, 2)
+    adam_add_param(opt, b2id, 1)
+
+    # ---- loss before training
+    p0 = forward(xs, w1, b1, w2, b2)
+    flint_println("initial-loss")
+    print(mse_loss(p0, ys))
+
+    mut ep: i64 = 0
+    while ep < 4000 {
+        ag_zero_grad(w1id)
+        ag_zero_grad(b1id)
+        ag_zero_grad(w2id)
+        ag_zero_grad(b2id)
+
+        yp = forward(xs, w1, b1, w2, b2)
+        g = mse_loss_grad(yp, ys)
+        ag_seed(g)
+        ag_backward(ag_grad_id(yp))
+        adam_step(opt)
+        ep = ep + 1
+    }
+
+    # ---- final loss and every prediction
+    p1 = forward(xs, w1, b1, w2, b2)
+    flint_println("final-loss")
+    print(mse_loss(p1, ys))
+    flint_println("outputs")
+    mut i: i64 = 0
+    while i < 4 {
+        print(flt_get(p1, i))
+        i = i + 1
+    }
+
+    ag_cleanup()
+    0
+}

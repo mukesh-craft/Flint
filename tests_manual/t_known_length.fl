@@ -1,0 +1,39 @@
+# Phase 2 / step 2A.1 -- a literal index into a literal-length array is
+# provably in bounds, so the check is unnecessary.
+#
+# The bounds check used to compare the index against the length LOADED
+# FROM THE SLICE. The loop bound and that loaded length are unrelated
+# values, so LLVM could not relate them and the check survived in every
+# loop (measured: 3 of 6 checks survive in sum_array). Now the compiler
+# knows a literal array's EXACT length, and:
+#
+#   * a LITERAL index in range is proven in bounds -> no check at all
+#     (this is the "R2 BCE-lite" flag, which existed for years and was
+#     never set);
+#   * any other index is checked against the exact constant, which LLVM
+#     folds away when the index is provably in range.
+#
+# The SAFETY direction is what matters: an index that is NOT proven must
+# still be checked, and an out-of-range access must still trap.
+
+fn main() -> i64 {
+    a = [10, 20, 30]
+
+    # Proven in bounds: literal index, literal length.
+    print(a[0])            # 10
+    print(a[2])            # 30
+
+    # Not proven (the index is a variable) -> checked.
+    mut i: i64 = 1
+    print(a[i])            # 20
+
+    # The length is known, so the check compares against the constant.
+    mut j: i64 = 0
+    mut s: i64 = 0
+    while j < 3 {
+        s = s + a[j]
+        j = j + 1
+    }
+    print(s)               # 60
+    return 0
+}

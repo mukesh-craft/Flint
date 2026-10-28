@@ -1,0 +1,7 @@
+# An integer initialiser in a float annotation: codegen stored the i64 bits
+# into the double slot, and `print(x)` read 4.94e-324 for `x: f64 = 1`.
+fn main() -> i64 {
+    x: f64 = 1
+    print(x)
+    return 0
+}

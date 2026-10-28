@@ -1,0 +1,35 @@
+# M4 follow-up: a NAMED function used as a value.
+#
+#   let h = inc      # inc is a top-level fn
+#   h(5)             # calls inc(5)
+#
+# A named function has no captures, so it joins the lambda protocol through
+# a THUNK: a generated wrapper with the same fn(env, args...) shape that
+# ignores its env argument and forwards to the real function. The call site
+# therefore needs no discriminator -- a named-function value and a lambda
+# value are the same kind of thing at runtime, and the existing fn-value
+# call path works unchanged.
+#
+# A named function has no captures, so its box is a module-level constant:
+# the value may be returned or stored in a global (Phase 2 / 2D).
+
+fn inc(x: i64) -> i64 { return x + 1 }
+fn twice(x: i64) -> i64 { return x * 2 }
+
+fn apply(f: fn(i64) -> i64, v: i64) -> i64 { return f(v) }
+
+fn main() {
+    h = inc
+    print(h(5))               # 6
+    print(apply(h, 5))        # 6
+
+    g = twice
+    print(g(5))               # 10
+
+    # A named function as an argument directly.
+    print(apply(twice, 5))    # 10
+
+    # The value keeps its declared signature: a fn(i64)->i64 binding.
+    k: fn(i64) -> i64 = inc
+    print(k(5))               # 6
+}

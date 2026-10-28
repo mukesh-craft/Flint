@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Compile-time benchmark: C++ flintc vs self-hosted pipeline, split by phase.
 # Usage: bash bench/compile_time/bench.sh [path/to/flintc] [runs]
-# Env: SELF_DIR with parse.0/emit.0 (default /tmp/slipstream/self).
+# Env: SELF_DIR with parse.0/emit.0 (default $TMPDIR/slipstream/self).
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
 # Prints CSV: input,bytes,cpp_ms,self_parse_ms,self_emit_ms,self_total_ms
-# Corpus: tests/differential/common.fl (small), stage1/flint_lex.fl (large).
+# Corpus: tests/differential/common.fl (small), stage1/lexer.fl (large).
 set -u
 FLINTC="${1:-./flintc}"
 RUNS="${2:-3}"
-SELF_DIR="${SELF_DIR:-/data/data/com.termux/files/usr/tmp/slipstream/self}"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/benchct"
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+SELF_DIR="${SELF_DIR:-$_TMPBASE/slipstream/self}"
+TMPD="$_TMPBASE/slipstream/benchct"
 mkdir -p "$TMPD"
 [ -x "$SELF_DIR/parse.0" ] && [ -x "$SELF_DIR/emit.0" ] \
   || { echo "MISSING self binaries (build via tests/test_selfhost.sh A)"; exit 1; }
@@ -35,4 +37,4 @@ bench_one() { # $1=label $2=src
 }
 echo "input,bytes,cpp_ms,self_parse_ms,self_emit_ms,self_total_ms"
 bench_one small tests/differential/common.fl
-bench_one lex stage1/flint_lex.fl
+bench_one lex stage1/lexer.fl

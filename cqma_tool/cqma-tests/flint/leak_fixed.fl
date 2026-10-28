@@ -1,0 +1,10 @@
+// Same program with the owned string released: the tracker must report clean.
+fn main() {
+    mut i: i64 = 0
+    while i < 5 {
+        let s = flint_i64_to_string(i)
+        print(s)
+        flint_str_free(s)
+        i = i + 1
+    }
+}

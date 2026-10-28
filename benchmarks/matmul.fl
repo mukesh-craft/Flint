@@ -1,0 +1,45 @@
+# Dense matmul benchmark -- Flint vs the C/Python mirrors in this directory.
+#
+# Uses the public AI builtins directly (no extern block): flt_create_2d and
+# flt_matmul are registered compiler builtins, so this exercises the same path
+# a Flint program would. The shapes match matmul.c / matmul.py / matmul.cpp.
+#
+#   ./flintc benchmarks/matmul.fl && ./matmul
+
+fn bench(n: i64) -> i64 {
+    a = flt_create_2d(n, n)
+    b = flt_create_2d(n, n)
+    flt_fill(a, 1.0)
+    flt_fill(b, 0.5)
+
+    # Warm up so the timed loop is not dominated by first-touch page faults.
+    w = flt_matmul(a, b)
+    flt_destroy(w)
+
+    mut iters: i64 = 1
+    if n < 200 { iters = 3 }
+
+    t0 = flint_time_ns()
+    mut i: i64 = 0
+    while i < iters {
+        c = flt_matmul(a, b)
+        flt_destroy(c)
+        i = i + 1
+    }
+    t1 = flint_time_ns()
+
+    avg = (t1 - t0) / iters
+    print(n)
+    print(avg / 1000000.0)
+
+    flt_destroy(a)
+    flt_destroy(b)
+    0
+}
+
+fn main() -> i64 {
+    bench(100)
+    bench(200)
+    bench(500)
+    0
+}

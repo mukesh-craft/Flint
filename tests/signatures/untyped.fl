@@ -1,0 +1,12 @@
+# 2E.5: `x` has no type annotation. The C++ compiler resolves it from the
+# call site (`show("hi")`); the pipeline used to default it to i64 and
+# print the pointer's decimal value. The query file carries `str`.
+fn show(x) -> i64 {
+    print(x)
+    return 0
+}
+
+fn main() -> i64 {
+    show("hi")
+    return 0
+}

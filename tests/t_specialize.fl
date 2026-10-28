@@ -1,0 +1,37 @@
+# Monomorphization and nested generic instantiation (M1).
+#
+# Guards three defects in CodeGen::specialize:
+#
+#   1. genericCache was written AFTER the body was emitted, so a self-recursive
+#      generic re-entered specialize forever.
+#   2. The insert point was restored with SetInsertPoint, which re-appends to
+#      the block; after nested monomorphization the outer function resumed
+#      emitting *after its terminator*.
+#   3. Compound type parameters such as [T] were never substituted, because
+#      the inline lookup tested `kind == TypeParam` on the outer type only.
+
+fn first<T>(a: T) -> T {
+    return a
+}
+
+fn add2<T>(a: T) -> T {
+    return a + a
+}
+
+fn main() {
+    # Nested instantiation: a generic whose argument is another generic call.
+    print(add2(first(21)) == 42)
+    print(first(first(7)) == 7)
+    print(first(add2(3)) == 6)
+    # A generic nested three deep.
+    print(add2(add2(add2(1))) == 8)
+    # Distinct instantiations of the same generic must not collide in the
+    # mangled name or the cache.
+    print(first(2.5) == 2.5)
+    print(first("hi") == "hi")
+    print(first(true) == true)
+    # Same generic, same type, called twice: the second call must reuse the
+    # cached instance rather than re-specializing it.
+    print(first(5) == 5)
+    print(first(5) == 5)
+}

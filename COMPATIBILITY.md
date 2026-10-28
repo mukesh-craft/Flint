@@ -12,7 +12,7 @@ Rules (Lux/Traverse precedent adapted):
   UNLISTED divergence. No silent miscompiles, ever.
 - Perf work (P1) is gated on this log: no listed P0 open.
 
-## D1 — C++ miscompiles `for` over array (segfault). OPEN, C++ bug.
+## D1 — C++ miscompiles `for` over array (segfault). FIXED 2026-10-15 (hoisted data+len desugar + bounds-checked index; both print 6).
 
 ```flint
 fn main() -> i64 {
@@ -33,7 +33,7 @@ fn main() -> i64 {
   miscompile) or at minimum emit a loud error instead of a bad binary.
   Differential status: `cpp_may_differ` (see manifest).
 
-## D2 — C++ rejects bare `len()` calls. OPEN, C++ gap.
+## D2 — C++ rejects bare `len()` calls. FIXED 2026-10-15 (bare len() dispatches array→extractvalue, str→flint_str_length, map→flint_map_len; both print 3).
 
 ```flint
 fn main() -> i64 {
@@ -49,7 +49,7 @@ fn main() -> i64 {
 - Verdict: self-hosted is right. Disposition: FIX-REF (add builtin) or
   document `len()` as self-hosted-only. Differential: `cpp_may_differ`.
 
-## D3 — C++ method calls mangle to garbage (`fa_len`). OPEN, C++ bug.
+## D3 — C++ method calls mangle to garbage (`fa_len`). FIXED 2026-10-15 (clean unknown-method rejection converges with self-host G7 error; both reject).
 
 ```flint
 fn main() -> i64 {
@@ -66,7 +66,7 @@ fn main() -> i64 {
   Disposition: PIN-LIMITATION (methods beyond map has/get/set are G7) +
   FIX-REF message. Differential: `both_may_reject`.
 
-## D4 — C++ crashes on string indexing (`s[1]`). OPEN, C++ bug.
+## D4 — C++ crashes on string indexing (`s[1]`). FIXED 2026-10-15 (str index via i8 GEP+zext with bounds check; both print 101).
 
 ```flint
 fn main() -> i64 {
@@ -80,6 +80,54 @@ fn main() -> i64 {
 - Self-hosted: prints `101` (byte value), exit 0, bounds-checked.
 - Verdict: self-hosted is right. Disposition: FIX-REF. Differential:
   `cpp_may_differ`.
+
+## D5 — The self-hosted pipeline lacks the features the C++ compiler gained after 2026-10-15. OPEN (feature gap, not a miscompile).
+
+The two compilers do not disagree on the programs both can compile: the
+differential gate is green (14/14, 0 known-divergence). What the gate does
+NOT cover is the FEATURE GAP — the C++ compiler accepts programs the
+self-hosted pipeline cannot parse or emit at all. Those programs are not in
+the differential manifest, so the gate stays green while the gap is real.
+
+The **inference** part of the gap is now closed for a single file (2E.5):
+the C++ compiler's query mode (`flintc --emit-signatures`) prints its
+resolved signatures, and the pipeline consumes them as an overlay instead
+of re-deriving types. Measured: `fn show(x)` called with a str printed the
+pointer's decimal value in the pipeline; with the file it prints the
+string. See `docs/PIPELINE-GENERICS.md` §5.1 and
+`tests/test_signatures.sh`. This does not change the feature table below —
+those are constructs the pipeline still cannot parse or emit.
+
+Features in the C++ compiler that the self-hosted pipeline does not have
+(as of 2026-10-25; the generic row was closed in 2E.2 and the explicit-argument
+row in 2E.6):
+
+| Feature | C++ compiler | Self-hosted (stage2/stage3) |
+|---|---|---|
+| `trait` declarations and name+arity method dispatch (M3, `1219665`) | supported | **supported** (2E.3/2E.4) — the trait declares signatures only, and the call site resolves by name + arity; one limitation: the pipeline's function table holds one entry per name, so two implementations of one method name cannot coexist |
+| Lambda-as-a-value with the env-box protocol (M4, `a6b89e6`) | supported | partial — the emitter has lambda shapes, the parser is behind |
+| Generic functions with by-parameter inference (M0-M2) | supported | **supported** (2E.2) — the emitter monomorphizes, with the C++ compiler's own mangled instance names (`idc.i64`, `@"idc.s:Inner"`); the differential gate now covers a generic program |
+| Explicit type arguments `f::<T>(...)` (M2b, `3d3d914`) | supported | **supported** (2E.6) — stage2 emits `(call-t NAME (targs T*) ARGS...)` and stage3 resolves the list with the annotation mapping (no inference); the fixture is `tests/differential/t_explicit_targs.fl`, the failure modes are E0295–E0298 (`tests/test_explicit_targs.sh`). The pipeline is not more permissive than the C++ compiler: a type parameter as an explicit concrete type is refused |
+| Enum equality by per-variant payload compare (P0-NEW-2, `d1c58cf`) | supported | absent — no aggregate equality in stage3 |
+| A named function used as a value (`let h = inc`, `fd8cf09`) | supported | absent |
+
+- C++: compiles and runs these programs.
+- Self-hosted: rejects them (parse error), or would not emit them.
+- Verdict: the C++ compiler is right; the self-hosted pipeline is behind.
+- Disposition: PIN-LIMITATION for now, with the gap recorded here. Porting
+  the features to the Flint pipeline is a project of its own (stage2 is
+  ~4.3k lines, stage3 is ~9.0k); it is NOT a correctness bug in either
+  compiler, and the differential gate correctly does not pretend otherwise.
+  The first feature to be ported was generics (2E.2): the emitter
+  monomorphizes, and the instance names are the C++ compiler's own, so
+  the two frontends agree symbol for symbol. 2E.5 added the query mode,
+  which removes the *inference* drift for the functions a signature file
+  lists (single file; the overlay keeps unlisted functions safe). 2E.6
+  added explicit `::<T>` arguments, so the two frontends also agree on the
+  explicitly instantiated call form.
+- Follow-up: every feature added to the C++ compiler from now on should
+  either land in the self-host pipeline too, or be listed in the table
+  above. The table is the checklist.
 
 ## Policy for new divergences
 

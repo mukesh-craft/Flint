@@ -14,8 +14,10 @@ if [ -n "$SELF_DIR" ] && [ -x "$SELF_DIR/parse.0" ]; then
 else
   PARSE_BIN=""
 fi
-CANON="stage1/flint_lex.fl stage2/flint_parse.fl stage3/flint_emit.fl driver/flintc.fl tools/merge_sexp.fl"
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/fmtgate"
+CANON="stage1/lexer.fl stage2/parser.fl stage3/emitter.fl driver/flintc.fl tools/merge_sexp.fl"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TMPD="$_TMPBASE/slipstream/fmtgate"
 mkdir -p "$TMPD"
 fail=0
 # 1. --check clean
@@ -34,8 +36,8 @@ for f in $CANON; do
     if ! timeout -s KILL 200 "$PARSE_BIN" "$f" > "$TMPD/$b.orig.sexp" 2>/dev/null; then echo "FAIL fmt-parse-orig-$b"; fail=$((fail+1)); continue; fi
     if ! timeout -s KILL 200 "$PARSE_BIN" "$TMPD/$b.once.fl" > "$TMPD/$b.fmt.sexp" 2>/dev/null; then echo "FAIL fmt-parse-fmt-$b"; fail=$((fail+1)); continue; fi
   else
-    if ! timeout -s KILL 200 "$FLINTC" stage2/flint_parse.fl -- "$f" > "$TMPD/$b.orig.sexp" 2>/dev/null; then echo "FAIL fmt-parse-orig-$b"; fail=$((fail+1)); continue; fi
-    if ! timeout -s KILL 200 "$FLINTC" stage2/flint_parse.fl -- "$TMPD/$b.once.fl" > "$TMPD/$b.fmt.sexp" 2>/dev/null; then echo "FAIL fmt-parse-fmt-$b"; fail=$((fail+1)); continue; fi
+    if ! timeout -s KILL 200 "$FLINTC" stage2/parser.fl -- "$f" > "$TMPD/$b.orig.sexp" 2>/dev/null; then echo "FAIL fmt-parse-orig-$b"; fail=$((fail+1)); continue; fi
+    if ! timeout -s KILL 200 "$FLINTC" stage2/parser.fl -- "$TMPD/$b.once.fl" > "$TMPD/$b.fmt.sexp" 2>/dev/null; then echo "FAIL fmt-parse-fmt-$b"; fail=$((fail+1)); continue; fi
   fi
   if cmp -s "$TMPD/$b.orig.sexp" "$TMPD/$b.fmt.sexp"; then echo "PASS fmt-stable-$b";
   else echo "FAIL fmt-stable-$b"; fail=$((fail+1)); fi

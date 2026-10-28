@@ -1,6 +1,6 @@
 # Emitter error catalog
 
-Every diagnostic the self-hosted emitter (`stage3/flint_emit.fl`) can
+Every diagnostic the self-hosted emitter (`stage3/emitter.fl`) can
 produce. Generated list; fix guidance curated. Stage-2 (parser) errors
 are prefixed `parse error` with line/col and are not catalogued here.
 
@@ -21,121 +21,165 @@ are prefixed `parse error` with line/col and are not catalogued here.
 
 ## Complete message list
 
-- `emit error: too many args calling lambda`
-- `emit error: missing arg, no default calling lambda`
-- `emit error: lambdas cannot be passed as values`
-- `emit error: lambda must be bound`
-- `emit error: lambda cannot leave its function`
-- `emit error: lambda cannot capture unknown`
-- `emit error: lambda cannot assign to captured`
-- `emit error: lambda arg mismatch calling`
-- `emit error: default type mismatch calling lambda`
-- `emit error: cannot reassign lambda`
-- `emit error: bad lambda param type`
-- `emit error: arg type mismatch calling`
-- `emit error: arrays support only + in G3`
-- `emit error: assign to undeclared`
-- `emit error: bad compound operand`
-- `emit error: bad conversion`
-- `emit error: bad extern member`
-- `emit error: bad global type`
-- `emit error: bad handle conversion`
-- `emit error: bad int conversion`
-- `emit error: bad map conversion`
-- `emit error: bad match pattern`
-- `emit error: bad payload type`
-- `emit error: bad str conversion`
-- `emit error: bad struct field type`
-- `emit error: bad to-int conversion`
-- `emit error: bad top-level form`
-- `emit error: binop needs numeric/str/array`
-- `emit error: break outside loop`
-- `emit error: cannot bind empty variant`
-- `emit error: cannot bind tag-only variant`
-- `emit error: continue outside loop`
-- `emit error: default type mismatch calling`
-- `emit error: deref needs a pointer`
-- `emit error: duplicate field`
-- `emit error: duplicate function`
-- `emit error: duplicate match arm`
-- `emit error: duplicate struct field`
-- `emit error: duplicate type`
-- `emit error: duplicate variant`
-- `emit error: field global init needs annotation`
-- `emit error: field needs a struct`
-- `emit error: field type mismatch`
-- `emit error: fn body must be a block`
-- `emit error: for needs an iterator`
-- `emit error: for needs range, array or str`
-- `emit error: generics need G6`
-- `emit error: global init mismatch`
-- `emit error: idx-set needs array (strings are immutable)`
-- `emit error: idx-set needs i64 index`
-- `emit error: idx-set needs i64 value in G3`
-- `emit error: if-expr arms must be single expressions in G1`
-- `emit error: if-expr arms must match types in G1`
-- `emit error: index needs array or str`
-- `emit error: index needs i64`
-- `emit error: len needs array, str or map`
-- `emit error: main must return i64 in G2`
-- `emit error: main takes no params in G2`
-- `emit error: map keys need str in G6`
-- `emit error: map values need i64 in G6`
-- `emit error: match arm enum mismatch`
-- `emit error: match arms must agree in type`
-- `emit error: match needs an enum in G5`
-- `emit error: match needs arms`
-- `emit error: method arg mismatch`
-- `emit error: methods need str/map in G7`
-- `emit error: missing arg, no default calling`
-- `emit error: mixed-type binop needs conversion`
-- `emit error: node needs a later group`
-- `emit error: non-exhaustive match`
-- `emit error: not a struct`
-- `emit error: not an enum`
-- `emit error: only extern C supported`
-- `emit error: only i64 arrays in G3`
-- `emit error: only i64 arrays in G7`
-- `emit error: param after variadic`
-- `emit error: param type needs G3+`
-- `emit error: payload count mismatch`
-- `emit error: payload type mismatch`
-- `emit error: print is reserved`
-- `emit error: print needs i64/f64/str in G3`
-- `emit error: range bounds need i64`
-- `emit error: ref needs a variable in G7`
-- `emit error: ref of undeclared`
-- `emit error: return annotation needed in G2`
-- `emit error: return type mismatch`
-- `emit error: return type needs G3+`
-- `emit error: runtime arg mismatch calling`
-- `emit error: slice bounds need i64`
-- `emit error: slice needs an array in G7`
-- `emit error: spread needs an array`
-- `emit error: strings support only +/==/!= in G6`
-- `emit error: struct literal missing fields`
-- `emit error: too few args calling runtime`
-- `emit error: too many args calling`
-- `emit error: too many args calling runtime`
-- `emit error: too many payload args`
-- `emit error: undefined variable`
-- `emit error: unknown enum`
-- `emit error: unknown field`
-- `emit error: unknown function`
-- `emit error: unknown map method`
-- `emit error: unknown name in global init`
-- `emit error: unknown str method`
-- `emit error: unknown struct`
-- `emit error: unknown variant`
-- `emit error: unscanned declaration`
-- `emit error: unscanned function`
-- `emit error: unwrap needs an enum`
-- `emit error: unwrap needs uniform single payload`
-- `emit error: variadic must be last param`
-- `emit error: variant takes no payload`
-- `emit error: void binop operand`
-- `emit error: void global init`
-- `emit error: void initializer`
-- `emit error: void variadic arg`
+- `emit error[E0259]: too many args calling lambda`
+- `emit error[E0221]: missing arg, no default calling lambda`
+- `emit error[E0207]: lambdas cannot be passed as values`
+- `emit error[E0206]: lambda must be bound`
+- `emit error[E0205]: lambda cannot leave its function`
+- `emit error[E0204]: lambda cannot capture unknown`
+- `emit error[E0203]: lambda cannot assign to captured`
+- `emit error[E0202]: lambda arg mismatch calling`
+- `emit error[E0177]: default type mismatch calling lambda`
+- `emit error[E0174]: cannot reassign lambda`
+- `emit error[E0157]: bad lambda param type`
+- `emit error[E0145]: arg type mismatch calling`
+- `emit error[E0146]: arrays support only + in G3`
+- `emit error[E0147]: as-cast needs i64 or f64 value`
+- `emit error[E0148]: assign to undeclared`
+- `emit error[E0149]: bad cast`
+- `emit error[E0150]: bad cast type`
+- `emit error[E0151]: bad compound operand`
+- `emit error[E0152]: bad conversion`
+- `emit error[E0153]: bad extern member`
+- `emit error[E0154]: bad global type`
+- `emit error[E0155]: bad handle conversion`
+- `emit error[E0156]: bad int conversion`
+- `emit error[E0157]: bad lambda param type`
+- `emit error[E0158]: bad map conversion`
+- `emit error[E0159]: bad match pattern`
+- `emit error[E0160]: bad payload type`
+- `emit error[E0161]: bad str conversion`
+- `emit error[E0162]: bad struct field type`
+- `emit error[E0163]: bad tensor negation`
+- `emit error[E0164]: bad tensor number`
+- `emit error[E0165]: bad tensor row`
+- `emit error[E0166]: bad to-int conversion`
+- `emit error[E0167]: bad top-level form`
+- `emit error[E0168]: binop needs numeric/str/array`
+- `emit error[E0169]: break outside loop`
+- `emit error[E0170]: call needs a closing paren`
+- `emit error[E0171]: cannot bind empty variant`
+- `emit error[E0172]: cannot bind tag-only variant`
+- `emit error[E0173]: cannot infer type parameter`
+- `emit error[E0174]: cannot reassign lambda`
+- `emit error[E0175]: continue outside loop`
+- `emit error[E0176]: default type mismatch calling`
+- `emit error[E0177]: default type mismatch calling lambda`
+- `emit error[E0178]: deref needs a pointer`
+- `emit error[E0179]: duplicate field`
+- `emit error[E0180]: duplicate function`
+- `emit error[E0181]: duplicate match arm`
+- `emit error[E0182]: duplicate struct field`
+- `emit error[E0183]: duplicate type`
+- `emit error[E0184]: duplicate variant`
+- `emit error[E0185]: field global init needs annotation`
+- `emit error[E0186]: field needs a struct`
+- `emit error[E0187]: field type mismatch`
+- `emit error[E0188]: fn body must be a block`
+- `emit error[E0189]: for needs an iterator`
+- `emit error[E0190]: for needs range, array or str`
+- `emit error[E0191]: generic call is missing arguments`
+- `emit error[E0192]: generic parameter type is not a type`
+- `emit error[E0193]: generic return type is not a type`
+- `emit error[E0194]: global init mismatch`
+- `emit error[E0195]: idx-set needs array (strings are immutable)`
+- `emit error[E0196]: idx-set needs i64 index`
+- `emit error[E0197]: idx-set needs i64 value in G3`
+- `emit error[E0198]: if-expr arms must be single expressions in G1`
+- `emit error[E0199]: if-expr arms must match types in G1`
+- `emit error[E0200]: index needs array or str`
+- `emit error[E0201]: index needs i64`
+- `emit error[E0202]: lambda arg mismatch calling`
+- `emit error[E0203]: lambda cannot assign to captured`
+- `emit error[E0204]: lambda cannot capture unknown`
+- `emit error[E0205]: lambda cannot leave its function`
+- `emit error[E0206]: lambda must be bound`
+- `emit error[E0207]: lambdas cannot be passed as values`
+- `emit error[E0208]: len needs array, str or map`
+- `emit error[E0209]: main must return i64 in G2`
+- `emit error[E0210]: main takes no params in G2`
+- `emit error[E0211]: map index needs a str key (map keys are strings)`
+- `emit error[E0212]: map keys need str in G6`
+- `emit error[E0213]: map values need i64 in G6`
+- `emit error[E0214]: match arm enum mismatch`
+- `emit error[E0215]: match arms must agree in type`
+- `emit error[E0216]: match needs an enum in G5`
+- `emit error[E0217]: match needs arms`
+- `emit error[E0218]: method arg mismatch`
+- `emit error[E0219]: method receiver type mismatch`
+- `emit error[E0220]: missing arg, no default calling`
+- `emit error[E0221]: missing arg, no default calling lambda`
+- `emit error[E0222]: mixed-type binop needs conversion`
+- `emit error[E0223]: no type in scope implements`
+- `emit error[E0224]: node needs a later group`
+- `emit error[E0225]: non-exhaustive match`
+- `emit error[E0226]: not a struct`
+- `emit error[E0227]: not an enum`
+- `emit error[E0228]: only extern C supported`
+- `emit error[E0229]: only i64 arrays in G3`
+- `emit error[E0230]: only i64 arrays in G7`
+- `emit error[E0231]: param after variadic`
+- `emit error[E0232]: param type needs G3+`
+- `emit error[E0233]: payload count mismatch`
+- `emit error[E0234]: payload type mismatch`
+- `emit error[E0235]: print is reserved`
+- `emit error[E0236]: print needs i64/f64/str in G3`
+- `emit error[E0237]: ragged tensor literal: all rows must have the same length`
+- `emit error[E0238]: range bounds need i64`
+- `emit error[E0239]: ref needs a variable in G7`
+- `emit error[E0240]: ref of undeclared`
+- `emit error[E0241]: return annotation needed in G2`
+- `emit error[E0242]: return type mismatch`
+- `emit error[E0243]: return type needs G3+`
+- `emit error[E0244]: runtime arg mismatch calling`
+- `emit error[E0245]: slice bounds need i64`
+- `emit error[E0246]: slice needs an array in G7`
+- `emit error[E0247]: spread needs an array`
+- `emit error[E0248]: strings support only +/==/!= in G6`
+- `emit error[E0249]: struct literal missing fields`
+- `emit error[E0250]: template parameter needs a closing paren`
+- `emit error[E0251]: template parameter needs a name`
+- `emit error[E0252]: template parameters need a closing paren`
+- `emit error[E0253]: tensor literal is neither a flat f64 list nor equal-length f64 rows`
+- `emit error[E0254]: tensor literal needs at least one f64 element`
+- `emit error[E0255]: tensor literal rows must be non-empty all-numeric f64 literal lists`
+- `emit error[E0256]: tensor literals support only f64 numbers and rank<=2 rows`
+- `emit error[E0257]: too few args calling runtime`
+- `emit error[E0258]: too many args calling`
+- `emit error[E0259]: too many args calling lambda`
+- `emit error[E0260]: too many args calling runtime`
+- `emit error[E0261]: too many payload args`
+- `emit error[E0262]: trait method needs a closing paren`
+- `emit error[E0263]: trait method needs a name`
+- `emit error[E0264]: undefined variable`
+- `emit error[E0265]: unknown enum`
+- `emit error[E0266]: unknown field`
+- `emit error[E0267]: unknown function`
+- `emit error[E0268]: unknown map method`
+- `emit error[E0269]: unknown method`
+- `emit error[E0270]: unknown name in global init`
+- `emit error[E0271]: unknown str method`
+- `emit error[E0272]: unknown struct`
+- `emit error[E0273]: unknown variant`
+- `emit error[E0274]: unscanned declaration`
+- `emit error[E0275]: unscanned function`
+- `emit error[E0276]: unwrap needs an enum`
+- `emit error[E0277]: unwrap needs uniform single payload`
+- `emit error[E0278]: variadic must be last param`
+- `emit error[E0279]: variant takes no payload`
+- `emit error[E0280]: void binop operand`
+- `emit error[E0281]: void global init`
+- `emit error[E0282]: void initializer`
+- `emit error[E0283]: void variadic arg`
+- `emit error[E0284]: cannot read the signature file`
+- `emit error[E0285]: not a signature file (expected flint-signatures 1)`
+- `emit error[E0286]: malformed signature line`
+- `emit error[E0287]: signature file parameter count disagrees`
+- `emit error[E0288]: signature file type parameters disagree`
+- `emit error[E0289]: signature file type is not supported here`
+- `emit error[E0295]: explicit type arguments need a (targs ...) list`
+- `emit error[E0296]: explicit type argument count disagrees`
+- `emit error[E0297]: explicit type argument is not a type`
+- `emit error[E0298]: explicit type arguments are only allowed on a generic function`
 
-Total: 116 messages.
+Total: 149 messages.

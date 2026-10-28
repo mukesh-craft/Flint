@@ -1,0 +1,6 @@
+# A float initialiser may not satisfy an i64 annotation. Codegen used to
+# retype the variable to f64, silently ignoring the annotation.
+fn main() -> i64 {
+    x: i64 = 1.5
+    return 0
+}

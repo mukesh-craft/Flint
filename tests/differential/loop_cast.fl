@@ -1,0 +1,13 @@
+# Loop-var casts: `w as f64` inside for bodies must parse like any
+# variable (P1-3 optional-parens scope fix). Round-trips stay i64 so no
+# float formatting is involved; both backends must agree.
+fn main() -> i64 {
+    a = [1, 2, 3]
+    for w in a {
+        print(w as f64 as i64)
+    }
+    for i in 0..3 {
+        print(i as f64 as i64)
+    }
+    0
+}

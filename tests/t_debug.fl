@@ -1,0 +1,13 @@
+# DWARF gate source: two functions placed at known, separated source lines
+# so tests can assert distinct subprogram decl_lines.
+
+fn doubled(x) -> i64 {
+    return (x + x as i64) * 2
+}
+
+fn main() -> i64 {
+    a = 3
+    b = doubled(a)
+    print(b)
+    0
+}

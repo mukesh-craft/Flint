@@ -1,0 +1,382 @@
+{
+  "files": 1,
+  "findings": [
+    {
+      "check": "bufferAccessOutOfBounds",
+      "column": 17,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 27,
+      "message": "Buffer is accessed out of bounds: buf",
+      "severity": "error",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "doubleFree",
+      "column": 12,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 34,
+      "message": "Memory pointed to by 'p' is freed twice.",
+      "severity": "error",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "deallocret",
+      "column": 5,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 42,
+      "message": "Returning/dereferencing 'p' after it is deallocated / released",
+      "severity": "error",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "leak",
+      "column": null,
+      "detail": "leak_executed()",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 69,
+      "message": "64 byte(s) in 1 allocation(s) still allocated and unreachable at exit",
+      "severity": "error",
+      "tool": "leak-tracker",
+      "weight": 8
+    },
+    {
+      "check": "memleak",
+      "column": 1,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 72,
+      "message": "Memory leak: p",
+      "severity": "error",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "memleak",
+      "column": 15,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 78,
+      "message": "Memory leak: buf",
+      "severity": "error",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "-Wunused-function",
+      "column": 12,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 13,
+      "message": "unused function 'unused_helper'",
+      "severity": "warning",
+      "tool": "compiler",
+      "weight": 0
+    },
+    {
+      "check": "nullPointer",
+      "column": 14,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 19,
+      "message": "Possible null pointer dereference: p",
+      "severity": "warning",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "core.NullDereference",
+      "column": 13,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 19,
+      "message": "Dereference of null pointer (loaded from variable 'p')",
+      "severity": "warning",
+      "tool": "clang-analyzer",
+      "weight": 0
+    },
+    {
+      "check": "-Wfortify-source",
+      "column": 5,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 27,
+      "message": "'strcpy' will always overflow; destination buffer has size 4, but the source string has length 7 (including NUL byte)",
+      "severity": "warning",
+      "tool": "compiler",
+      "weight": 0
+    },
+    {
+      "check": "cplusplus.NewDelete",
+      "column": 5,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 34,
+      "message": "Attempt to free released memory",
+      "severity": "warning",
+      "tool": "clang-analyzer",
+      "weight": 0
+    },
+    {
+      "check": "cplusplus.NewDelete",
+      "column": 12,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 42,
+      "message": "Use of memory after it is freed",
+      "severity": "warning",
+      "tool": "clang-analyzer",
+      "weight": 0
+    },
+    {
+      "check": "-Wshadow",
+      "column": 13,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 49,
+      "message": "declaration shadows a local variable",
+      "severity": "warning",
+      "tool": "compiler",
+      "weight": 0
+    },
+    {
+      "check": "-Wshorten-64-to-32",
+      "column": 15,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 56,
+      "message": "implicit conversion loses integer precision: 'size_type' (aka 'unsigned long') to 'int'",
+      "severity": "warning",
+      "tool": "compiler",
+      "weight": 0
+    },
+    {
+      "check": "-Wsometimes-uninitialized",
+      "column": 9,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 63,
+      "message": "variable 'v' is used uninitialized whenever 'if' condition is false",
+      "severity": "warning",
+      "tool": "compiler",
+      "weight": 0
+    },
+    {
+      "check": "uninitvar",
+      "column": 12,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 64,
+      "message": "Uninitialized variable: v",
+      "severity": "warning",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "core.uninitialized.UndefReturn",
+      "column": 5,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 64,
+      "message": "Undefined or garbage value returned to caller",
+      "severity": "warning",
+      "tool": "clang-analyzer",
+      "weight": 0
+    },
+    {
+      "check": "cplusplus.NewDeleteLeaks",
+      "column": 1,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 72,
+      "message": "Potential leak of memory pointed to by 'p'",
+      "severity": "warning",
+      "tool": "clang-analyzer",
+      "weight": 0
+    },
+    {
+      "check": "cplusplus.NewDeleteLeaks",
+      "column": 23,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 78,
+      "message": "Potential leak of memory pointed to by 'buf'",
+      "severity": "warning",
+      "tool": "clang-analyzer",
+      "weight": 0
+    },
+    {
+      "check": "-Wunused-but-set-variable",
+      "column": 9,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 87,
+      "message": "variable 'total' set but not used",
+      "severity": "warning",
+      "tool": "compiler",
+      "weight": 0
+    },
+    {
+      "check": "deadcode.DeadStores",
+      "column": 9,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 96,
+      "message": "Value stored to 'total' is never read",
+      "severity": "warning",
+      "tool": "clang-analyzer",
+      "weight": 0
+    },
+    {
+      "check": "unusedFunction",
+      "column": 12,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 13,
+      "message": "The function 'unused_helper' is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "unusedAllocatedMemory",
+      "column": 10,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 32,
+      "message": "Variable 'p' is allocated memory that is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "variableScope",
+      "column": 9,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 47,
+      "message": "The scope of the variable 'outer' can be reduced.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "shadowArgument",
+      "column": 13,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 49,
+      "message": "Local variable 'x' shadows outer argument",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "unreadVariable",
+      "column": 15,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 87,
+      "message": "Variable 'total' is assigned a value that is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "unreadVariable",
+      "column": 11,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 88,
+      "message": "Variable 'total' is assigned a value that is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "unreadVariable",
+      "column": 15,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 91,
+      "message": "Variable 'total' is assigned a value that is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "unreadVariable",
+      "column": 15,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 94,
+      "message": "Variable 'total' is assigned a value that is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "unreadVariable",
+      "column": 15,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 95,
+      "message": "Variable 'total' is assigned a value that is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "unreadVariable",
+      "column": 15,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "line": 96,
+      "message": "Variable 'total' is assigned a value that is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    }
+  ],
+  "leak_detection": false,
+  "lines": 100,
+  "sanitizers": true,
+  "score": 0,
+  "stages": [
+    {
+      "command": "/data/data/com.termux/files/usr/bin/clang++ -fsyntax-only -std=c++17 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -I/data/data/com.termux/files/home/tools/cqma-tests/small -I/data/data/com.termux/files/home/tools/cqma-tests/small -I/data/data/com.termux/files/usr/include/python3.14 -ferror-limit=0 -fno-caret-diagnostics -fno-color-diagnostics /data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "name": "compiler warnings",
+      "note": "",
+      "seconds": 2.180778541,
+      "status": "ran"
+    },
+    {
+      "command": "/data/data/com.termux/files/usr/bin/cppcheck --enable=all --inconclusive --force --inline-suppr --language=c++ --std=c++17 --suppress=missingInclude --suppress=missingIncludeSystem --suppress=unmatchedSuppression '--template={file}\t{line}\t{column}\t{severity}\t{id}\t{message}' --check-level=exhaustive -I/data/data/com.termux/files/home/tools/cqma-tests/small /data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "name": "cppcheck",
+      "note": "",
+      "seconds": 0.103634427,
+      "status": "ran"
+    },
+    {
+      "command": "/data/data/com.termux/files/usr/bin/clang++ --analyze -Xanalyzer -analyzer-output=text -std=c++17 -I/data/data/com.termux/files/home/tools/cqma-tests/small -I/data/data/com.termux/files/home/tools/cqma-tests/small -I/data/data/com.termux/files/usr/include/python3.14 /data/data/com.termux/files/home/tools/cqma-tests/small/bugs.cpp",
+      "name": "clang static analyzer",
+      "note": "",
+      "seconds": 2.086001562,
+      "status": "ran"
+    },
+    {
+      "command": "/data/data/com.termux/files/usr/tmp/cqma-asan-22841-1792845157459979208/bugs-cqma",
+      "name": "runtime memory analysis",
+      "note": "cqma leak tracker active: live=9 live_bytes=440 reachable=8 reachable_bytes=376 unreachable=1 unreachable_bytes=64 tracked=10",
+      "seconds": 0.167772239,
+      "status": "ran"
+    }
+  ],
+  "target": "/data/data/com.termux/files/home/tools/cqma-tests/small",
+  "version": "1.0.0"
+}

@@ -1,0 +1,32 @@
+# CSV: a Rust standard-library module called from Flint.
+#
+# Exercises the whole boundary: parse, inspect, read a field, release it, and
+# observe a loud error instead of silence on malformed input.
+
+fn main() {
+    text = "name,qty\n\"widget, large\",3\nbolt,42\n"
+
+    rows = flint_csv_parse(text, ",")
+    print(rows)
+    print(flint_csv_rows())
+    print(flint_csv_cols(1))
+
+    # A quoted field keeps its embedded delimiter.
+    name = flint_csv_get(1, 0)
+    print(name)
+    flint_csv_free(name)
+
+    qty = flint_csv_get(2, 1)
+    print(qty)
+    flint_csv_free(qty)
+
+    # Malformed input reports -1 and a message; it never returns silently.
+    bad = flint_csv_parse("\"unterminated,1\n", ",")
+    print(bad)
+    print(flint_csv_error())
+    print(flint_csv_rows())
+
+    # Out-of-range access returns a null string rather than reading past the end.
+    flint_csv_free(flint_csv_get(99, 0))
+    print("csv-ok")
+}

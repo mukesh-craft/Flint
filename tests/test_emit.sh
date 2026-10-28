@@ -4,11 +4,15 @@
 # This proves the IR template, runtime ABI, and harness BEFORE the Flint
 # emitter exists. Usage: bash tests/test_emit.sh
 set -u
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TMPD="$_TMPBASE/slipstream"
+mkdir -p "$TMPD"
 pass=0; fail=0
 check() { # $1=file $2=expected-exit
     local file="$1" want="$2" base out rc
     base="$(basename "$file" .ll)"
-    out="/data/data/com.termux/files/usr/tmp/slipstream/emit_$base"
+    out="$TMPD/emit_$base"
     if ! llvm-as "$file" -o "$out.bc" 2>/dev/null; then echo "FAIL $file (llvm-as)"; fail=$((fail+1)); return; fi
     if ! opt -passes=verify "$out.bc" -o /dev/null 2>/dev/null; then echo "FAIL $file (verify)"; fail=$((fail+1)); return; fi
     if ! clang "$file" -o "$out" 2>/dev/null; then echo "FAIL $file (clang)"; fail=$((fail+1)); return; fi

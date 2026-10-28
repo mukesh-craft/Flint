@@ -1,8 +1,23 @@
 # Differential manifest: "<file> <exit> <expected-stdout|-> <allowance>"
-# allowance: same | cpp_may_differ (D1/D2/D4) | both_may_reject (D3).
+# allowance: same | both_may_reject (D3, convergent rejection).
 # See COMPATIBILITY.md. Harness fails on any UNLISTED divergence.
-for_array.fl 0 for_array.txt cpp_may_differ
-bare_len.fl 0 bare_len.txt cpp_may_differ
+for_array.fl 0 for_array.txt same
+bare_len.fl 0 bare_len.txt same
 method_len.fl 0 - both_may_reject
-str_index.fl 0 str_index.txt cpp_may_differ
+str_index.fl 0 str_index.txt same
 common.fl 0 common.txt same
+cast_as.fl 0 - same
+map_index.fl 0 - same
+loop_cast.fl 0 - same
+sci_notation.fl 0 - same
+map_key_type.fl 0 - same
+overflow_cast.fl 134 - same
+# 2E: the pipeline must monomorphize exactly like the C++ compiler --
+# same output, and the same mangled instance names.
+t_generic.fl 0 t_generic.txt same
+# 2E.4: a trait declares signatures only; the call site resolves the
+# method by name + arity, exactly like the C++ compiler.
+t_trait.fl 0 t_trait.txt same
+# 2E: explicit type arguments `f::<T>(...)` -- the last 2E gap. Same calls,
+# same mangled instance names, same output as the C++ compiler.
+t_explicit_targs.fl 0 t_explicit_targs.txt same

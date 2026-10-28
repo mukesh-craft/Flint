@@ -1,0 +1,84 @@
+# f32 tensors, verified from Flint.
+#
+# f32 halves both the memory and the bytes matmul moves -- that is the whole
+# reason it exists. Values here are small integers so every product is exact in
+# single precision and the expected output is checkable by hand rather than
+# compared against a tolerance.
+
+fn main() -> i64 {
+    # ---- f32 2x3 @ 3x2, values exact in f32
+    a = flt_create_f32_2d(2, 3)
+    mut k: i64 = 0
+    while k < 6 {
+        flt_set_at(a, k, (k + 1) * 1.0)
+        k = k + 1
+    }
+    b = flt_create_f32_2d(3, 2)
+    k = 0
+    while k < 6 {
+        flt_set_at(b, k, (k + 7) * 1.0)
+        k = k + 1
+    }
+
+    # ---- footprint is halved
+    print(flt_is_f32(a))
+    print(flt_bytes(a))
+    # want: 1 / 24   (6 f32 = 24 bytes; f64 would be 48)
+
+    # ---- matmul stays in f32 and stays exact
+    c = flt_matmul(a, b)
+    print(flt_is_f32(c))
+    print(flt_shape(c, 0))
+    print(flt_shape(c, 1))
+    print(flt_get_at(c, 0))
+    print(flt_get_at(c, 1))
+    print(flt_get_at(c, 2))
+    print(flt_get_at(c, 3))
+    # want: 1 / 2 2 / 58 64 139 154
+
+    # ---- the deterministic reference path must agree exactly
+    r = flt_matmul_blas(a, b)
+    print(flt_get_at(r, 0))
+    print(flt_get_at(r, 3))
+    # want: 58 154
+
+    # ---- elementwise stays f32
+    s = flt_add_tt(a, a)
+    print(flt_is_f32(s))
+    print(flt_get_at(s, 0))
+    print(flt_get_at(s, 5))
+    # want: 1 / 2 / 12
+
+    act = flt_sigmoid(a)
+    print(flt_is_f32(act))
+    print(flt_get_at(act, 0))
+    # want: 1 / 0.731059
+
+    # ---- reductions accumulate in double even for f32 storage
+    print(flt_sum(a))
+    print(flt_mean(a))
+    # want: 21 / 3.5
+
+    # ---- casts are exact in both directions
+    d = flt_to_f64(a)
+    print(flt_is_f32(d))
+    print(flt_get_at(d, 5))
+    back = flt_to_f32(d)
+    print(flt_is_f32(back))
+    print(flt_get_at(back, 5))
+    # want: 0 / 6 / 1 / 6
+
+    # ---- mixing widths promotes to f64 rather than truncating
+    mix = flt_add_tt(a, d)
+    print(flt_is_f32(mix))
+    # want: 0
+
+    # ---- one million f32 elements is half the f64 footprint
+    big32 = flt_create_f32_1d(1000000)
+    big64 = flt_create_1d(1000000)
+    print(flt_bytes(big32))
+    print(flt_bytes(big64))
+    # want: 4000000 / 8000000
+
+    0
+}

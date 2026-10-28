@@ -1,0 +1,41 @@
+# Weight checkpoints: FLWT v1 round-trip. Values are exact doubles through
+# the f64 path (bit-identical), and the f32 path verifies shape + dtype
+# carried exactly (its narrow values match within f32 representation).
+# The scratch file lives in the device tmpdir, never in the repo.
+
+fn main() -> i64 {
+    sav = "/data/data/com.termux/files/usr/tmp/flint_chkpt_test.chk"
+
+    # two f64 records, saved fresh then appended
+    w = [[1.5, -2.25], [3.0, 0.75]]
+    b = [100.0, 200.0, 300.0]
+    ok1 = flt_weights_save(sav, w, 0)
+    ok2 = flt_weights_save(sav, b, 1)
+    print(ok1 == 1 && ok2 == 1)
+
+    # count re-walks records (header count is not authoritative)
+    print(flt_weights_count(sav) == 2)
+
+    # load back with exact shapes
+    w2 = flt_weights_load(sav, 0)
+    b2 = flt_weights_load(sav, 1)
+    print(w2 != 0 && b2 != 0)
+    print(flt_get(w2, 0) == 1.5 && flt_get(w2, 1) == -2.25)
+    print(flt_get(w2, 2) == 3.0 && flt_get(w2, 3) == 0.75)
+    print(flt_get(b2, 1) == 200.0)
+
+    # an f32 record lands in the same file and keeps its dtype
+    wa = flt_create_f32_1d(3)
+    flt_set_at(wa, 0, 1.0)
+    flt_set_at(wa, 1, 2.0)
+    flt_set_at(wa, 2, 3.5)
+    ok3 = flt_weights_save(sav, wa, 1)
+    print(ok3 == 1)
+    print(flt_weights_count(sav) == 3)
+    fa = flt_weights_load(sav, 2)
+    print(fa != 0 && flt_get(fa, 2) == 3.5)
+
+    # loading past the end fails the null way, not a crash way
+    print(flt_weights_load(sav, 9) == 0)
+    0
+}

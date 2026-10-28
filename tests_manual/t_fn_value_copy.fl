@@ -1,0 +1,35 @@
+# Copying a function VALUE into another binding must keep its fn type.
+#
+# `h = inc` binds a named function's value; `g = h` copies that value into
+# another binding. The copy used to lose the fn type -- only LAMBDA values
+# were recognised as function values -- so `g` was inferred as a plain
+# pointer and the call `g(5)` failed with "undefined function 'g'".
+#
+# The root cause was three sites answering "is this a function value?" with
+# three slightly different rules. There is now ONE predicate
+# (Symbol::isFunctionValue), and this file pins the behaviour it produces.
+
+fn inc(x: i64) -> i64 { return x + 1 }
+fn twice(x: i64) -> i64 { return x * 2 }
+
+fn apply(f: fn(i64) -> i64, v: i64) -> i64 { return f(v) }
+
+fn main() {
+    h = inc
+    g = h                 # copy of a function value
+    print(g(5))           # 6
+    print(apply(g, 5))    # 6
+
+    # A copy of a copy.
+    k = g
+    print(k(5))           # 6
+
+    # Lambdas and named functions must be interchangeable here.
+    l = |x: i64| x + 1
+    m = l
+    print(m(5))           # 6
+
+    # Different signatures stay distinct.
+    t = twice
+    print(t(5))           # 10
+}

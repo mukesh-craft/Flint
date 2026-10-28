@@ -1,0 +1,17 @@
+# Phase-2 `as` casts: both backends must agree (C++ emit-mode vs
+# self-hosted parse.0+emit.0). i64<->f64, f64->i64 truncates toward zero
+# (including negatives), chained casts, postfix precedence (`as` binds
+# tighter than `-`: 10 - (7.9 as i64) = 3, not (10 - 7.9) as i64 = 2).
+# i64 prints only: no float formatting or tensor runtime involved, so the
+# differential harness links it on both paths with the base runtime.
+fn main() -> i64 {
+    print(7 as f64 as i64)
+    print(7.9 as i64)
+    print(-7.9 as i64)
+    print(10 - 7.9 as i64)
+    print((10 - 3) as f64 as i64)
+    ci = 7
+    print(ci as f64 as i64)
+    print(9 as f64 as i64)
+    0
+}

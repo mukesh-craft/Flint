@@ -1,0 +1,133 @@
+{
+  "files": 1,
+  "findings": [
+    {
+      "check": "heap-buffer-overflow",
+      "column": null,
+      "detail": "main at /data/data/com.termux/files/home/tools/cqma-fixture/fixture.c:14",
+      "file": "/data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "line": 14,
+      "message": "AddressSanitizer: heap-buffer-overflow",
+      "severity": "error",
+      "tool": "asan",
+      "weight": 25
+    },
+    {
+      "check": "nullPointer",
+      "column": 6,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "line": 17,
+      "message": "Null pointer dereference: np",
+      "severity": "error",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "-Wunused-function",
+      "column": 12,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "line": 3,
+      "message": "unused function 'unused_helper'",
+      "severity": "warning",
+      "tool": "compiler",
+      "weight": 0
+    },
+    {
+      "check": "-Wshadow",
+      "column": 14,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "line": 7,
+      "message": "declaration shadows a local variable",
+      "severity": "warning",
+      "tool": "compiler",
+      "weight": 0
+    },
+    {
+      "check": "-Wconstant-conversion",
+      "column": 27,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "line": 8,
+      "message": "implicit conversion from 'int' to 'unsigned char' changes value from 300 to 44",
+      "severity": "warning",
+      "tool": "compiler",
+      "weight": 0
+    },
+    {
+      "check": "nullPointerOutOfMemory",
+      "column": 5,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "line": 14,
+      "message": "If memory allocation fails, then there is a possible null pointer dereference: buf",
+      "severity": "warning",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "unusedFunction",
+      "column": 12,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "line": 3,
+      "message": "The function 'unused_helper' is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "unusedFunction",
+      "column": 5,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "line": 5,
+      "message": "The function 'shadow_demo' is never used.",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    },
+    {
+      "check": "shadowVariable",
+      "column": 14,
+      "detail": "",
+      "file": "/data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "line": 7,
+      "message": "Local variable 'total' shadows outer variable",
+      "severity": "style",
+      "tool": "cppcheck",
+      "weight": 0
+    }
+  ],
+  "leak_detection": false,
+  "lines": 19,
+  "sanitizers": true,
+  "score": 50,
+  "stages": [
+    {
+      "command": "/data/data/com.termux/files/usr/bin/clang -fsyntax-only -std=c11 -Wall -Wextra -Wpedantic -Wshadow -Wconversion -I/data/data/com.termux/files/home/tools/cqma-fixture -I/data/data/com.termux/files/home/tools/cqma-fixture -ferror-limit=0 -fno-caret-diagnostics -fno-color-diagnostics /data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "name": "compiler warnings",
+      "note": "",
+      "seconds": 0.25836224,
+      "status": "ran"
+    },
+    {
+      "command": "/data/data/com.termux/files/usr/bin/cppcheck --enable=all --inconclusive --force --inline-suppr --language=c --std=c11 --suppress=missingIncludeSystem '--template={file}\t{line}\t{column}\t{severity}\t{id}\t{message}' --check-level=exhaustive -I/data/data/com.termux/files/home/tools/cqma-fixture /data/data/com.termux/files/home/tools/cqma-fixture/fixture.c",
+      "name": "cppcheck",
+      "note": "",
+      "seconds": 0.104066719,
+      "status": "ran"
+    },
+    {
+      "command": "/data/data/com.termux/files/usr/tmp/cqma-asan-23248-1792827912809792705/fixture-cqma",
+      "name": "runtime memory analysis",
+      "note": "LeakSanitizer unavailable on this platform; leak coverage was not possible",
+      "seconds": 0.145562031,
+      "status": "ran"
+    }
+  ],
+  "target": "/data/data/com.termux/files/home/tools/cqma-fixture",
+  "version": "1.0.0"
+}

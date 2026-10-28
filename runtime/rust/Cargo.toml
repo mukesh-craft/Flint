@@ -1,0 +1,54 @@
+[package]
+name = "flint_std"
+version = "0.0.23"
+edition = "2021"
+description = "Flint standard library modules written in Rust"
+license = "Apache-2.0"
+
+# staticlib, not rlib/cdylib: Flint links modules the same way it links C
+# objects (`flintc prog.fl --link libflint_std.a`, plus `ld -r` into a single
+# flint_std.o for the JIT symbol pool), so a staticlib is the shape that fits
+# both execution paths with no compiler change.
+[lib]
+name = "flint_std"
+# staticlib only. The crate is #![no_std] (see src/lib.rs) for two verified
+# reasons: Rust std cannot live in JIT memory (TLS handle aborts on Android),
+# and two Rust staticlibs cannot share a link (duplicate std symbols). With
+# no_std, one flattened object serves BOTH the AOT link line and the JIT
+# symbol pool, and user Rust libraries still link alongside it.
+crate-type = ["staticlib"]
+
+# RustCrypto primitives, no_std by configuration (default-features = false).
+# These are the crate ecosystem's audited implementations of the algorithms;
+# hand-rolling SHA-256 or AES is exactly the kind of cleverness that produces
+# silent, catastrophic bugs. They bring no `std`, so the no_std constraint that
+# lets this module live in JIT memory is preserved.
+[dependencies]
+sha2 = { version = "0.10", default-features = false }
+hmac = { version = "0.12", default-features = false }
+aes = { version = "0.8", default-features = false }
+ctr = { version = "0.9", default-features = false }
+aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
+cipher = { version = "0.4", default-features = false }
+# DEFLATE/zlib codec for PNG. miniz_oxide is no_std + alloc (unlike fdeflate,
+# which pulls in `std` and collides with this crate's panic_impl lang item) and
+# exposes slice-based inflate/deflate with no allocator plumbing.
+miniz_oxide = { version = "0.8", default-features = false, features = ["with-alloc"] }
+# zstd decode: pure Rust, no_std-clean with the arena allocator.
+ruzstd = { version = "0.7", default-features = false }
+# Password hashing: OWASP's current recommendation, no_std-clean.
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash"] }
+password-hash = { version = "0.5", default-features = false, features = ["alloc"] }
+brotli-decompressor = { version = "6.1.0", default-features = false }
+# NOTE: sqlite3 is linked (the Rust module wraps it); curl is NOT a dependency
+# here because the C net module owns HTTPS -- two clients with the same names
+# would collide at link time.
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+# no_std has nowhere to unwind to, and panics must never cross the FFI
+# boundary, so panics abort loudly inside this module.
+panic = "abort"

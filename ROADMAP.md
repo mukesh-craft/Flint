@@ -1,4 +1,10 @@
-# Flint Compiler — Phase Roadmap
+# Flint Compiler — Phase Roadmap (historical log)
+
+> **This is the historical phase log** — what shipped in which named phase.
+> It is not the live queue. For current state and next actions read
+> `STATE.md` §1/§4; for the research assessment and the forward phases read
+> `docs/LANGUAGE-ROADMAP.md`; the documentation map is `docs/INDEX.md`.
+> Status counts below are dated and may be stale by design.
 
 ## Legend
 - ✅ **Done** — tested and working
@@ -514,7 +520,7 @@ clang output.ll runtime.o -o hello
 | Error messages with source line + caret display | ✅ |
 | `flint fmt` (auto-formatter script) | ✅ |
 | `flint doc` (documentation generator script) | ✅ |
-| `flint-lsp` (basic LSP server with completion/hover) | ✅ |
+| `flint-lsp` (Rust LSP: diagnostics/completion/hover/definition/references/outline, gated) | ✅ |
 
 ## Phase J: Post-V1 Improvement Plan (compiled 2026-09-24)
 
@@ -550,7 +556,7 @@ done), hygiene/docs (commit + push done, auto-docs open).
 | Task | Goal | Locations | Acceptance gate | Effort |
 |------|------|-----------|-----------------|--------|
 | B1 cold panics + UB audit | mark panic/overflow/bounds paths cold; audit `runtime.c` casts under UBSan (checked-by-default already done — not redone) | `runtime/runtime.c` `flint_panic`, `flint_bounds_check` (CPP-ONLY) | no perf regression on 17/17; sanitizers clean | S/M |
-| B2 redundant-check drop | drop provably-redundant checks only (emitter attrs already done — not redone). EDIT-FLINT, HIGH fixpoint risk | `stage3/flint_emit.fl` `e_rt_sig`, `e_bounds_inline` | falsifier: self-host fixpoint byte-identical + 17/17; abort on any differential mismatch | M |
+| B2 redundant-check drop | drop provably-redundant checks only (emitter attrs already done — not redone). EDIT-FLINT, HIGH fixpoint risk | `stage3/emitter.fl` `e_rt_sig`, `e_bounds_inline` | falsifier: self-host fixpoint byte-identical + 17/17; abort on any differential mismatch | M |
 | B3 interface-cache remainder + init timing | finish only the open cache paths; measure process-init share to decide if a daemon is ever justified (C1 done — not redone) | `src/main.cpp` `emitInterface`/`loadInterface` (CPP-ONLY) | hit-rate + init-time logged; no cold-build slowdown; 17/17 green | M |
 
 ### J-C: Bigger bets (only if A+B green)
@@ -573,11 +579,11 @@ done), hygiene/docs (commit + push done, auto-docs open).
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 0.1.0   | 2026-06-30 | Phase 0 MVP: immutable vars, print, arithmetic |
-| 0.2.0   | 2026-06-30 | Phase A: functions, if/while, types, block scoping |
-| 0.3.0   | 2026-06-30 | Phase B: C++ FFI — extern "C" blocks, varargs, linker integration |
-| 0.4.0   | 2026-06-30 | Phase C: Python embedding — `python{}` blocks, `py_eval()`, auto-linking |
-| 0.5.0   | 2026-06-30 | Phase D: Ownership + safety — move semantics, borrow checker, arrays |
-| 0.6.0   | 2026-06-30 | Phase E (complete): overflow checking, structs, enums, pattern matching, generics, module system |
-| 0.7.0   | 2026-07-06 | Phase F: Flux Compilation — Extreme Performance |
-| **0.8.0** | **2026-07-06** | **Phase I: Ship Ready — AOT + Stdlib + Tooling** |
+| 0.0.1   | 2026-06-30 | Phase 0 MVP: immutable vars, print, arithmetic |
+| 0.0.2   | 2026-06-30 | Phase A: functions, if/while, types, block scoping |
+| 0.0.3   | 2026-06-30 | Phase B: C++ FFI — extern "C" blocks, varargs, linker integration |
+| 0.0.4   | 2026-06-30 | Phase C: Python embedding — `python{}` blocks, `py_eval()`, auto-linking |
+| 0.0.5   | 2026-06-30 | Phase D: Ownership + safety — move semantics, borrow checker, arrays |
+| 0.0.6   | 2026-06-30 | Phase E (complete): overflow checking, structs, enums, pattern matching, generics, module system |
+| 0.0.7   | 2026-07-06 | Phase F: Flux Compilation — Extreme Performance |
+| **0.0.8** | **2026-07-06** | **Phase I: Ship Ready — AOT + Stdlib + Tooling** |

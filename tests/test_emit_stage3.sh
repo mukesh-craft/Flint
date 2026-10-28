@@ -5,12 +5,14 @@
 set -u
 FLINTC="${1:-./flintc}"
 SELF_DIR="${SELF_DIR:-}"
-EMIT_CMD=("$FLINTC" stage3/flint_emit.fl --)
+EMIT_CMD=("$FLINTC" stage3/emitter.fl --)
 if [ -n "$SELF_DIR" ] && [ -x "$SELF_DIR/emit.0" ]; then
   EMIT_CMD=("$SELF_DIR/emit.0")
 fi
 pass=0; fail=0
-TMPD="/data/data/com.termux/files/usr/tmp/slipstream/ladder"
+# C2 hermetic tmp: $TMPDIR honored; fallback is the historical path (unchanged default).
+_TMPBASE="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
+TMPD="$_TMPBASE/slipstream/ladder"
 mkdir -p "$TMPD"
 while read -r want name code; do
   case "$want" in
@@ -26,7 +28,7 @@ while read -r want name code; do
   if ! llvm-as "$TMPD/$base.ll" -o "$TMPD/$base.bc" 2>/dev/null; then echo "FAIL $name (llvm-as)"; fail=$((fail+1)); continue; fi
   if ! opt -passes=verify "$TMPD/$base.bc" -o /dev/null 2>/dev/null; then echo "FAIL $name (verify)"; fail=$((fail+1)); continue; fi
   # 4. link + 5. run
-  if ! clang "$TMPD/$base.ll" runtime/runtime.c -lm -o "$TMPD/$base" 2>/dev/null; then echo "FAIL $name (clang)"; fail=$((fail+1)); continue; fi
+  if ! clang -O2 "$TMPD/$base.ll" runtime/runtime.c runtime/flint_aegis.c -lm -o "$TMPD/$base" 2>/dev/null; then echo "FAIL $name (clang)"; fail=$((fail+1)); continue; fi
   "$TMPD/$base" > /dev/null 2>&1
   rc=$?
   if [ "$rc" -eq "$code" ]; then pass=$((pass+1));

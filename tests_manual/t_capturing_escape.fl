@@ -1,0 +1,17 @@
+# Phase 2 / 2D: a capturing closure may cross a RETURN boundary.
+#
+# The env box is promoted to the heap at the escape site (ScopedEscape for a
+# literal, promoteLambdaBox for a binding). Captures were snapshotted BY
+# VALUE, so copying the box preserves the closure exactly.
+#
+# Before 2D this was rejected ("cannot return a lambda"): the box lived in
+# the returning frame and would have dangled.
+
+fn make(k: i64) -> fn(i64) -> i64 {
+    return |x: i64| x + k
+}
+
+fn main() {
+    f = make(35)
+    print(f(7))
+}
